@@ -10,6 +10,7 @@
  */
 
 require_once __DIR__ . '/../inc/auth.php';
+require_once __DIR__ . '/../inc/provider.php';
 require_once __DIR__ . '/../inc/whatsapp_api.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -60,17 +61,19 @@ if (!user_can_view_conversation($user, $conv)) {
 if ($conv['status'] === 'closed') {
     json_response(['ok' => false, 'error' => 'Conversation is closed. Reopen it first.'], 400);
 }
-if (!is_within_service_window($conv['service_window_expires_at'])) {
+
+$company = load_company_settings((int)$user['company_id']);
+if (!$company) {
+    json_response(['ok' => false, 'error' => 'Company settings missing.'], 500);
+}
+
+// 24-hour service window only applies on the official Cloud API.
+if (provider_enforces_24h_window($company) && !is_within_service_window($conv['service_window_expires_at'])) {
     json_response([
         'ok'    => false,
         'error' => '24-hour reply window expired. Please send an approved template message instead.',
         'window_expired' => true,
     ], 400);
-}
-
-$company = load_company_settings((int)$user['company_id']);
-if (!$company) {
-    json_response(['ok' => false, 'error' => 'Company settings missing.'], 500);
 }
 
 // 1. Save pending outgoing message
@@ -86,8 +89,8 @@ $ins->execute([
 ]);
 $messageRowId = (int)$db->lastInsertId();
 
-// 2. Call Meta API
-$result = whatsapp_send_text($company, (string)$conv['wa_id'], $messageText);
+// 2. Call provider (Meta Cloud API or Evolution)
+$result = provider_send_text($company, (string)$conv['wa_id'], $messageText);
 
 // 3. Persist outcome
 if ($result['ok']) {

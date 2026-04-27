@@ -12,6 +12,7 @@
  */
 
 require_once __DIR__ . '/../inc/auth.php';
+require_once __DIR__ . '/../inc/provider.php';
 require_once __DIR__ . '/../inc/whatsapp_api.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -54,13 +55,14 @@ if (!user_can_view_conversation($user, $conv)) {
 if ($conv['status'] === 'closed') {
     json_response(['ok' => false, 'error' => 'Conversation is closed.'], 400);
 }
-if (!is_within_service_window($conv['service_window_expires_at'])) {
-    json_response(['ok' => false, 'error' => '24-hour reply window expired. Send a template instead.', 'window_expired' => true], 400);
-}
 
 $company = load_company_settings((int)$user['company_id']);
 if (!$company) {
     json_response(['ok' => false, 'error' => 'Company settings missing.'], 500);
+}
+
+if (provider_enforces_24h_window($company) && !is_within_service_window($conv['service_window_expires_at'])) {
+    json_response(['ok' => false, 'error' => '24-hour reply window expired. Send a template instead.', 'window_expired' => true], 400);
 }
 
 // Verify any provided local_path is inside this company's uploads dir
@@ -88,7 +90,21 @@ $ins->execute([
 ]);
 $messageRowId = (int)$db->lastInsertId();
 
-$result = whatsapp_send_media($company, (string)$conv['wa_id'], $kind, $mediaId, $caption !== '' ? $caption : null, $filename ?: null);
+// Cloud API needs the Meta media_id, Evolution wants the local file path.
+$mediaRef = provider_name($company) === 'evolution'
+    ? ($safeLocalPath ?: '')
+    : $mediaId;
+
+if ($mediaRef === '') {
+    $db->prepare('UPDATE messages SET status="failed", error_message=? WHERE id=?')
+       ->execute(['Missing media reference for provider ' . provider_name($company), $messageRowId]);
+    json_response(['ok' => false, 'error' => 'Missing media reference.'], 400);
+}
+
+$result = provider_send_media(
+    $company, (string)$conv['wa_id'], $kind, $mediaRef,
+    $caption !== '' ? $caption : null, $filename ?: null, $mime ?: null
+);
 
 if ($result['ok']) {
     $db->prepare(

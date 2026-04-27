@@ -11,6 +11,7 @@
  */
 
 require_once __DIR__ . '/../inc/auth.php';
+require_once __DIR__ . '/../inc/provider.php';
 require_once __DIR__ . '/../inc/whatsapp_api.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -68,11 +69,11 @@ if (!move_uploaded_file($tmp, $dest)) {
 }
 @chmod($dest, 0640);
 
-// 2. Upload to Meta
-$result = whatsapp_upload_media($company, $dest, $mime);
+// 2. Upload to provider (no-op for Evolution; Meta requires it)
+$result = provider_upload_media($company, $dest, $mime);
 if (!$result['ok']) {
     @unlink($dest);
-    json_response(['ok' => false, 'error' => $result['error'] ?: 'Meta upload failed.'], 502);
+    json_response(['ok' => false, 'error' => $result['error'] ?: 'Upload failed.'], 502);
 }
 
 // 3. For images, expose a portal-served preview URL so the JS can show it.
@@ -84,13 +85,14 @@ if ($kind === 'image') {
 
 json_response([
     'ok'          => true,
-    'media_id'    => $result['media_id'],
+    'media_id'    => $result['media_ref'],   // Cloud API media_id, or local path for Evolution
     'mime_type'   => $mime,
     'kind'        => $kind,
     'filename'    => $origName,
     'preview_url' => $previewUrl,
     'local_path'  => $dest,
     'rel_path'    => 'company-' . (int)$user['company_id'] . '/agent_outgoing/' . $filename,
+    'provider'    => provider_name($company),
 ]);
 
 function media_kind_from_mime(string $mime): ?string

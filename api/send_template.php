@@ -13,6 +13,7 @@
  */
 
 require_once __DIR__ . '/../inc/auth.php';
+require_once __DIR__ . '/../inc/provider.php';
 require_once __DIR__ . '/../inc/whatsapp_api.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -88,7 +89,13 @@ $ins->execute([
 ]);
 $messageRowId = (int)$db->lastInsertId();
 
-$result = whatsapp_send_template(
+if (!provider_supports_templates($company)) {
+    $db->prepare('UPDATE messages SET status="failed", error_message=? WHERE id=?')
+       ->execute(['Templates only supported on Cloud API provider.', $messageRowId]);
+    json_response(['ok' => false, 'error' => 'Templates are only available with the Meta Cloud API provider.'], 400);
+}
+
+$result = provider_send_template(
     $company,
     (string)$conv['wa_id'],
     (string)$tpl['template_name'],

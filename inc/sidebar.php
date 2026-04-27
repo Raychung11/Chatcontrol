@@ -18,12 +18,14 @@ $role   = $current_user['role'] ?? 'agent';
     <a href="/contacts.php" class="<?= $active === 'contacts' ? 'active' : '' ?>">Contacts</a>
     <a href="/admin/templates.php" class="<?= $active === 'templates' ? 'active' : '' ?>">Templates</a>
     <?php if (in_array($role, ['super_admin', 'manager'], true)): ?>
+      <a href="/admin/tags.php" class="<?= $active === 'tags' ? 'active' : '' ?>">Tags</a>
       <a href="/admin/reports.php" class="<?= $active === 'reports' ? 'active' : '' ?>">Reports</a>
     <?php endif; ?>
     <?php if ($role === 'super_admin'): ?>
       <div class="sidebar-section">Administration</div>
       <a href="/admin/users.php" class="<?= $active === 'users' ? 'active' : '' ?>">Users</a>
       <a href="/admin/departments.php" class="<?= $active === 'departments' ? 'active' : '' ?>">Departments</a>
+      <a href="/admin/routing.php" class="<?= $active === 'routing' ? 'active' : '' ?>">Routing rules</a>
       <a href="/admin/settings.php" class="<?= $active === 'settings' ? 'active' : '' ?>">Settings</a>
       <a href="/admin/ai_settings.php" class="<?= $active === 'ai_settings' ? 'active' : '' ?>">AI Settings</a>
     <?php endif; ?>

@@ -19,6 +19,8 @@ if (is_post()) {
     $verifyToken       = trim((string)($_POST['webhook_verify_token'] ?? ''));
     $brandColor        = trim((string)($_POST['brand_color']          ?? '#25D366'));
     $timezone          = trim((string)($_POST['timezone']             ?? APP_TIMEZONE));
+    $defaultDeptId     = $_POST['default_department_id'] ?? '';
+    $defaultDeptId     = ($defaultDeptId === '' || $defaultDeptId === '0') ? null : (int)$defaultDeptId;
 
     if ($name === '') {
         $err = 'Company name is required.';
@@ -29,17 +31,23 @@ if (is_post()) {
             $stmt->execute([$companyId]);
             $accessToken = (string)($stmt->fetchColumn() ?: '');
         }
+        if ($defaultDeptId !== null) {
+            $check = $db->prepare('SELECT id FROM departments WHERE id = ? AND company_id = ? LIMIT 1');
+            $check->execute([$defaultDeptId, $companyId]);
+            if (!$check->fetchColumn()) $defaultDeptId = null;
+        }
         $upd = $db->prepare(
             'UPDATE companies SET
                 name = ?, whatsapp_number = ?, phone_number_id = ?, business_account_id = ?,
                 api_version = ?, access_token = ?, webhook_verify_token = ?,
-                brand_color = ?, timezone = ?
+                brand_color = ?, timezone = ?, default_department_id = ?
              WHERE id = ?'
         );
         $upd->execute([
             $name, $whatsappNumber, $phoneNumberId, $businessAccountId,
             $apiVersion ?: 'v21.0', $accessToken, $verifyToken,
             $brandColor ?: '#25D366', $timezone ?: APP_TIMEZONE,
+            $defaultDeptId,
             $companyId,
         ]);
         log_activity($companyId, (int)$current_user['id'], 'settings_updated', 'company', $companyId, 'Company settings updated');
@@ -50,6 +58,10 @@ if (is_post()) {
 $stmt = $db->prepare('SELECT * FROM companies WHERE id = ?');
 $stmt->execute([$companyId]);
 $company = $stmt->fetch() ?: [];
+
+$dstmt = $db->prepare('SELECT id, name FROM departments WHERE company_id = ? AND status = "active" ORDER BY name');
+$dstmt->execute([$companyId]);
+$departments = $dstmt->fetchAll();
 
 $webhookUrl = (APP_BASE_URL ?: ((!empty($_SERVER['HTTPS']) ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? '')))
             . '/webhook/whatsapp.php';
@@ -72,6 +84,17 @@ layout_start($current_user, 'Company & API Settings', 'settings', $company['bran
     </label>
     <label>Default timezone
       <input type="text" name="timezone" value="<?= e($company['timezone'] ?? APP_TIMEZONE) ?>" placeholder="Asia/Kuala_Lumpur">
+    </label>
+    <label>Default department for new conversations
+      <select name="default_department_id">
+        <option value="0">— None (leave unrouted) —</option>
+        <?php foreach ($departments as $d): ?>
+          <option value="<?= (int)$d['id'] ?>" <?= ((int)($company['default_department_id'] ?? 0) === (int)$d['id']) ? 'selected' : '' ?>>
+            <?= e($d['name']) ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
+      <small class="muted">New customer messages land here when no <a href="/admin/routing.php">routing rule</a> matches.</small>
     </label>
 
     <h2>WhatsApp Cloud API</h2>

@@ -11,6 +11,7 @@
  */
 
 require_once __DIR__ . '/../inc/helpers.php';
+require_once __DIR__ . '/../inc/whatsapp_api.php';
 
 header('Cache-Control: no-store');
 
@@ -129,6 +130,7 @@ function handle_incoming_message(array $company, array $value, array $msg, strin
     $mediaUrl      = null;
     $mediaMime     = null;
     $mediaFilename = null;
+    $mediaId       = null;
 
     switch ($msgType) {
         case 'text':
@@ -141,10 +143,10 @@ function handle_incoming_message(array $company, array $value, array $msg, strin
         case 'sticker':
             $mediaMime     = $msg[$msgType]['mime_type'] ?? null;
             $mediaFilename = $msg[$msgType]['filename'] ?? null;
+            $mediaId       = $msg[$msgType]['id']        ?? null;
             $body          = $msg[$msgType]['caption']
                           ?? $mediaFilename
                           ?? '[' . $msgType . ']';
-            // Media binary download from Meta requires another API call; out of MVP scope.
             break;
         case 'location':
             $lat = $msg['location']['latitude']  ?? null;
@@ -214,14 +216,27 @@ function handle_incoming_message(array $company, array $value, array $msg, strin
     $expiryDate   = date('Y-m-d H:i:s', $timestamp + 24 * 3600);
 
     if (!$conv) {
+        // Auto-routing: pick department + (optionally) assigned agent
+        $route = apply_routing_rules($companyId, $body);
         $ins = $db->prepare(
             'INSERT INTO conversations
-                (company_id, contact_id, status, last_message_text, last_message_at,
+                (company_id, contact_id, department_id, assigned_user_id, status,
+                 last_message_text, last_message_at,
                  last_customer_message_at, service_window_expires_at, unread_count)
-             VALUES (?, ?, "open", ?, ?, ?, ?, 1)'
+             VALUES (?, ?, ?, ?, "open", ?, ?, ?, ?, 1)'
         );
-        $ins->execute([$companyId, $contactId, $previewText, $messageDate, $messageDate, $expiryDate]);
+        $ins->execute([
+            $companyId, $contactId,
+            $route['department_id'], $route['assigned_user_id'],
+            $previewText, $messageDate, $messageDate, $expiryDate,
+        ]);
         $conversationId = (int)$db->lastInsertId();
+        if ($route['department_id'] || $route['assigned_user_id']) {
+            log_activity($companyId, null, 'conversation_auto_routed',
+                'conversation', $conversationId,
+                'dept=' . ($route['department_id'] ?? 'null')
+                . ' agent=' . ($route['assigned_user_id'] ?? 'null'));
+        }
     } else {
         $conversationId = (int)$conv['id'];
         $newStatus = ($conv['status'] === 'closed') ? 'open' : $conv['status'];
@@ -243,18 +258,37 @@ function handle_incoming_message(array $company, array $value, array $msg, strin
         $ins = $db->prepare(
             'INSERT INTO messages
                 (company_id, conversation_id, contact_id, sender_type, wa_message_id, direction,
-                 message_type, message_text, media_mime_type, media_filename, raw_payload, status, created_at)
-             VALUES (?, ?, ?, "customer", ?, "incoming", ?, ?, ?, ?, ?, "received", ?)'
+                 message_type, message_text, media_mime_type, media_filename, media_id, raw_payload, status, created_at)
+             VALUES (?, ?, ?, "customer", ?, "incoming", ?, ?, ?, ?, ?, ?, "received", ?)'
         );
         $ins->execute([
             $companyId, $conversationId, $contactId,
             $waMessageId, $msgType, $body,
-            $mediaMime, $mediaFilename, $raw,
+            $mediaMime, $mediaFilename, $mediaId, $raw,
             $messageDate,
         ]);
+        $msgRowId = (int)$db->lastInsertId();
     } catch (Throwable $e) {
         error_log('[AiServe webhook] insert message failed: ' . $e->getMessage());
         return;
+    }
+
+    // Best-effort inbound media download (synchronous; small files, short timeout).
+    if ($mediaId && in_array($msgType, ['image', 'video', 'audio', 'document', 'sticker'], true)) {
+        try {
+            $destDir = __DIR__ . '/../uploads/' . $companyId . '/inbound';
+            $dl = whatsapp_download_media($company, (string)$mediaId, $destDir);
+            if ($dl['ok']) {
+                $u = $db->prepare(
+                    'UPDATE messages SET media_local_path = ?, media_mime_type = COALESCE(?, media_mime_type) WHERE id = ?'
+                );
+                $u->execute([$dl['local_path'], $dl['mime_type'] ?? null, $msgRowId]);
+            } else {
+                error_log('[AiServe webhook] media download failed: ' . ($dl['error'] ?? 'unknown'));
+            }
+        } catch (Throwable $e) {
+            error_log('[AiServe webhook] media download exception: ' . $e->getMessage());
+        }
     }
 
     log_activity($companyId, null, 'message_received', 'conversation', $conversationId,

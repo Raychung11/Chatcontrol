@@ -73,8 +73,12 @@ docs/      documentation
 **Phase 1 (this MVP)** - login, RBAC, webhook ingest, shared inbox, reply
 sending, assignment, internal notes, basic reports, template registry.
 
-**Phase 2** - template send, file/image upload, delivery/read receipts UI,
-tags, department auto-routing, richer reports.
+**Phase 2 (now in this branch)** - real template message send (with
+variable filling and live preview), media upload + send (image / video /
+audio / document), inbound media auto-download, WhatsApp-style delivery
+ticks (✓ ✓✓ blue), tags (CRUD + chat picker + inbox filter + reports),
+keyword + default-department auto-routing for new conversations, richer
+reports (date range, resolution time, per-agent response time, top tags).
 
 **Phase 3** - AI reply suggestion, auto summary, FAQ assistant, sentiment,
 CRM/Odoo integration, broadcast campaigns.

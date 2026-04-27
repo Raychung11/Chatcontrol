@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS `companies` (
   `logo` VARCHAR(255) DEFAULT NULL,
   `brand_color` VARCHAR(16) DEFAULT '#25D366',
   `timezone` VARCHAR(64) NOT NULL DEFAULT 'Asia/Kuala_Lumpur',
+  `default_department_id` INT UNSIGNED DEFAULT NULL,
   `plan` ENUM('starter','growth','enterprise') NOT NULL DEFAULT 'starter',
   `status` ENUM('active','inactive') NOT NULL DEFAULT 'active',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -102,6 +103,7 @@ CREATE TABLE IF NOT EXISTS `conversations` (
   `service_window_expires_at` DATETIME DEFAULT NULL,
   `unread_count` INT UNSIGNED NOT NULL DEFAULT 0,
   `first_response_at` DATETIME DEFAULT NULL,
+  `resolved_at` DATETIME DEFAULT NULL,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -129,10 +131,13 @@ CREATE TABLE IF NOT EXISTS `messages` (
   `wa_message_id` VARCHAR(128) DEFAULT NULL,
   `direction` ENUM('incoming','outgoing') NOT NULL,
   `message_type` VARCHAR(32) NOT NULL DEFAULT 'text',
+  `template_name` VARCHAR(120) DEFAULT NULL,
   `message_text` TEXT DEFAULT NULL,
   `media_url` VARCHAR(500) DEFAULT NULL,
   `media_mime_type` VARCHAR(120) DEFAULT NULL,
   `media_filename` VARCHAR(255) DEFAULT NULL,
+  `media_local_path` VARCHAR(500) DEFAULT NULL,
+  `media_id` VARCHAR(120) DEFAULT NULL,
   `raw_payload` MEDIUMTEXT DEFAULT NULL,
   `status` ENUM('received','pending','sent','delivered','read','failed') NOT NULL DEFAULT 'pending',
   `error_message` VARCHAR(500) DEFAULT NULL,
@@ -213,6 +218,34 @@ CREATE TABLE IF NOT EXISTS `message_templates` (
   UNIQUE KEY `uk_templates_company_name_lang` (`company_id`,`template_name`,`language`),
   CONSTRAINT `fk_templates_company` FOREIGN KEY (`company_id`) REFERENCES `companies` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------
+-- routing_rules - keyword-based department routing
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `routing_rules` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `company_id` INT UNSIGNED NOT NULL,
+  `priority` INT UNSIGNED NOT NULL DEFAULT 100,
+  `match_type` ENUM('contains','starts_with','equals','regex') NOT NULL DEFAULT 'contains',
+  `match_value` VARCHAR(255) NOT NULL,
+  `department_id` INT UNSIGNED NOT NULL,
+  `assigned_user_id` INT UNSIGNED DEFAULT NULL,
+  `status` ENUM('active','inactive') NOT NULL DEFAULT 'active',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_routing_company` (`company_id`,`status`,`priority`),
+  CONSTRAINT `fk_routing_company` FOREIGN KEY (`company_id`) REFERENCES `companies` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_routing_dept`    FOREIGN KEY (`department_id`) REFERENCES `departments` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_routing_user`    FOREIGN KEY (`assigned_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------
+-- companies.default_department_id FK (added after departments exists)
+-- ----------------------------------------------------------------
+ALTER TABLE `companies`
+  ADD CONSTRAINT `fk_companies_default_dept`
+  FOREIGN KEY (`default_department_id`) REFERENCES `departments` (`id`) ON DELETE SET NULL;
 
 -- ----------------------------------------------------------------
 -- activity_logs

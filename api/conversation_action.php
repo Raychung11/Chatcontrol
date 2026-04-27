@@ -95,7 +95,13 @@ switch ($action) {
         if (!in_array($newStatus, ['open', 'pending', 'closed', 'escalated'], true)) {
             json_response(['ok' => false, 'error' => 'Invalid status.'], 400);
         }
-        $upd = $db->prepare('UPDATE conversations SET status = ? WHERE id = ?');
+        if ($newStatus === 'closed') {
+            $upd = $db->prepare(
+                'UPDATE conversations SET status = ?, resolved_at = COALESCE(resolved_at, NOW()) WHERE id = ?'
+            );
+        } else {
+            $upd = $db->prepare('UPDATE conversations SET status = ? WHERE id = ?');
+        }
         $upd->execute([$newStatus, $conversationId]);
         log_activity((int)$user['company_id'], (int)$user['id'], 'conversation_status_changed',
             'conversation', $conversationId, 'Status -> ' . $newStatus);
@@ -120,6 +126,46 @@ switch ($action) {
     case 'mark_read':
         $upd = $db->prepare('UPDATE conversations SET unread_count = 0 WHERE id = ?');
         $upd->execute([$conversationId]);
+        json_response(['ok' => true]);
+        break;
+
+    case 'add_tag':
+        $tagId = (int)($_POST['tag_id'] ?? 0);
+        if ($tagId <= 0) {
+            json_response(['ok' => false, 'error' => 'tag_id required.'], 400);
+        }
+        $check = $db->prepare('SELECT id, name, color FROM conversation_tags WHERE id = ? AND company_id = ? LIMIT 1');
+        $check->execute([$tagId, (int)$user['company_id']]);
+        $tag = $check->fetch();
+        if (!$tag) {
+            json_response(['ok' => false, 'error' => 'Tag invalid.'], 400);
+        }
+        try {
+            $db->prepare('INSERT INTO conversation_tag_map (conversation_id, tag_id) VALUES (?, ?)')
+               ->execute([$conversationId, $tagId]);
+        } catch (PDOException $e) {
+            // 1062 = duplicate -> idempotent
+            if ((int)$e->errorInfo[1] !== 1062) {
+                throw $e;
+            }
+        }
+        log_activity((int)$user['company_id'], (int)$user['id'], 'tag_attached',
+            'conversation', $conversationId, $tag['name']);
+        json_response(['ok' => true, 'tag' => $tag]);
+        break;
+
+    case 'remove_tag':
+        $tagId = (int)($_POST['tag_id'] ?? 0);
+        if ($tagId <= 0) {
+            json_response(['ok' => false, 'error' => 'tag_id required.'], 400);
+        }
+        $db->prepare(
+            'DELETE m FROM conversation_tag_map m
+             INNER JOIN conversation_tags t ON t.id = m.tag_id
+             WHERE m.conversation_id = ? AND m.tag_id = ? AND t.company_id = ?'
+        )->execute([$conversationId, $tagId, (int)$user['company_id']]);
+        log_activity((int)$user['company_id'], (int)$user['id'], 'tag_removed',
+            'conversation', $conversationId, 'tag_id=' . $tagId);
         json_response(['ok' => true]);
         break;
 

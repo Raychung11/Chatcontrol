@@ -186,6 +186,19 @@ textarea { resize: vertical; }
 .report-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 768px) { .report-row { grid-template-columns: 1fr; } }
 
+.report-filter .filter-row { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+.report-filter label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--c-muted); }
+
+.bar-chart { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.bar-chart li { display: grid; grid-template-columns: 64px 1fr 40px; align-items: center; gap: 8px; font-size: 12.5px; }
+.bar-track { background: #f0f2f5; border-radius: 999px; height: 10px; overflow: hidden; }
+.bar-fill  { display: block; background: var(--c-primary); height: 100%; border-radius: 999px; }
+.bar-value { text-align: right; color: var(--c-muted); }
+.bar-label { color: var(--c-muted); }
+
+.tag-rank { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.tag-rank li { display: flex; gap: 8px; align-items: center; }
+
 /* -------- Inbox shell -------- */
 .inbox-shell {
   display: grid; grid-template-columns: 280px 1fr;
@@ -273,9 +286,16 @@ textarea { resize: vertical; }
 .msg-out .msg-bubble { background: #dcf8c6; color: #1a2330; border-top-right-radius: 2px; }
 .msg-sender { font-size: 11.5px; color: var(--c-primary-d); font-weight: 600; margin-bottom: 2px; }
 .msg-type-tag { font-size: 11px; color: var(--c-muted); margin-bottom: 4px; }
-.msg-meta { font-size: 11px; color: var(--c-muted); margin-top: 4px; text-align: right; }
+.msg-meta { font-size: 11px; color: var(--c-muted); margin-top: 4px; text-align: right; display: inline-flex; gap: 4px; align-items: center; justify-content: flex-end; width: 100%; }
 .msg-error { color: var(--c-danger); cursor: help; }
 .msg.status-failed .msg-bubble { background: #fdecea; }
+.msg-status { display: inline-flex; align-items: center; }
+.tick-icon { display: inline-block; vertical-align: middle; }
+.tick-pending   { color: #8ba0ad; }
+.tick-sent      { color: #8ba0ad; }
+.tick-delivered { color: #8ba0ad; }
+.tick-read      { color: #34b7f1; }
+.tick-failed    { color: var(--c-danger); }
 
 .chat-composer {
   border-top: 1px solid var(--c-border); padding: 12px 16px; background: #fafbfc;
@@ -290,6 +310,24 @@ textarea { resize: vertical; }
   padding: 12px; border-radius: 6px; font-size: 13px;
 }
 .template-list { margin: 8px 0 0; padding-left: 20px; font-size: 12.5px; }
+.composer-extras { display: flex; gap: 6px; align-items: center; }
+.composer-actions { gap: 8px; }
+.template-head { display: flex; justify-content: space-between; align-items: center; }
+.template-vars { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.template-vars label { font-size: 12px; color: var(--c-muted); display: flex; flex-direction: column; gap: 4px; }
+.template-preview {
+  margin-top: 8px; padding: 10px; background: #f4f6f8; border-radius: 6px;
+  font-size: 12.5px; white-space: pre-wrap; min-height: 32px;
+}
+.hidden { display: none !important; }
+.media-preview {
+  display: flex; gap: 8px; align-items: center; padding: 6px 10px;
+  background: #f4f6f8; border-radius: 6px; font-size: 12.5px; margin: 8px 0;
+}
+.media-preview img { max-height: 60px; border-radius: 4px; }
+.media-preview button { margin-left: auto; }
+.msg-media img { max-width: 280px; max-height: 220px; border-radius: 6px; display: block; }
+.msg-media a { color: var(--c-primary-d); font-size: 12.5px; }
 
 /* -------- Chat side panel -------- */
 .chat-side {
@@ -312,6 +350,25 @@ textarea { resize: vertical; }
 
 .bullet { padding-left: 20px; }
 .bullet li { margin-bottom: 4px; }
+
+/* -------- Tag chips -------- */
+.tag-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  color: #fff; font-weight: 500; line-height: 1.4;
+}
+.tag-chip-light {
+  background: transparent; color: var(--c-text);
+  border: 1px solid var(--c-border); padding: 1px 7px;
+}
+.tag-chip-x {
+  background: transparent; border: none; cursor: pointer; color: inherit;
+  font-size: 12px; padding: 0 0 0 2px; opacity: 0.7;
+}
+.tag-chip-x:hover { opacity: 1; }
+.tag-list { display: flex; flex-wrap: wrap; gap: 4px; }
+.tag-add-form { display: flex; gap: 4px; margin-top: 6px; }
+.tag-add-form select { flex: 1; }
 
 /* -------- Responsive -------- */
 @media (max-width: 1024px) {

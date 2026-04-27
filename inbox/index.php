@@ -8,6 +8,7 @@ $role         = $current_user['role'];
 $filter     = $_GET['filter']     ?? 'all';
 $search     = trim((string)($_GET['q'] ?? ''));
 $deptFilter = (int)($_GET['department_id'] ?? 0);
+$tagFilter  = (int)($_GET['tag_id'] ?? 0);
 
 $db = aiserve_db();
 
@@ -61,6 +62,11 @@ if ($search !== '') {
     array_push($params, $like, $like, $like, $like);
 }
 
+if ($tagFilter > 0) {
+    $where[] = 'EXISTS (SELECT 1 FROM conversation_tag_map m WHERE m.conversation_id = c.id AND m.tag_id = ?)';
+    $params[] = $tagFilter;
+}
+
 $sql = 'SELECT c.*, ct.display_name, ct.profile_name, ct.phone AS contact_phone, ct.wa_id,
                u.name AS agent_name, d.name AS department_name
         FROM conversations c
@@ -92,6 +98,26 @@ $departments = $db->prepare('SELECT id, name FROM departments WHERE company_id =
 $departments->execute([$companyId]);
 $departments = $departments->fetchAll();
 
+$tagsAll = $db->prepare('SELECT id, name, color FROM conversation_tags WHERE company_id = ? ORDER BY name');
+$tagsAll->execute([$companyId]);
+$tagsAll = $tagsAll->fetchAll();
+
+// Map conversation_id -> [{id,name,color}, ...]
+$tagsByConv = [];
+if ($conversations) {
+    $convIds = array_map(fn($r) => (int)$r['id'], $conversations);
+    $placeholders = implode(',', array_fill(0, count($convIds), '?'));
+    $sqlT = 'SELECT m.conversation_id, t.id, t.name, t.color
+             FROM conversation_tag_map m
+             INNER JOIN conversation_tags t ON t.id = m.tag_id
+             WHERE m.conversation_id IN (' . $placeholders . ') AND t.company_id = ?';
+    $tagStmt = $db->prepare($sqlT);
+    $tagStmt->execute(array_merge($convIds, [$companyId]));
+    foreach ($tagStmt->fetchAll() as $row) {
+        $tagsByConv[(int)$row['conversation_id']][] = $row;
+    }
+}
+
 layout_start($current_user, 'Inbox', 'inbox');
 ?>
 <div class="inbox-shell">
@@ -104,6 +130,14 @@ layout_start($current_user, 'Inbox', 'inbox');
         <?php foreach ($departments as $d): ?>
           <option value="<?= (int)$d['id'] ?>" <?= $deptFilter === (int)$d['id'] ? 'selected' : '' ?>>
             <?= e($d['name']) ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
+      <select name="tag_id" onchange="this.form.submit()">
+        <option value="0">All tags</option>
+        <?php foreach ($tagsAll as $t): ?>
+          <option value="<?= (int)$t['id'] ?>" <?= $tagFilter === (int)$t['id'] ? 'selected' : '' ?>>
+            <?= e($t['name']) ?>
           </option>
         <?php endforeach; ?>
       </select>
@@ -124,7 +158,8 @@ layout_start($current_user, 'Inbox', 'inbox');
       foreach ($links as $key => [$label, $cnt]):
         $href = '?filter=' . urlencode($key)
               . ($search !== '' ? '&q=' . urlencode($search) : '')
-              . ($deptFilter > 0 ? '&department_id=' . $deptFilter : '');
+              . ($deptFilter > 0 ? '&department_id=' . $deptFilter : '')
+              . ($tagFilter  > 0 ? '&tag_id=' . $tagFilter : '');
       ?>
         <li><a class="<?= $filter === $key ? 'active' : '' ?>" href="<?= e($href) ?>">
           <?= e($label) ?> <span class="count"><?= $cnt ?></span>
@@ -159,6 +194,9 @@ layout_start($current_user, 'Inbox', 'inbox');
             <?php if (!empty($c['department_name'])): ?>
               <span class="row-meta">· <?= e($c['department_name']) ?></span>
             <?php endif; ?>
+            <?php foreach (($tagsByConv[(int)$c['id']] ?? []) as $tg): ?>
+              <span class="tag-chip" style="background: <?= e($tg['color']) ?>"><?= e($tg['name']) ?></span>
+            <?php endforeach; ?>
           </div>
         </div>
       </a>

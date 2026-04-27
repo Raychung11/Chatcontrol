@@ -37,6 +37,17 @@ mysql -u aiserve -p aiserve_inbox < sql/schema.sql
 mysql -u aiserve -p aiserve_inbox < sql/seed.sql
 ```
 
+**Upgrading from Phase 1?** Run the Phase 2 migration as well:
+
+```bash
+mysql -u aiserve -p aiserve_inbox < sql/migration_phase2.sql
+```
+
+It is idempotent and adds: `companies.default_department_id`,
+`conversations.resolved_at`, `messages.template_name`,
+`messages.media_local_path`, `messages.media_id`, and the new
+`routing_rules` table.
+
 The seed creates:
 
 - One `companies` row (id 1)

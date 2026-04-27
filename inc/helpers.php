@@ -157,6 +157,27 @@ function role_label(string $role): string
     };
 }
 
+/**
+ * WhatsApp-style ticks for an outgoing message.
+ * pending  -> clock icon
+ * sent     -> single tick
+ * delivered-> double tick
+ * read     -> double tick (blue, styled in CSS via class)
+ * failed   -> exclamation
+ */
+function delivery_ticks(string $status): string
+{
+    $svg = match ($status) {
+        'pending'   => '<svg class="tick-icon tick-pending" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M8 4v4l2.5 1.5"/><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
+        'sent'      => '<svg class="tick-icon tick-sent"      viewBox="0 0 18 14" width="16" height="12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2 8 L7 13 L17 2"/></svg>',
+        'delivered' => '<svg class="tick-icon tick-delivered" viewBox="0 0 22 14" width="20" height="12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2 8 L6 12 L14 3 M9 12 L20 1"/></svg>',
+        'read'      => '<svg class="tick-icon tick-read"      viewBox="0 0 22 14" width="20" height="12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M2 8 L6 12 L14 3 M9 12 L20 1"/></svg>',
+        'failed'    => '<svg class="tick-icon tick-failed"    viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M8 4v5 M8 11.5v.5"/></svg>',
+        default     => '',
+    };
+    return $svg;
+}
+
 function status_badge(string $status): string
 {
     $map = [

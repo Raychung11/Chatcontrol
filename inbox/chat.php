@@ -79,11 +79,27 @@ $departments = $dstmt->fetchAll();
 
 // Templates (for showing when window expired)
 $tstmt = $db->prepare(
-    'SELECT id, template_name, language, body_text, status FROM message_templates
+    'SELECT id, template_name, language, body_text, variables_json, status FROM message_templates
      WHERE company_id = ? AND status = "approved" ORDER BY template_name'
 );
 $tstmt->execute([$companyId]);
 $templates = $tstmt->fetchAll();
+
+// Attached tags
+$tagsAttached = $db->prepare(
+    'SELECT t.id, t.name, t.color FROM conversation_tag_map m
+     INNER JOIN conversation_tags t ON t.id = m.tag_id
+     WHERE m.conversation_id = ? AND t.company_id = ?
+     ORDER BY t.name'
+);
+$tagsAttached->execute([$conversationId, $companyId]);
+$tagsAttached = $tagsAttached->fetchAll();
+$attachedIds  = array_map(fn($t) => (int)$t['id'], $tagsAttached);
+
+// All tags (for picker)
+$tagsAll = $db->prepare('SELECT id, name, color FROM conversation_tags WHERE company_id = ? ORDER BY name');
+$tagsAll->execute([$companyId]);
+$tagsAll = $tagsAll->fetchAll();
 
 $windowOpen = is_within_service_window($conv['service_window_expires_at']);
 
@@ -121,16 +137,29 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
             <?php if ($m['message_type'] !== 'text' && $m['message_type'] !== ''): ?>
               <div class="msg-type-tag"><?= e(strtoupper($m['message_type'])) ?>
                 <?php if (!empty($m['media_filename'])): ?> · <?= e($m['media_filename']) ?><?php endif; ?>
+                <?php if (!empty($m['template_name'])): ?> · <?= e($m['template_name']) ?><?php endif; ?>
               </div>
+            <?php endif; ?>
+            <?php
+              $mediaSrc = null;
+              if (!empty($m['media_local_path']) && is_readable($m['media_local_path'])) {
+                  $mediaSrc = '/api/media.php?msg=' . (int)$m['id'];
+              }
+              $isImage = $mediaSrc && str_starts_with((string)$m['media_mime_type'], 'image/');
+            ?>
+            <?php if ($mediaSrc && $isImage): ?>
+              <div class="msg-media"><a href="<?= e($mediaSrc) ?>" target="_blank"><img src="<?= e($mediaSrc) ?>" alt="image"></a></div>
+            <?php elseif ($mediaSrc): ?>
+              <div class="msg-media"><a href="<?= e($mediaSrc) ?>" target="_blank">Download <?= e($m['media_filename'] ?: ucfirst($m['message_type'])) ?></a></div>
             <?php endif; ?>
             <div class="msg-body"><?= nl2br(e((string)$m['message_text'])) ?></div>
             <div class="msg-meta">
               <span><?= e(fmt_dt($m['created_at'], 'M j, H:i')) ?></span>
               <?php if ($isOut): ?>
-                <span class="msg-status">· <?= e(ucfirst($m['status'])) ?></span>
+                <span class="msg-status" title="<?= e(ucfirst($m['status'])) ?>"><?= delivery_ticks($m['status']) ?></span>
               <?php endif; ?>
               <?php if ($m['status'] === 'failed' && !empty($m['error_message'])): ?>
-                <span class="msg-error" title="<?= e($m['error_message']) ?>">· error</span>
+                <span class="msg-error" title="<?= e($m['error_message']) ?>">· <?= e($m['error_message']) ?></span>
               <?php endif; ?>
             </div>
           </div>
@@ -139,20 +168,49 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
     </div>
 
     <footer class="chat-composer">
+      <?php
+        // Build a JSON-safe templates payload for the front end.
+        $tplPayload = array_map(function ($t) {
+            preg_match_all('/\{\{(\d+)\}\}/', (string)$t['body_text'], $m);
+            $count = $m[1] ? max(array_map('intval', $m[1])) : 0;
+            return [
+                'id'       => (int)$t['id'],
+                'name'     => $t['template_name'],
+                'language' => $t['language'],
+                'body'     => $t['body_text'],
+                'vars'     => $count,
+            ];
+        }, $templates);
+      ?>
+
       <?php if ($conv['status'] === 'closed'): ?>
         <div class="composer-locked">Conversation is closed. Reopen to send messages.</div>
       <?php elseif (!$windowOpen): ?>
         <div class="composer-locked">
           <strong>24-hour reply window expired.</strong>
-          Free-text replies are blocked by Meta. Please send an approved template message.
-          <?php if ($templates): ?>
-            <ul class="template-list">
-              <?php foreach ($templates as $t): ?>
-                <li><code><?= e($t['template_name']) ?></code> (<?= e($t['language']) ?>) — <?= e(mb_strimwidth($t['body_text'], 0, 80, '…')) ?></li>
-              <?php endforeach; ?>
-            </ul>
+          Free-text replies are blocked by Meta. Send an approved template message instead.
+          <?php if (!$templates): ?>
+            <p class="muted small">No approved templates yet. Add some in Admin → Templates.</p>
           <?php endif; ?>
         </div>
+        <?php if ($templates): ?>
+          <form id="template-form" class="composer-form" data-templates='<?= e(json_encode($tplPayload, JSON_UNESCAPED_UNICODE)) ?>'>
+            <?= csrf_field() ?>
+            <input type="hidden" name="conversation_id" value="<?= (int)$conv['id'] ?>">
+            <select name="template_id" id="template-picker" required>
+              <option value="">Choose template…</option>
+              <?php foreach ($templates as $t): ?>
+                <option value="<?= (int)$t['id'] ?>"><?= e($t['template_name']) ?> (<?= e($t['language']) ?>)</option>
+              <?php endforeach; ?>
+            </select>
+            <div id="template-vars" class="template-vars"></div>
+            <div id="template-preview" class="template-preview muted small"></div>
+            <div class="composer-actions">
+              <span class="muted small" id="template-status"></span>
+              <button class="btn btn-primary" type="submit">Send template</button>
+            </div>
+          </form>
+        <?php endif; ?>
       <?php else: ?>
         <form id="composer-form" class="composer-form">
           <?= csrf_field() ?>
@@ -160,10 +218,44 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
           <textarea name="message_text" id="composer-text" rows="2" maxlength="4000"
                     placeholder="Type a reply (the customer will see this on WhatsApp)…" required></textarea>
           <div class="composer-actions">
-            <span class="muted small" id="composer-status"></span>
-            <button class="btn btn-primary" type="submit">Send</button>
+            <div class="composer-extras">
+              <?php if ($templates): ?>
+                <button type="button" class="btn btn-sm" id="open-template-picker">Send template</button>
+              <?php endif; ?>
+              <label class="btn btn-sm" for="media-input">Attach</label>
+              <input type="file" id="media-input" name="media" hidden
+                     accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip">
+              <span class="muted small" id="media-status"></span>
+            </div>
+            <div>
+              <span class="muted small" id="composer-status"></span>
+              <button class="btn btn-primary" type="submit">Send</button>
+            </div>
           </div>
         </form>
+
+        <?php if ($templates): ?>
+          <form id="template-form" class="composer-form hidden" data-templates='<?= e(json_encode($tplPayload, JSON_UNESCAPED_UNICODE)) ?>'>
+            <?= csrf_field() ?>
+            <input type="hidden" name="conversation_id" value="<?= (int)$conv['id'] ?>">
+            <div class="template-head">
+              <strong>Send approved template</strong>
+              <button type="button" class="btn btn-sm" id="close-template-picker">Cancel</button>
+            </div>
+            <select name="template_id" id="template-picker" required>
+              <option value="">Choose template…</option>
+              <?php foreach ($templates as $t): ?>
+                <option value="<?= (int)$t['id'] ?>"><?= e($t['template_name']) ?> (<?= e($t['language']) ?>)</option>
+              <?php endforeach; ?>
+            </select>
+            <div id="template-vars" class="template-vars"></div>
+            <div id="template-preview" class="template-preview muted small"></div>
+            <div class="composer-actions">
+              <span class="muted small" id="template-status"></span>
+              <button class="btn btn-primary" type="submit">Send template</button>
+            </div>
+          </form>
+        <?php endif; ?>
       <?php endif; ?>
     </footer>
   </section>
@@ -237,6 +329,37 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
         </select>
         <button class="btn btn-sm" type="submit">Update</button>
       </form>
+    </div>
+
+    <div class="side-section">
+      <h3>Tags</h3>
+      <div class="tag-list" id="tag-list" data-conversation-id="<?= (int)$conv['id'] ?>">
+        <?php foreach ($tagsAttached as $t): ?>
+          <span class="tag-chip" data-tag-id="<?= (int)$t['id'] ?>" style="background: <?= e($t['color']) ?>">
+            <?= e($t['name']) ?>
+            <button type="button" class="tag-chip-x" aria-label="Remove tag" title="Remove">&times;</button>
+          </span>
+        <?php endforeach; ?>
+        <?php if (!$tagsAttached): ?>
+          <span class="muted small" data-empty>No tags yet.</span>
+        <?php endif; ?>
+      </div>
+      <?php if ($tagsAll): ?>
+        <form class="tag-add-form" id="tag-add-form" data-conversation-id="<?= (int)$conv['id'] ?>">
+          <?= csrf_field() ?>
+          <select name="tag_id">
+            <option value="">+ Add tag…</option>
+            <?php foreach ($tagsAll as $t): if (in_array((int)$t['id'], $attachedIds, true)) continue; ?>
+              <option value="<?= (int)$t['id'] ?>" data-color="<?= e($t['color']) ?>" data-name="<?= e($t['name']) ?>">
+                <?= e($t['name']) ?>
+              </option>
+            <?php endforeach; ?>
+          </select>
+          <button class="btn btn-sm" type="submit">Add</button>
+        </form>
+      <?php else: ?>
+        <p class="muted small">No tags configured. Create them in Admin → Tags.</p>
+      <?php endif; ?>
     </div>
 
     <div class="side-section">

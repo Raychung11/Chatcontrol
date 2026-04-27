@@ -1,0 +1,19 @@
+# local secrets / overrides
+config/db_config.local.php
+.env
+.env.*
+
+# uploads (keep folder, ignore contents)
+uploads/*
+!uploads/.gitkeep
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# logs
+*.log

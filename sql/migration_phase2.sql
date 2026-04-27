@@ -67,6 +67,25 @@ CALL aiserve_phase2();
 DROP PROCEDURE aiserve_phase2;
 
 -- ----------------------------------------------------------------
+-- webhook_events - diagnostic log of every Meta webhook POST
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `webhook_events` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `company_id` INT UNSIGNED NOT NULL,
+  `method` VARCHAR(8) DEFAULT NULL,
+  `http_status` INT DEFAULT NULL,
+  `message_count` INT NOT NULL DEFAULT 0,
+  `status_count` INT NOT NULL DEFAULT 0,
+  `error_text` VARCHAR(500) DEFAULT NULL,
+  `raw_body` MEDIUMTEXT,
+  `ip_address` VARCHAR(64) DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_webhook_events_company_time` (`company_id`,`created_at`),
+  CONSTRAINT `fk_webhook_events_company` FOREIGN KEY (`company_id`) REFERENCES `companies` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ----------------------------------------------------------------
 -- routing_rules - keyword-based department routing for new conversations
 -- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `routing_rules` (

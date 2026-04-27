@@ -52,21 +52,50 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
 $rawBody = file_get_contents('php://input') ?: '';
 $payload = json_decode($rawBody, true);
 
+$messageCount = 0;
+$statusCount  = 0;
+$errorText    = null;
+$httpStatus   = 200;
+
 if (!is_array($payload)) {
-    http_response_code(400);
-    error_log('[AiServe webhook] Invalid JSON payload');
-    exit('Bad Request');
+    $httpStatus = 400;
+    $errorText  = 'Invalid JSON payload';
+    error_log('[AiServe webhook] ' . $errorText);
+} else {
+    // Pre-count for diagnostics (even if processing throws, we want this in the log)
+    foreach (($payload['entry'] ?? []) as $entry) {
+        foreach (($entry['changes'] ?? []) as $change) {
+            $value = $change['value'] ?? [];
+            $messageCount += isset($value['messages']) && is_array($value['messages']) ? count($value['messages']) : 0;
+            $statusCount  += isset($value['statuses']) && is_array($value['statuses']) ? count($value['statuses']) : 0;
+        }
+    }
+
+    try {
+        process_webhook_payload($company, $payload, $rawBody);
+    } catch (Throwable $e) {
+        $errorText = mb_substr('Exception: ' . $e->getMessage(), 0, 500);
+        error_log('[AiServe webhook] ' . $errorText);
+    }
 }
 
-// Always 200 to Meta to prevent retries, but log internally.
+// Log every POST attempt for diagnostics (best-effort - never block the webhook).
 try {
-    process_webhook_payload($company, $payload, $rawBody);
+    $logBody = mb_substr($rawBody, 0, 65000);
+    $logStmt = aiserve_db()->prepare(
+        'INSERT INTO webhook_events
+            (company_id, method, http_status, message_count, status_count, error_text, raw_body, ip_address)
+         VALUES (?, "POST", ?, ?, ?, ?, ?, ?)'
+    );
+    $logStmt->execute([
+        (int)$company['id'], $httpStatus, $messageCount, $statusCount, $errorText, $logBody, client_ip(),
+    ]);
 } catch (Throwable $e) {
-    error_log('[AiServe webhook] Exception: ' . $e->getMessage());
+    error_log('[AiServe webhook] webhook_events insert failed: ' . $e->getMessage());
 }
 
-http_response_code(200);
-echo 'EVENT_RECEIVED';
+http_response_code($httpStatus);
+echo $httpStatus === 200 ? 'EVENT_RECEIVED' : 'BAD_REQUEST';
 
 // =============================================================
 // Functions

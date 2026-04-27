@@ -37,16 +37,22 @@ mysql -u aiserve -p aiserve_inbox < sql/schema.sql
 mysql -u aiserve -p aiserve_inbox < sql/seed.sql
 ```
 
-**Upgrading from Phase 1?** Run the Phase 2 migration as well:
+**Upgrading?** Run the Phase 2 + Phase 3 migrations (idempotent):
 
 ```bash
 mysql -u aiserve -p aiserve_inbox < sql/migration_phase2.sql
+mysql -u aiserve -p aiserve_inbox < sql/migration_phase3.sql
 ```
 
-It is idempotent and adds: `companies.default_department_id`,
+Phase 2 adds: `companies.default_department_id`,
 `conversations.resolved_at`, `messages.template_name`,
-`messages.media_local_path`, `messages.media_id`, and the new
+`messages.media_local_path`, `messages.media_id`, plus the
 `routing_rules` table.
+
+Phase 3 adds the messaging provider columns:
+`companies.provider`, `evolution_base_url`, `evolution_api_key`,
+`evolution_instance`, `evolution_status`. See
+[`docs/EVOLUTION.md`](EVOLUTION.md) to self-host the Evolution server.
 
 The seed creates:
 

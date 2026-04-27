@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../inc/layout.php';
+require_once __DIR__ . '/../inc/provider.php';
 
 $current_user = require_login();
 $companyId    = (int)$current_user['company_id'];
@@ -101,7 +102,10 @@ $tagsAll = $db->prepare('SELECT id, name, color FROM conversation_tags WHERE com
 $tagsAll->execute([$companyId]);
 $tagsAll = $tagsAll->fetchAll();
 
-$windowOpen = is_within_service_window($conv['service_window_expires_at']);
+$company = load_company_settings($companyId) ?: [];
+$enforceWindow = provider_enforces_24h_window($company);
+$supportsTemplates = provider_supports_templates($company);
+$windowOpen = !$enforceWindow || is_within_service_window($conv['service_window_expires_at']);
 
 layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id']), 'inbox');
 ?>
@@ -116,7 +120,7 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
       </div>
       <div class="chat-status">
         <?= status_badge($conv['status']) ?>
-        <?php if (!$windowOpen): ?>
+        <?php if ($enforceWindow && !$windowOpen): ?>
           <span class="badge badge-failed" title="24-hour service window expired">Window expired</span>
         <?php endif; ?>
       </div>
@@ -219,7 +223,7 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
                     placeholder="Type a reply (the customer will see this on WhatsApp)…" required></textarea>
           <div class="composer-actions">
             <div class="composer-extras">
-              <?php if ($templates): ?>
+              <?php if ($templates && $supportsTemplates): ?>
                 <button type="button" class="btn btn-sm" id="open-template-picker">Send template</button>
               <?php endif; ?>
               <label class="btn btn-sm" for="media-input">Attach</label>
@@ -234,7 +238,7 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
           </div>
         </form>
 
-        <?php if ($templates): ?>
+        <?php if ($templates && $supportsTemplates): ?>
           <form id="template-form" class="composer-form hidden" data-templates='<?= e(json_encode($tplPayload, JSON_UNESCAPED_UNICODE)) ?>'>
             <?= csrf_field() ?>
             <input type="hidden" name="conversation_id" value="<?= (int)$conv['id'] ?>">

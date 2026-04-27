@@ -2,6 +2,7 @@
 config/db_config.local.php
 .env
 .env.*
+!.env.evolution.example
 
 # uploads (keep folder, ignore contents)
 uploads/*

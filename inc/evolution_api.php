@@ -7,12 +7,17 @@
  *   Base URL:     companies.evolution_base_url   e.g. https://evo.example.com
  *   Instance:     companies.evolution_instance   e.g. "aiserve-prod"
  *
- * Phase 3 commit 2 fills in the real implementations. This file currently
- * provides safe stubs that report "not configured" so the dispatch layer in
- * inc/provider.php can be wired up first without breaking Cloud API users.
+ * Provides parity with whatsapp_api.php for the operations the portal needs:
+ *   - sendText / sendMedia
+ *   - createInstance / setWebhook
+ *   - getQR / connectionState (used by /admin/whatsapp_pair.php)
  */
 
 require_once __DIR__ . '/helpers.php';
+
+// =============================================================
+// Config helpers
+// =============================================================
 
 function evolution_is_configured(array $company): bool
 {
@@ -21,38 +26,291 @@ function evolution_is_configured(array $company): bool
         && !empty($company['evolution_instance']);
 }
 
+function evolution_normalize_wa_id(string $waId): string
+{
+    // Accept "60134691341" or "60134691341@s.whatsapp.net". Evolution accepts plain digits.
+    if (str_contains($waId, '@')) {
+        $waId = explode('@', $waId)[0];
+    }
+    return preg_replace('/[^0-9]/', '', $waId) ?: '';
+}
+
+function evolution_base(array $company): string
+{
+    return rtrim((string)$company['evolution_base_url'], '/');
+}
+
+function evolution_instance_name(array $company): string
+{
+    return (string)$company['evolution_instance'];
+}
+
+// =============================================================
+// HTTP helper
+// =============================================================
+
+/**
+ * @return array{ok:bool, http_code:int, body:string, json:?array}
+ */
+function evolution_request(array $company, string $method, string $path, ?array $body = null): array
+{
+    $url = evolution_base($company) . $path;
+    $ch = curl_init($url);
+    $headers = [
+        'apikey: ' . (string)$company['evolution_api_key'],
+        'Content-Type: application/json',
+    ];
+    $opts = [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_HTTPHEADER     => $headers,
+        CURLOPT_CUSTOMREQUEST  => $method,
+    ];
+    if ($body !== null) {
+        $opts[CURLOPT_POSTFIELDS] = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+    curl_setopt_array($ch, $opts);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($resp === false) {
+        return ['ok' => false, 'http_code' => $code, 'body' => 'curl error: ' . $err, 'json' => null];
+    }
+    $json = json_decode((string)$resp, true);
+    return [
+        'ok'        => $code >= 200 && $code < 300,
+        'http_code' => $code,
+        'body'      => (string)$resp,
+        'json'      => is_array($json) ? $json : null,
+    ];
+}
+
+// =============================================================
+// Send text
+// =============================================================
+
 function evolution_send_text(array $company, string $waId, string $text): array
 {
     if (!evolution_is_configured($company)) {
         return evolution_not_configured_error();
     }
-    // TODO commit 2: POST {base}/message/sendText/{instance} {number, text}
-    return evolution_not_implemented_error('sendText');
+    $number = evolution_normalize_wa_id($waId);
+    if ($number === '') {
+        return ['ok' => false, 'wa_message_id' => null, 'error' => 'Invalid recipient number.', 'http_code' => 400, 'raw' => null];
+    }
+
+    $path = '/message/sendText/' . rawurlencode(evolution_instance_name($company));
+    $r = evolution_request($company, 'POST', $path, [
+        'number' => $number,
+        'text'   => $text,
+    ]);
+
+    return evolution_normalize_send_result($r);
 }
+
+// =============================================================
+// Send media (image / video / audio / document)
+// =============================================================
 
 function evolution_send_media(array $company, string $waId, string $kind, string $localPath, ?string $caption = null, ?string $filename = null, ?string $mime = null): array
 {
     if (!evolution_is_configured($company)) {
         return evolution_not_configured_error();
     }
-    // TODO commit 2: POST {base}/message/sendMedia/{instance}
-    return evolution_not_implemented_error('sendMedia');
+    if (!is_readable($localPath)) {
+        return ['ok' => false, 'wa_message_id' => null, 'error' => 'File not readable.', 'http_code' => 400, 'raw' => null];
+    }
+    $kindMap = [
+        'image'    => 'image',
+        'video'    => 'video',
+        'document' => 'document',
+        'audio'    => 'audio',
+    ];
+    if (!isset($kindMap[$kind])) {
+        return ['ok' => false, 'wa_message_id' => null, 'error' => 'Unsupported media kind.', 'http_code' => 400, 'raw' => null];
+    }
+
+    $number = evolution_normalize_wa_id($waId);
+    $base64 = base64_encode((string)file_get_contents($localPath));
+
+    if ($kind === 'audio') {
+        // Evolution exposes a separate endpoint for native voice notes.
+        $path = '/message/sendWhatsAppAudio/' . rawurlencode(evolution_instance_name($company));
+        $payload = [
+            'number' => $number,
+            'audio'  => $base64,
+        ];
+    } else {
+        $path = '/message/sendMedia/' . rawurlencode(evolution_instance_name($company));
+        $payload = [
+            'number'    => $number,
+            'mediatype' => $kindMap[$kind],
+            'mimetype'  => $mime ?: 'application/octet-stream',
+            'media'     => $base64,
+            'fileName'  => $filename ?: basename($localPath),
+        ];
+        if ($caption !== null && $caption !== '' && $kind !== 'audio') {
+            $payload['caption'] = $caption;
+        }
+    }
+
+    $r = evolution_request($company, 'POST', $path, $payload);
+    return evolution_normalize_send_result($r);
 }
+
+function evolution_normalize_send_result(array $r): array
+{
+    if ($r['ok'] && is_array($r['json'])) {
+        $waId = $r['json']['key']['id']
+             ?? $r['json']['messageId']
+             ?? null;
+        return [
+            'ok'            => true,
+            'wa_message_id' => $waId,
+            'error'         => null,
+            'http_code'     => $r['http_code'],
+            'raw'           => $r['json'],
+        ];
+    }
+    $err = $r['json']['message']
+        ?? $r['json']['response']['message']
+        ?? $r['json']['error']
+        ?? ('HTTP ' . $r['http_code']);
+    if (is_array($err)) {
+        $err = json_encode($err, JSON_UNESCAPED_SLASHES);
+    }
+    return [
+        'ok'            => false,
+        'wa_message_id' => null,
+        'error'         => (string)$err,
+        'http_code'     => $r['http_code'],
+        'raw'           => $r['json'],
+    ];
+}
+
+// =============================================================
+// Instance management (used by /admin/whatsapp_pair.php)
+// =============================================================
+
+/**
+ * Create or fetch an instance. Idempotent-ish: if the instance already
+ * exists, Evolution returns 403/409. We treat that as success.
+ */
+function evolution_create_instance(array $company): array
+{
+    if (!evolution_is_configured($company)) {
+        return ['ok' => false, 'error' => 'Evolution not configured.'];
+    }
+    $r = evolution_request($company, 'POST', '/instance/create', [
+        'instanceName' => evolution_instance_name($company),
+        'qrcode'       => true,
+        'integration'  => 'WHATSAPP-BAILEYS',
+    ]);
+    if ($r['ok']) {
+        return ['ok' => true, 'data' => $r['json']];
+    }
+    // Already exists -> ok
+    $msg = strtolower((string)($r['json']['message'] ?? $r['json']['response']['message'] ?? ''));
+    if (str_contains($msg, 'already') || $r['http_code'] === 403 || $r['http_code'] === 409) {
+        return ['ok' => true, 'data' => $r['json'], 'note' => 'Instance already existed.'];
+    }
+    return ['ok' => false, 'error' => $msg ?: ('HTTP ' . $r['http_code']), 'data' => $r['json']];
+}
+
+/**
+ * Get a fresh QR code for pairing. Returns the base64 string (without the
+ * "data:image/png;base64," prefix) or null if already connected.
+ */
+function evolution_get_qr(array $company): array
+{
+    if (!evolution_is_configured($company)) {
+        return ['ok' => false, 'error' => 'Evolution not configured.'];
+    }
+    $path = '/instance/connect/' . rawurlencode(evolution_instance_name($company));
+    $r = evolution_request($company, 'GET', $path);
+    if (!$r['ok']) {
+        return ['ok' => false, 'error' => 'HTTP ' . $r['http_code'], 'raw' => $r['json']];
+    }
+    // Different Evolution versions return slightly different shapes
+    $base64 = $r['json']['base64']
+           ?? $r['json']['qrcode']['base64']
+           ?? $r['json']['qrcode']
+           ?? null;
+    if (is_string($base64) && str_starts_with($base64, 'data:image')) {
+        $parts = explode(',', $base64, 2);
+        $base64 = $parts[1] ?? $base64;
+    }
+    return [
+        'ok'      => true,
+        'qr'      => $base64,
+        'pairing' => $r['json']['pairingCode'] ?? null,
+        'raw'     => $r['json'],
+    ];
+}
+
+function evolution_connection_state(array $company): array
+{
+    if (!evolution_is_configured($company)) {
+        return ['ok' => false, 'state' => 'disconnected', 'error' => 'Evolution not configured.'];
+    }
+    $path = '/instance/connectionState/' . rawurlencode(evolution_instance_name($company));
+    $r = evolution_request($company, 'GET', $path);
+    if (!$r['ok']) {
+        return ['ok' => false, 'state' => 'disconnected', 'error' => 'HTTP ' . $r['http_code']];
+    }
+    $state = $r['json']['instance']['state']
+          ?? $r['json']['state']
+          ?? 'disconnected';
+    // Evolution sometimes returns "open" for connected
+    $map = ['open' => 'connected', 'connecting' => 'connecting', 'close' => 'disconnected'];
+    $normalized = $map[$state] ?? $state;
+    return ['ok' => true, 'state' => $normalized, 'raw' => $r['json']];
+}
+
+function evolution_logout_instance(array $company): array
+{
+    $path = '/instance/logout/' . rawurlencode(evolution_instance_name($company));
+    $r = evolution_request($company, 'DELETE', $path);
+    return ['ok' => $r['ok'], 'raw' => $r['json']];
+}
+
+/**
+ * Tell Evolution to push events to our webhook.
+ */
+function evolution_set_webhook(array $company, string $webhookUrl): array
+{
+    if (!evolution_is_configured($company)) {
+        return ['ok' => false, 'error' => 'Evolution not configured.'];
+    }
+    $path = '/webhook/set/' . rawurlencode(evolution_instance_name($company));
+    $r = evolution_request($company, 'POST', $path, [
+        'webhook' => [
+            'enabled'  => true,
+            'url'      => $webhookUrl,
+            'webhookByEvents'    => false,
+            'webhookBase64'      => true,
+            'events'   => [
+                'MESSAGES_UPSERT',
+                'MESSAGES_UPDATE',
+                'CONNECTION_UPDATE',
+                'SEND_MESSAGE',
+            ],
+        ],
+    ]);
+    return ['ok' => $r['ok'], 'raw' => $r['json'], 'http_code' => $r['http_code']];
+}
+
+// =============================================================
+// Errors
+// =============================================================
 
 function evolution_not_configured_error(): array
 {
     return [
         'ok' => false, 'wa_message_id' => null,
         'error' => 'Evolution API is not configured. Set base URL, API key, and instance in Settings, then pair WhatsApp.',
-        'http_code' => 0, 'raw' => null,
-    ];
-}
-
-function evolution_not_implemented_error(string $op): array
-{
-    return [
-        'ok' => false, 'wa_message_id' => null,
-        'error' => 'Evolution provider not yet implemented (' . $op . '). Coming in Phase 3 commit 2.',
         'http_code' => 0, 'raw' => null,
     ];
 }

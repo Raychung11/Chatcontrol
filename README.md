@@ -80,8 +80,12 @@ ticks (✓ ✓✓ blue), tags (CRUD + chat picker + inbox filter + reports),
 keyword + default-department auto-routing for new conversations, richer
 reports (date range, resolution time, per-agent response time, top tags).
 
-**Phase 3** - AI reply suggestion, auto summary, FAQ assistant, sentiment,
-CRM/Odoo integration, broadcast campaigns.
+**Phase 3 (in progress)** - **Pluggable provider** so each tenant chooses
+between Meta Cloud API (official, paid, ban-safe) and Evolution API
+(self-hosted Baileys, free, ban risk). Provider picker in Settings, QR
+pairing UI for Evolution, drop-in Docker compose for the Evolution
+server. Coming up: AI reply suggestion, auto summary, FAQ assistant,
+sentiment, CRM/Odoo integration, broadcast campaigns.
 
 ## License
 

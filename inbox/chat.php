@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../inc/layout.php';
 require_once __DIR__ . '/../inc/provider.php';
+require_once __DIR__ . '/../inc/chat_render.php';
 
 $current_user = require_login();
 $companyId    = (int)$current_user['company_id'];
@@ -126,48 +127,10 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
       </div>
     </header>
 
-    <div class="chat-stream" id="chat-stream">
+    <?php $lastMsgId = $messages ? (int)end($messages)['id'] : 0; ?>
+    <div class="chat-stream" id="chat-stream" data-last-msg-id="<?= $lastMsgId ?>">
       <?php foreach ($messages as $m): ?>
-        <?php
-          $isOut = $m['direction'] === 'outgoing';
-          $cls = $isOut ? 'msg-out' : 'msg-in';
-          $cls .= ' status-' . e($m['status']);
-        ?>
-        <div class="msg <?= $cls ?>">
-          <div class="msg-bubble">
-            <?php if ($isOut && !empty($m['sender_name'])): ?>
-              <div class="msg-sender"><?= e($m['sender_name']) ?></div>
-            <?php endif; ?>
-            <?php if ($m['message_type'] !== 'text' && $m['message_type'] !== ''): ?>
-              <div class="msg-type-tag"><?= e(strtoupper($m['message_type'])) ?>
-                <?php if (!empty($m['media_filename'])): ?> · <?= e($m['media_filename']) ?><?php endif; ?>
-                <?php if (!empty($m['template_name'])): ?> · <?= e($m['template_name']) ?><?php endif; ?>
-              </div>
-            <?php endif; ?>
-            <?php
-              $mediaSrc = null;
-              if (!empty($m['media_local_path']) && is_readable($m['media_local_path'])) {
-                  $mediaSrc = '/api/media.php?msg=' . (int)$m['id'];
-              }
-              $isImage = $mediaSrc && str_starts_with((string)$m['media_mime_type'], 'image/');
-            ?>
-            <?php if ($mediaSrc && $isImage): ?>
-              <div class="msg-media"><a href="<?= e($mediaSrc) ?>" target="_blank"><img src="<?= e($mediaSrc) ?>" alt="image"></a></div>
-            <?php elseif ($mediaSrc): ?>
-              <div class="msg-media"><a href="<?= e($mediaSrc) ?>" target="_blank">Download <?= e($m['media_filename'] ?: ucfirst($m['message_type'])) ?></a></div>
-            <?php endif; ?>
-            <div class="msg-body"><?= nl2br(e((string)$m['message_text'])) ?></div>
-            <div class="msg-meta">
-              <span><?= e(fmt_dt($m['created_at'], 'M j, H:i')) ?></span>
-              <?php if ($isOut): ?>
-                <span class="msg-status" title="<?= e(ucfirst($m['status'])) ?>"><?= delivery_ticks($m['status']) ?></span>
-              <?php endif; ?>
-              <?php if ($m['status'] === 'failed' && !empty($m['error_message'])): ?>
-                <span class="msg-error" title="<?= e($m['error_message']) ?>">· <?= e($m['error_message']) ?></span>
-              <?php endif; ?>
-            </div>
-          </div>
-        </div>
+        <?= message_bubble_html($m) ?>
       <?php endforeach; ?>
     </div>
 

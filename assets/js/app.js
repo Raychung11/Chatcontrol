@@ -1,31 +1,60 @@
-/* AiServe Shared WhatsApp Inbox - minimal vanilla JS */
+/* AiServe Shared WhatsApp Inbox - vanilla JS (live refresh + composer) */
 (function () {
   'use strict';
 
-  const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+  const csrfMeta  = document.querySelector('meta[name="csrf-token"]');
   const csrfToken = csrfMeta ? csrfMeta.getAttribute('content') : '';
+  const POLL_MS   = 5000;
 
-  // Auto-scroll chat to bottom on load
   const stream = document.getElementById('chat-stream');
-  if (stream) {
-    stream.scrollTop = stream.scrollHeight;
+  if (stream) stream.scrollTop = stream.scrollHeight;
+
+  // ---- Notification beep (WebAudio, no asset) ---------------------
+  let audioCtx = null;
+  function beep() {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.connect(g); g.connect(audioCtx.destination);
+      o.type = 'sine';
+      o.frequency.value = 660;
+      g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.15, audioCtx.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.35);
+      o.start();
+      o.stop(audioCtx.currentTime + 0.36);
+    } catch (_) { /* autoplay blocked until first interaction - fine */ }
+  }
+
+  function nearBottom(el) {
+    return (el.scrollHeight - el.scrollTop - el.clientHeight) < 120;
+  }
+
+  // ---- Media preview state ----------------------------------------
+  let pendingMedia = null;
+
+  function clearMediaPreview() {
+    pendingMedia = null;
+    const node = document.getElementById('media-preview-box');
+    if (node) node.remove();
+    const input = document.getElementById('media-input');
+    if (input) input.value = '';
   }
 
   // ---- Composer (send WhatsApp reply) -----------------------------
   const composer = document.getElementById('composer-form');
-  let pendingMedia = null; // { id, mime_type, kind, filename, preview_url }
-
   if (composer) {
     composer.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const status = document.getElementById('composer-status');
-      const ta     = document.getElementById('composer-text');
-      const text   = (ta.value || '').trim();
+      const statusEl = document.getElementById('composer-status');
+      const ta       = document.getElementById('composer-text');
+      const text     = (ta.value || '').trim();
       if (!text && !pendingMedia) return;
 
       const btn = composer.querySelector('button[type="submit"]');
       btn.disabled = true;
-      if (status) status.textContent = 'Sending…';
+      if (statusEl) statusEl.textContent = 'Sending…';
 
       try {
         let endpoint = '/api/send_message.php';
@@ -40,30 +69,24 @@
           if (text) fd.append('caption', text);
           fd.delete('message_text');
         }
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          body: fd,
-          headers: { 'X-CSRF-Token': csrfToken },
+        const res  = await fetch(endpoint, {
+          method: 'POST', body: fd, headers: { 'X-CSRF-Token': csrfToken },
         });
         const data = await res.json().catch(() => ({}));
         if (!data.ok) {
-          if (status) status.textContent = '';
+          if (statusEl) statusEl.textContent = '';
           alert('Send failed: ' + (data.error || ('HTTP ' + res.status)));
           if (data.window_expired) location.reload();
           btn.disabled = false;
           return;
         }
-        if (pendingMedia) {
-          appendMediaMessage(pendingMedia, text);
-          clearMediaPreview();
-        } else {
-          appendMessage(text, true);
-        }
         ta.value = '';
-        if (status) status.textContent = 'Sent';
-        setTimeout(() => { if (status) status.textContent = ''; }, 1500);
+        clearMediaPreview();
+        if (statusEl) statusEl.textContent = 'Sent';
+        setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 1500);
+        pollChatOnce(); // server-rendered bubble appears (with real ticks)
       } catch (err) {
-        if (status) status.textContent = '';
+        if (statusEl) statusEl.textContent = '';
         alert('Network error: ' + err.message);
       } finally {
         btn.disabled = false;
@@ -71,69 +94,7 @@
     });
   }
 
-  function appendMessage(text, outgoing) {
-    if (!stream) return;
-    const wrap = document.createElement('div');
-    wrap.className = 'msg ' + (outgoing ? 'msg-out' : 'msg-in') + ' status-sent';
-    const bubble = document.createElement('div');
-    bubble.className = 'msg-bubble';
-    const body = document.createElement('div');
-    body.className = 'msg-body';
-    body.textContent = text;
-    bubble.appendChild(body);
-    const meta = document.createElement('div');
-    meta.className = 'msg-meta';
-    const now = new Date();
-    meta.textContent = now.toLocaleString();
-    bubble.appendChild(meta);
-    wrap.appendChild(bubble);
-    stream.appendChild(wrap);
-    stream.scrollTop = stream.scrollHeight;
-  }
-
-  function appendMediaMessage(media, caption) {
-    if (!stream) return;
-    const wrap = document.createElement('div');
-    wrap.className = 'msg msg-out status-sent';
-    const bubble = document.createElement('div');
-    bubble.className = 'msg-bubble';
-    const tag = document.createElement('div');
-    tag.className = 'msg-type-tag';
-    tag.textContent = (media.kind || 'media').toUpperCase()
-      + (media.filename ? ' · ' + media.filename : '');
-    bubble.appendChild(tag);
-    if (media.preview_url && media.kind === 'image') {
-      const wrapMedia = document.createElement('div');
-      wrapMedia.className = 'msg-media';
-      const img = document.createElement('img');
-      img.src = media.preview_url;
-      wrapMedia.appendChild(img);
-      bubble.appendChild(wrapMedia);
-    }
-    if (caption) {
-      const body = document.createElement('div');
-      body.className = 'msg-body';
-      body.textContent = caption;
-      bubble.appendChild(body);
-    }
-    const meta = document.createElement('div');
-    meta.className = 'msg-meta';
-    meta.textContent = new Date().toLocaleString();
-    bubble.appendChild(meta);
-    wrap.appendChild(bubble);
-    stream.appendChild(wrap);
-    stream.scrollTop = stream.scrollHeight;
-  }
-
-  function clearMediaPreview() {
-    pendingMedia = null;
-    const node = document.getElementById('media-preview-box');
-    if (node) node.remove();
-    const input = document.getElementById('media-input');
-    if (input) input.value = '';
-  }
-
-  // ---- Media upload (file picker -> server upload -> Meta media_id) ----
+  // ---- Media upload (file picker -> server upload) ----------------
   const mediaInput = document.getElementById('media-input');
   if (mediaInput && composer) {
     mediaInput.addEventListener('change', async () => {
@@ -144,10 +105,8 @@
         mediaInput.value = '';
         return;
       }
-
-      const status = document.getElementById('media-status');
-      if (status) status.textContent = 'Uploading…';
-
+      const statusEl = document.getElementById('media-status');
+      if (statusEl) statusEl.textContent = 'Uploading…';
       const fd = new FormData();
       fd.append('file', file);
       fd.append('_csrf', csrfToken);
@@ -156,23 +115,20 @@
         const data = await res.json().catch(() => ({}));
         if (!data.ok) {
           alert('Upload failed: ' + (data.error || res.status));
-          if (status) status.textContent = '';
+          if (statusEl) statusEl.textContent = '';
           mediaInput.value = '';
           return;
         }
         pendingMedia = {
-          id:        data.media_id,
-          mime_type: data.mime_type,
-          kind:      data.kind,
-          filename:  data.filename,
-          preview_url: data.preview_url || null,
-          local_path:  data.local_path  || '',
+          id: data.media_id, mime_type: data.mime_type, kind: data.kind,
+          filename: data.filename, preview_url: data.preview_url || null,
+          local_path: data.local_path || '',
         };
-        if (status) status.textContent = '';
+        if (statusEl) statusEl.textContent = '';
         showMediaPreview(pendingMedia);
       } catch (err) {
         alert('Network error: ' + err.message);
-        if (status) status.textContent = '';
+        if (statusEl) statusEl.textContent = '';
       }
     });
   }
@@ -205,19 +161,18 @@
   }
 
   // ---- Template picker --------------------------------------------
-  const tplForm    = document.getElementById('template-form');
-  const tplPicker  = document.getElementById('template-picker');
-  const tplVars    = document.getElementById('template-vars');
-  const tplPreview = document.getElementById('template-preview');
-  const openTplBtn = document.getElementById('open-template-picker');
-  const closeTplBtn= document.getElementById('close-template-picker');
+  const tplForm     = document.getElementById('template-form');
+  const tplPicker   = document.getElementById('template-picker');
+  const tplVars     = document.getElementById('template-vars');
+  const tplPreview  = document.getElementById('template-preview');
+  const openTplBtn  = document.getElementById('open-template-picker');
+  const closeTplBtn = document.getElementById('close-template-picker');
 
   function getTemplates() {
     if (!tplForm) return [];
     try { return JSON.parse(tplForm.dataset.templates || '[]'); }
     catch (_) { return []; }
   }
-
   function renderTemplateForm() {
     if (!tplPicker || !tplVars) return;
     const id  = parseInt(tplPicker.value || '0', 10);
@@ -228,9 +183,7 @@
       const lbl = document.createElement('label');
       lbl.textContent = 'Variable {{' + i + '}}';
       const inp = document.createElement('input');
-      inp.type = 'text';
-      inp.name = 'var[]';
-      inp.required = true;
+      inp.type = 'text'; inp.name = 'var[]'; inp.required = true;
       inp.dataset.idx = String(i);
       inp.addEventListener('input', updateTemplatePreview);
       lbl.appendChild(inp);
@@ -238,7 +191,6 @@
     }
     updateTemplatePreview();
   }
-
   function updateTemplatePreview() {
     if (!tplPreview || !tplPicker) return;
     const id  = parseInt(tplPicker.value || '0', 10);
@@ -246,58 +198,49 @@
     if (!tpl) { tplPreview.textContent = ''; return; }
     let body = tpl.body || '';
     tplVars.querySelectorAll('input[name="var[]"]').forEach((inp) => {
-      const idx = inp.dataset.idx;
-      body = body.replaceAll('{{' + idx + '}}', inp.value || ('{{' + idx + '}}'));
+      body = body.replaceAll('{{' + inp.dataset.idx + '}}', inp.value || ('{{' + inp.dataset.idx + '}}'));
     });
     tplPreview.textContent = body;
   }
-
   if (tplPicker) tplPicker.addEventListener('change', renderTemplateForm);
-
   if (openTplBtn && tplForm && composer) {
     openTplBtn.addEventListener('click', () => {
-      tplForm.classList.remove('hidden');
-      composer.classList.add('hidden');
+      tplForm.classList.remove('hidden'); composer.classList.add('hidden');
     });
   }
   if (closeTplBtn && tplForm && composer) {
     closeTplBtn.addEventListener('click', () => {
-      tplForm.classList.add('hidden');
-      composer.classList.remove('hidden');
+      tplForm.classList.add('hidden'); composer.classList.remove('hidden');
     });
   }
-
   if (tplForm) {
     tplForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const status = document.getElementById('template-status');
-      const btn    = tplForm.querySelector('button[type="submit"]');
+      const statusEl = document.getElementById('template-status');
+      const btn      = tplForm.querySelector('button[type="submit"]');
       btn.disabled = true;
-      if (status) status.textContent = 'Sending…';
+      if (statusEl) statusEl.textContent = 'Sending…';
       try {
-        const fd = new FormData(tplForm);
+        const fd  = new FormData(tplForm);
         const res = await fetch('/api/send_template.php', {
           method: 'POST', body: fd, headers: { 'X-CSRF-Token': csrfToken },
         });
         const data = await res.json().catch(() => ({}));
         if (!data.ok) {
-          if (status) status.textContent = '';
+          if (statusEl) statusEl.textContent = '';
           alert('Template send failed: ' + (data.error || res.status));
           btn.disabled = false;
           return;
         }
-        appendMessage(data.preview || '[template sent]', true);
-        if (status) status.textContent = 'Sent';
-        setTimeout(() => { if (status) status.textContent = ''; }, 1500);
+        if (statusEl) statusEl.textContent = 'Sent';
+        setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 1500);
         if (composer) {
           tplForm.classList.add('hidden');
           composer.classList.remove('hidden');
-        } else {
-          // Window-expired view -> reload so timeline stays accurate
-          setTimeout(() => location.reload(), 600);
         }
+        pollChatOnce();
       } catch (err) {
-        if (status) status.textContent = '';
+        if (statusEl) statusEl.textContent = '';
         alert('Network error: ' + err.message);
       } finally {
         btn.disabled = false;
@@ -317,30 +260,24 @@
       const opt   = select.options[select.selectedIndex];
       const color = opt.dataset.color || '#999';
       const name  = opt.dataset.name  || '';
-
       const fd = new FormData();
       fd.append('action', 'add_tag');
       fd.append('conversation_id', tagAddForm.dataset.conversationId);
       fd.append('tag_id', tagId);
       fd.append('_csrf', csrfToken);
-
       const res = await fetch('/api/conversation_action.php', { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!data.ok) { alert(data.error || 'Could not add tag.'); return; }
-
       const empty = tagList.querySelector('[data-empty]');
       if (empty) empty.remove();
-
       const chip = document.createElement('span');
       chip.className = 'tag-chip';
       chip.dataset.tagId = tagId;
       chip.style.background = color;
       chip.textContent = name;
       const x = document.createElement('button');
-      x.type = 'button';
-      x.className = 'tag-chip-x';
-      x.title = 'Remove';
-      x.setAttribute('aria-label', 'Remove tag');
+      x.type = 'button'; x.className = 'tag-chip-x';
+      x.title = 'Remove'; x.setAttribute('aria-label', 'Remove tag');
       x.textContent = '×';
       chip.appendChild(x);
       tagList.appendChild(chip);
@@ -351,7 +288,7 @@
     tagList.addEventListener('click', async (e) => {
       const btn = e.target.closest('.tag-chip-x');
       if (!btn) return;
-      const chip = btn.closest('.tag-chip');
+      const chip  = btn.closest('.tag-chip');
       const tagId = chip.dataset.tagId;
       const fd = new FormData();
       fd.append('action', 'remove_tag');
@@ -361,8 +298,6 @@
       const res = await fetch('/api/conversation_action.php', { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!data.ok) { alert(data.error || 'Could not remove tag.'); return; }
-
-      // Add back to picker dropdown
       if (tagAddForm) {
         const select = tagAddForm.querySelector('select[name="tag_id"]');
         const opt = document.createElement('option');
@@ -390,19 +325,13 @@
       const btn = form.querySelector('button[type="submit"]');
       if (btn) btn.disabled = true;
       try {
-        const fd = new FormData(form);
+        const fd  = new FormData(form);
         const res = await fetch('/api/conversation_action.php', {
-          method: 'POST',
-          body: fd,
-          headers: { 'X-CSRF-Token': csrfToken },
+          method: 'POST', body: fd, headers: { 'X-CSRF-Token': csrfToken },
         });
         const data = await res.json().catch(() => ({}));
-        if (!data.ok) {
-          alert(data.error || ('Action failed (HTTP ' + res.status + ')'));
-          return;
-        }
+        if (!data.ok) { alert(data.error || ('Action failed (HTTP ' + res.status + ')')); return; }
         if (form.dataset.action === 'add_note') {
-          // Append note locally, clear textarea
           const ul = form.parentElement.querySelector('.note-list');
           if (ul) {
             const li = document.createElement('li');
@@ -415,7 +344,6 @@
           const ta = form.querySelector('textarea[name="note_text"]');
           if (ta) ta.value = '';
         } else {
-          // Reload page to reflect new state in the side panel and chat header.
           location.reload();
         }
       } catch (err) {
@@ -425,4 +353,98 @@
       }
     });
   });
+
+  // =================================================================
+  // LIVE REFRESH
+  // =================================================================
+
+  const hidden = () => document.visibilityState === 'hidden';
+
+  // ---- Chat live refresh ------------------------------------------
+  let chatPolling = false;
+  async function pollChatOnce() {
+    if (!stream || chatPolling) return;
+    const shell = document.querySelector('.chat-shell');
+    if (!shell) return;
+    const convId = shell.getAttribute('data-conversation-id');
+    if (!convId) return;
+    chatPolling = true;
+    try {
+      const afterId = stream.getAttribute('data-last-msg-id') || '0';
+      const res = await fetch('/api/poll.php?scope=chat&conversation_id='
+        + encodeURIComponent(convId) + '&after_id=' + encodeURIComponent(afterId),
+        { headers: { 'X-CSRF-Token': csrfToken } });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) return;
+
+      const wasNearBottom = nearBottom(stream);
+
+      if (data.messages_html && data.messages_html.trim() !== '') {
+        stream.insertAdjacentHTML('beforeend', data.messages_html);
+        stream.setAttribute('data-last-msg-id', String(data.last_msg_id));
+        if (wasNearBottom) stream.scrollTop = stream.scrollHeight;
+        if (data.new_inbound && hidden()) beep();
+        else if (data.new_inbound) beep();
+      }
+
+      // Update delivery ticks on existing outgoing bubbles
+      if (data.statuses) {
+        Object.keys(data.statuses).forEach((id) => {
+          const node = stream.querySelector('.msg[data-msg-id="' + id + '"]');
+          if (!node) return;
+          const want = 'status-' + data.statuses[id];
+          if (!node.classList.contains(want)) {
+            node.className = node.className.replace(/status-\w+/, want);
+          }
+        });
+      }
+    } catch (_) { /* network blip - try again next tick */ }
+    finally { chatPolling = false; }
+  }
+
+  // ---- Inbox live refresh -----------------------------------------
+  const inboxShell = document.querySelector('.inbox-shell[data-poll-scope="inbox"]');
+  let inboxPolling = false;
+  async function pollInboxOnce() {
+    if (!inboxShell || inboxPolling || hidden()) return;
+    inboxPolling = true;
+    try {
+      const qs = new URLSearchParams({
+        scope: 'inbox',
+        filter: inboxShell.dataset.filter || 'all',
+        q: inboxShell.dataset.q || '',
+        department_id: inboxShell.dataset.departmentId || '0',
+        tag_id: inboxShell.dataset.tagId || '0',
+      });
+      const res  = await fetch('/api/poll.php?' + qs.toString(),
+        { headers: { 'X-CSRF-Token': csrfToken } });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) return;
+
+      const list = document.getElementById('inbox-list');
+      if (list && typeof data.rows_html === 'string') {
+        // Only repaint if content actually changed (avoid scroll jump).
+        if (list.dataset.sig !== data.rows_html.length + ':' + (data.counts.open_total || 0)) {
+          list.innerHTML = data.rows_html;
+          list.dataset.sig = data.rows_html.length + ':' + (data.counts.open_total || 0);
+        }
+      }
+      document.querySelectorAll('.inbox-quickfilters .count[data-count]').forEach((el) => {
+        const k = el.getAttribute('data-count');
+        if (data.counts && k in data.counts) el.textContent = data.counts[k];
+      });
+    } catch (_) { /* ignore */ }
+    finally { inboxPolling = false; }
+  }
+
+  if (stream || inboxShell) {
+    setInterval(() => {
+      if (stream) pollChatOnce();
+      if (inboxShell) pollInboxOnce();
+    }, POLL_MS);
+    // Refresh promptly when the tab regains focus
+    document.addEventListener('visibilitychange', () => {
+      if (!hidden()) { pollChatOnce(); pollInboxOnce(); }
+    });
+  }
 })();

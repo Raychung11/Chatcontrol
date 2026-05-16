@@ -27,7 +27,7 @@ $role   = $current_user['role'] ?? 'agent';
       <a href="/admin/departments.php" class="<?= $active === 'departments' ? 'active' : '' ?>">Departments</a>
       <a href="/admin/routing.php" class="<?= $active === 'routing' ? 'active' : '' ?>">Routing rules</a>
       <a href="/admin/settings.php" class="<?= $active === 'settings' ? 'active' : '' ?>">Settings</a>
-      <a href="/admin/whatsapp_pair.php" class="<?= $active === 'whatsapp_pair' ? 'active' : '' ?>">Pair WhatsApp</a>
+      <a href="/admin/evolution_connect.php" class="<?= $active === 'evolution_connect' ? 'active' : '' ?>">Connect WhatsApp</a>
       <a href="/admin/webhook_log.php" class="<?= $active === 'webhook_log' ? 'active' : '' ?>">Webhook log</a>
       <a href="/admin/ai_settings.php" class="<?= $active === 'ai_settings' ? 'active' : '' ?>">AI Settings</a>
     <?php endif; ?>

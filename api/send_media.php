@@ -90,10 +90,10 @@ $ins->execute([
 ]);
 $messageRowId = (int)$db->lastInsertId();
 
-// Cloud API needs the Meta media_id, Evolution wants the local file path.
-$mediaRef = provider_name($company) === 'evolution'
-    ? ($safeLocalPath ?: '')
-    : $mediaId;
+// Cloud API needs Meta's media_id. Evolution and AiServe Chatbot need the local file.
+$mediaRef = (provider_name($company) === 'cloud_api')
+    ? $mediaId
+    : ($safeLocalPath ?: '');
 
 if ($mediaRef === '') {
     $db->prepare('UPDATE messages SET status="failed", error_message=? WHERE id=?')

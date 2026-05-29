@@ -23,10 +23,12 @@ if (is_post()) {
     $defaultDeptId     = ($defaultDeptId === '' || $defaultDeptId === '0') ? null : (int)$defaultDeptId;
 
     $provider          = (string)($_POST['provider'] ?? 'cloud_api');
-    if (!in_array($provider, ['cloud_api', 'evolution'], true)) $provider = 'cloud_api';
+    if (!in_array($provider, ['cloud_api', 'evolution', 'aiserve_chatbot'], true)) $provider = 'cloud_api';
     $evoBaseUrl        = trim((string)($_POST['evolution_base_url'] ?? ''));
     $evoApiKey         = trim((string)($_POST['evolution_api_key']  ?? ''));
     $evoInstance       = trim((string)($_POST['evolution_instance'] ?? ''));
+    $chatbotUrl        = trim((string)($_POST['chatbot_base_url']     ?? ''));
+    $chatbotToken      = trim((string)($_POST['chatbot_bearer_token'] ?? ''));
 
     if ($name === '') {
         $err = 'Company name is required.';
@@ -43,6 +45,12 @@ if (is_post()) {
             $stmt->execute([$companyId]);
             $evoApiKey = (string)($stmt->fetchColumn() ?: '');
         }
+        // Same for chatbot_bearer_token — keep existing if blank
+        if ($chatbotToken === '') {
+            $stmt = $db->prepare('SELECT chatbot_bearer_token FROM companies WHERE id = ?');
+            $stmt->execute([$companyId]);
+            $chatbotToken = (string)($stmt->fetchColumn() ?: '');
+        }
         if ($defaultDeptId !== null) {
             $check = $db->prepare('SELECT id FROM departments WHERE id = ? AND company_id = ? LIMIT 1');
             $check->execute([$defaultDeptId, $companyId]);
@@ -53,7 +61,8 @@ if (is_post()) {
                 name = ?, whatsapp_number = ?, phone_number_id = ?, business_account_id = ?,
                 api_version = ?, access_token = ?, webhook_verify_token = ?,
                 brand_color = ?, timezone = ?, default_department_id = ?,
-                provider = ?, evolution_base_url = ?, evolution_api_key = ?, evolution_instance = ?
+                provider = ?, evolution_base_url = ?, evolution_api_key = ?, evolution_instance = ?,
+                chatbot_base_url = ?, chatbot_bearer_token = ?
              WHERE id = ?'
         );
         $upd->execute([
@@ -65,6 +74,8 @@ if (is_post()) {
             $evoBaseUrl ?: null,
             $evoApiKey  ?: null,
             $evoInstance ?: null,
+            rtrim($chatbotUrl, '/') ?: null,
+            $chatbotToken ?: null,
             $companyId,
         ]);
         log_activity($companyId, (int)$current_user['id'], 'settings_updated', 'company', $companyId, 'Company settings updated');
@@ -129,6 +140,12 @@ layout_start($current_user, 'Company & API Settings', 'settings', $company['bran
           <strong>Evolution API</strong> <small class="muted">— self-hosted, unofficial Baileys/WhatsApp Web. No template requirement, but Meta may ban the number. Use at your own risk.</small>
         </span>
       </label>
+      <label class="provider-radio">
+        <input type="radio" name="provider" value="aiserve_chatbot" <?= $currentProvider === 'aiserve_chatbot' ? 'checked' : '' ?>>
+        <span>
+          <strong>AiServe Chatbot Gateway</strong> <small class="muted">— partner-hosted Bearer-token gateway (e.g. chatbot.aiserve.my). You only need a URL + token; the partner handles WhatsApp pairing.</small>
+        </span>
+      </label>
     </div>
 
     <h2>Cloud API settings</h2>
@@ -187,6 +204,28 @@ layout_start($current_user, 'Company & API Settings', 'settings', $company['bran
       <strong class="<?= 'evo-status-' . e((string)($company['evolution_status'] ?? 'disconnected')) ?>">
         <?= e(ucfirst((string)($company['evolution_status'] ?? 'disconnected'))) ?>
       </strong>
+    </div>
+
+    <h2>AiServe Chatbot Gateway settings</h2>
+    <p class="muted small">Used when provider is set to AiServe Chatbot Gateway. Ask your partner for the base URL and the Bearer token (from their merchant detail page).</p>
+    <label>Gateway base URL
+      <input type="url" name="chatbot_base_url" value="<?= e($company['chatbot_base_url'] ?? '') ?>" placeholder="https://chatbot.aiserve.my">
+    </label>
+    <label>Bearer token — leave blank to keep existing
+      <input type="password" name="chatbot_bearer_token" value="" autocomplete="new-password" placeholder="token from merchant detail page">
+      <?php if (!empty($company['chatbot_bearer_token'])): ?>
+        <small class="muted">Currently set: <code><?= e(substr($company['chatbot_bearer_token'], 0, 6)) ?>…<?= e(substr($company['chatbot_bearer_token'], -4)) ?></code></small>
+      <?php endif; ?>
+    </label>
+    <?php
+      $chatbotInboundUrl = (APP_BASE_URL ?: ((!empty($_SERVER['HTTPS']) ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? '')))
+                        . '/webhook/evolution.php?token=' . urlencode((string)($company['webhook_verify_token'] ?? ''));
+    ?>
+    <div class="alert alert-info">
+      <strong>Inbound webhook URL (give this to your partner):</strong> <code><?= e($chatbotInboundUrl) ?></code><br>
+      The gateway should POST incoming WhatsApp messages to this URL using the
+      standard Evolution event shape (<code>messages.upsert</code>). If your
+      partner's payload is different, paste a sample and we'll add an adapter.
     </div>
 
     <button class="btn btn-primary" type="submit">Save settings</button>

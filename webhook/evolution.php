@@ -147,18 +147,32 @@ function evolution_extract_messages(array $payload): array
  */
 function handle_evolution_message(array $company, array $msg, string $raw): bool
 {
-    $key       = $msg['key']    ?? [];
-    $remoteJid = (string)($key['remoteJid'] ?? '');
-    $waMsgId   = (string)($key['id']        ?? '');
-    $fromMe    = (bool)  ($key['fromMe']    ?? false);
+    $key            = $msg['key'] ?? [];
+    $remoteJid      = (string)($key['remoteJid']      ?? '');
+    $remoteJidAlt   = (string)($key['remoteJidAlt']   ?? '');
+    $addressingMode = (string)($key['addressingMode'] ?? '');
+    $waMsgId        = (string)($key['id']             ?? '');
+    $fromMe         = (bool)  ($key['fromMe']         ?? false);
     if ($remoteJid === '' || $waMsgId === '') return false;
 
-    // Skip group chats for now - portal is 1:1 customer support
-    if (str_ends_with($remoteJid, '@g.us')) {
+    // Skip group chats - portal is 1:1 customer support
+    if (str_ends_with($remoteJid, '@g.us') || str_ends_with($remoteJidAlt, '@g.us')) {
         return false;
     }
 
-    $waId = explode('@', $remoteJid)[0];
+    // WhatsApp's LID (Linked ID) addressing hides the real phone number in
+    // remoteJid and exposes it in remoteJidAlt instead. Prefer the alt JID
+    // whenever it points at a real phone (@s.whatsapp.net).
+    $sourceJid = $remoteJid;
+    if (str_ends_with($remoteJidAlt, '@s.whatsapp.net')
+        && ($addressingMode === 'lid' || str_ends_with($remoteJid, '@lid'))) {
+        $sourceJid = $remoteJidAlt;
+    }
+    $waId = explode('@', $sourceJid)[0];
+    if ($waId === '' || !ctype_digit($waId)) {
+        error_log('[AiServe evolution] Could not extract phone from JID: ' . $remoteJid . ' / alt=' . $remoteJidAlt);
+        return false;
+    }
 
     // If this is our own outgoing message echoed back, we've already inserted
     // the row in /api/send_message.php. Skip.

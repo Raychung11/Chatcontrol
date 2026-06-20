@@ -71,7 +71,10 @@ if (!is_array($payload)) {
     error_log('[AiServe evolution] ' . $errorText);
 } else {
     try {
-        $event = strtoupper((string)($payload['event'] ?? ''));
+        // Evolution sends events in either dot ("messages.upsert") or
+        // underscore ("MESSAGES_UPSERT") form depending on version/config.
+        // Normalize both to "MESSAGES_UPSERT" before switching.
+        $event = str_replace('.', '_', strtoupper((string)($payload['event'] ?? '')));
         switch ($event) {
             case 'MESSAGES_UPSERT':
                 $rows = evolution_extract_messages($payload);

@@ -125,7 +125,7 @@ if (is_post()) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Create your workspace · <?= e(APP_NAME) ?></title>
-  <link rel="stylesheet" href="/assets/css/app.css">
+  <link rel="stylesheet" href="<?= e(asset_url('/assets/css/app.css')) ?>">
 </head>
 <body class="login-body">
   <div class="login-card register-card">

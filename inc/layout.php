@@ -20,7 +20,7 @@ function layout_start(array $current_user, string $page_title = '', string $acti
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title><?= e($page_title ? $page_title . ' · ' : '') . e(APP_NAME) ?></title>
-  <link rel="stylesheet" href="/assets/css/app.css">
+  <link rel="stylesheet" href="<?= e(asset_url('/assets/css/app.css')) ?>">
   <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
 </head>
 <body>
@@ -45,7 +45,7 @@ function layout_end(): void
     </div>
   </main>
 </div>
-<script src="/assets/js/app.js" defer></script>
+<script src="<?= e(asset_url('/assets/js/app.js')) ?>" defer></script>
 </body>
 </html>
 <?php

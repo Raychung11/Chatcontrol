@@ -132,6 +132,14 @@ function relative_time(?string $datetime): string
     return date('M j', $ts);
 }
 
+// -------------------- Asset cache-busting --------------------
+function asset_url(string $relPath): string
+{
+    $abs = __DIR__ . '/..' . $relPath;
+    $v   = @filemtime($abs) ?: 0;
+    return $relPath . ($v ? '?v=' . $v : '');
+}
+
 // -------------------- Service window --------------------
 function is_within_service_window(?string $expiresAt): bool
 {

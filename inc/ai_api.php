@@ -13,6 +13,7 @@
  */
 
 require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/knowledge_base.php';
 
 const AI_DEFAULT_MODEL  = 'claude-haiku-4-5';
 const AI_API_VERSION    = '2023-06-01';
@@ -62,6 +63,10 @@ function ai_suggest_reply(array $company, array $conversation, array $messages):
     $model        = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
     $systemPrompt = trim((string)($company['ai_system_prompt'] ?? '')) ?: ai_default_system_prompt($company);
 
+    // Load the knowledge base (if any active articles) so the model can
+    // ground its reply in company-specific facts.
+    $kb = kb_load_for_company((int)$company['id']);
+
     // Map portal messages -> Anthropic messages. "incoming" = customer (user
     // role), everything outgoing (agent, ai bot, system) = assistant role
     // since they were previously sent to the customer on our behalf.
@@ -88,13 +93,31 @@ function ai_suggest_reply(array $company, array $conversation, array $messages):
         return ['ok' => false, 'error' => 'No customer message to reply to yet.'];
     }
 
+    // Anthropic supports multiple system blocks. Persona instructions go
+    // first; the KB goes second so it can be cached independently (KB usually
+    // changes far less often than the persona prompt, both benefit from
+    // cache_control:ephemeral).
+    $systemBlocks = [
+        ['type' => 'text', 'text' => $systemPrompt,
+         'cache_control' => ['type' => 'ephemeral']],
+    ];
+    if ($kb && !empty($kb['text'])) {
+        $kbBlock = "You have access to the following company knowledge base. "
+                 . "Use it to answer customer questions accurately. If the answer "
+                 . "is not covered, say you'll check and get back to them.\n\n"
+                 . "===== KNOWLEDGE BASE =====\n"
+                 . $kb['text']
+                 . "\n===== END KNOWLEDGE BASE =====";
+        $systemBlocks[] = [
+            'type' => 'text', 'text' => $kbBlock,
+            'cache_control' => ['type' => 'ephemeral'],
+        ];
+    }
+
     $payload = [
         'model'      => $model,
         'max_tokens' => AI_MAX_OUT_TOKENS,
-        'system'     => [
-            ['type' => 'text', 'text' => $systemPrompt,
-             'cache_control' => ['type' => 'ephemeral']],
-        ],
+        'system'     => $systemBlocks,
         'messages'   => $apiMessages,
     ];
 
@@ -141,5 +164,7 @@ function ai_suggest_reply(array $company, array $conversation, array $messages):
         'suggestion' => $text,
         'model'      => $model,
         'usage'      => $data['usage'] ?? null,
+        'kb_titles'  => $kb['titles'] ?? [],
+        'kb_chars'   => $kb['char_count'] ?? 0,
     ];
 }

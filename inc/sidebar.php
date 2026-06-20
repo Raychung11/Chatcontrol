@@ -20,6 +20,7 @@ $role   = $current_user['role'] ?? 'agent';
     <?php if (in_array($role, ['super_admin', 'manager'], true)): ?>
       <a href="/admin/tags.php" class="<?= $active === 'tags' ? 'active' : '' ?>">Tags</a>
       <a href="/admin/reports.php" class="<?= $active === 'reports' ? 'active' : '' ?>">Reports</a>
+      <a href="/admin/knowledge.php" class="<?= $active === 'knowledge' ? 'active' : '' ?>">Knowledge base</a>
     <?php endif; ?>
     <?php if ($role === 'super_admin'): ?>
       <div class="sidebar-section">Administration</div>

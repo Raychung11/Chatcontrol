@@ -387,8 +387,12 @@
         return;
       }
       if (aiBody) aiBody.textContent = data.suggestion || '';
-      if (aiMeta) aiMeta.textContent = (data.model || '') +
-        (data.usage ? ` · ${data.usage.input_tokens || 0} in / ${data.usage.output_tokens || 0} out tokens` : '');
+      let meta = (data.model || '');
+      if (data.usage) meta += ` · ${data.usage.input_tokens || 0} in / ${data.usage.output_tokens || 0} out tokens`;
+      if (data.kb_titles && data.kb_titles.length) {
+        meta += ` · 📚 ${data.kb_titles.join(', ')}`;
+      }
+      if (aiMeta) aiMeta.textContent = meta;
     } catch (e) {
       if (aiBody) aiBody.textContent = '⚠ ' + e.message;
     } finally {

@@ -11,6 +11,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 CREATE TABLE IF NOT EXISTS `companies` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `name` VARCHAR(150) NOT NULL,
+  `slug` VARCHAR(64) NOT NULL,
   `whatsapp_number` VARCHAR(32) DEFAULT NULL,
   `phone_number_id` VARCHAR(64) DEFAULT NULL,
   `business_account_id` VARCHAR(64) DEFAULT NULL,
@@ -32,7 +33,8 @@ CREATE TABLE IF NOT EXISTS `companies` (
   `status` ENUM('active','inactive') NOT NULL DEFAULT 'active',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_companies_slug` (`slug`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------------------

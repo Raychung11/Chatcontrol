@@ -173,6 +173,11 @@ textarea { resize: vertical; }
 .login-card .login-brand { display: flex; align-items: center; gap: 8px; }
 .login-card form { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
 .login-card label { font-size: 12.5px; color: var(--c-muted); margin-top: 6px; }
+.register-card { max-width: 520px; }
+.plan-pick { border: 1px solid var(--c-border); border-radius: 8px; padding: 10px; margin-top: 12px; display: grid; gap: 8px; }
+.plan-pick legend { font-size: 12.5px; color: var(--c-muted); padding: 0 6px; }
+.plan-radio { display: flex; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--c-border); border-radius: 6px; cursor: pointer; font-size: 13px; }
+.plan-radio:has(input:checked) { border-color: var(--c-primary); background: #f6fff9; }
 
 /* -------- Stat cards / reports -------- */
 .report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }

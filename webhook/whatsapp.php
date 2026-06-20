@@ -15,16 +15,13 @@ require_once __DIR__ . '/../inc/whatsapp_api.php';
 
 header('Cache-Control: no-store');
 
-$company = (function (): ?array {
-    $stmt = aiserve_db()->prepare('SELECT * FROM companies WHERE id = ? LIMIT 1');
-    $stmt->execute([ACTIVE_COMPANY_ID]);
-    return $stmt->fetch() ?: null;
-})();
-
+// Multi-tenant: ?company=<slug> picks the tenant. Falls back to
+// ACTIVE_COMPANY_ID for legacy single-tenant deployments.
+$company = resolve_company_for_webhook();
 if (!$company) {
-    http_response_code(500);
-    error_log('[AiServe webhook] No company configured for id=' . ACTIVE_COMPANY_ID);
-    exit('Webhook misconfigured.');
+    http_response_code(404);
+    error_log('[AiServe webhook] Unknown tenant: company=' . ($_GET['company'] ?? '(none)'));
+    exit('Unknown tenant.');
 }
 
 // -------------------- GET verification --------------------

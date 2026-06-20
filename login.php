@@ -74,7 +74,9 @@ if (is_post()) {
       <button type="submit" class="btn btn-primary btn-block">Sign in</button>
     </form>
 
-    <p class="muted small">Default admin (after seed): <code>admin@aiserve.local</code> / <code>ChangeMe@123</code></p>
+    <p class="muted small">
+      New here? <a href="/register.php">Create a workspace</a>.
+    </p>
   </div>
 </body>
 </html>

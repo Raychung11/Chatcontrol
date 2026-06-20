@@ -196,3 +196,67 @@ function status_badge(string $status): string
     $cls = $map[$status] ?? 'badge-default';
     return '<span class="badge ' . e($cls) . '">' . e(ucfirst($status)) . '</span>';
 }
+
+// -------------------- Multi-tenant helpers --------------------
+function plan_seat_limit(string $plan): int
+{
+    return match ($plan) {
+        'starter'    => 3,
+        'growth'     => 10,
+        'enterprise' => 9999,
+        default      => 3,
+    };
+}
+
+function company_user_count(int $companyId): int
+{
+    $stmt = aiserve_db()->prepare(
+        'SELECT COUNT(*) FROM users WHERE company_id = ? AND status = "active"'
+    );
+    $stmt->execute([$companyId]);
+    return (int)$stmt->fetchColumn();
+}
+
+/**
+ * Resolve which company a webhook request is for.
+ *  - Prefer the `?company=<slug>` query param (set per-tenant in the webhook URL).
+ *  - Fall back to the legacy ACTIVE_COMPANY_ID for backward compatibility with
+ *    pre-multi-tenant deployments (single-tenant installs).
+ */
+function resolve_company_for_webhook(): ?array
+{
+    $slug = trim((string)($_GET['company'] ?? ''));
+    if ($slug !== '') {
+        $stmt = aiserve_db()->prepare('SELECT * FROM companies WHERE slug = ? AND status = "active" LIMIT 1');
+        $stmt->execute([$slug]);
+        $row = $stmt->fetch();
+        if ($row) return $row;
+        // Slug provided but not found -> hard fail so we don't silently
+        // write into the wrong tenant.
+        return null;
+    }
+    $stmt = aiserve_db()->prepare('SELECT * FROM companies WHERE id = ? LIMIT 1');
+    $stmt->execute([(int)ACTIVE_COMPANY_ID]);
+    return $stmt->fetch() ?: null;
+}
+
+/**
+ * Build a webhook URL that includes the tenant slug + verify token.
+ */
+function webhook_url_for(array $company, string $endpoint): string
+{
+    $host = APP_BASE_URL ?: ((!empty($_SERVER['HTTPS']) ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? ''));
+    $qs = ['company' => (string)($company['slug'] ?? '')];
+    if (!empty($company['webhook_verify_token'])) {
+        $qs['token'] = (string)$company['webhook_verify_token'];
+    }
+    return $host . $endpoint . '?' . http_build_query($qs);
+}
+
+function slugify(string $raw): string
+{
+    $s = strtolower(trim($raw));
+    $s = preg_replace('/[^a-z0-9]+/', '-', $s);
+    $s = trim((string)$s, '-');
+    return substr($s ?: 'company', 0, 64);
+}

@@ -30,12 +30,24 @@ $stmt = $db->prepare(
 $stmt->execute([$companyId]);
 $users = $stmt->fetchAll();
 
+$cstmt = $db->prepare('SELECT name, slug, plan FROM companies WHERE id = ?');
+$cstmt->execute([$companyId]);
+$company = $cstmt->fetch() ?: ['plan' => 'starter', 'name' => '', 'slug' => ''];
+$seatLimit = plan_seat_limit((string)$company['plan']);
+$seatUsed  = company_user_count($companyId);
+$seatFull  = $seatUsed >= $seatLimit;
+
 layout_start($current_user, 'Users', 'users');
 ?>
 <div class="card">
   <div class="card-head">
     <h2>Portal users</h2>
-    <a class="btn btn-primary" href="/admin/user_edit.php">+ New user</a>
+    <div>
+      <span class="badge <?= $seatFull ? 'badge-failed' : 'badge-open' ?>" style="margin-right:8px;">
+        <?= (int)$seatUsed ?> / <?= (int)$seatLimit ?> seats used (<?= e(ucfirst((string)$company['plan'])) ?>)
+      </span>
+      <a class="btn btn-primary" href="/admin/user_edit.php" <?= $seatFull ? 'title="Seat limit reached"' : '' ?>>+ New user</a>
+    </div>
   </div>
   <table class="data-table">
     <thead>

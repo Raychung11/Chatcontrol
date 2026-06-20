@@ -1,8 +1,8 @@
 -- AiServe Shared WhatsApp Inbox - default seed data
 -- Default super admin password: ChangeMe@123  (please change after first login)
 
-INSERT INTO `companies` (`id`,`name`,`api_version`,`brand_color`,`timezone`,`status`)
-VALUES (1,'AiServe / SLV Group','v21.0','#25D366','Asia/Kuala_Lumpur','active')
+INSERT INTO `companies` (`id`,`name`,`slug`,`api_version`,`brand_color`,`timezone`,`status`)
+VALUES (1,'AiServe / SLV Group','default','v21.0','#25D366','Asia/Kuala_Lumpur','active')
 ON DUPLICATE KEY UPDATE `name`=VALUES(`name`);
 
 INSERT INTO `departments` (`id`,`company_id`,`name`,`status`) VALUES

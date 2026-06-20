@@ -91,8 +91,7 @@ $dstmt = $db->prepare('SELECT id, name FROM departments WHERE company_id = ? AND
 $dstmt->execute([$companyId]);
 $departments = $dstmt->fetchAll();
 
-$webhookUrl = (APP_BASE_URL ?: ((!empty($_SERVER['HTTPS']) ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? '')))
-            . '/webhook/whatsapp.php';
+$webhookUrl = webhook_url_for($company, '/webhook/whatsapp.php');
 
 layout_start($current_user, 'Company & API Settings', 'settings', $company['brand_color'] ?? '#25D366');
 ?>
@@ -104,6 +103,11 @@ layout_start($current_user, 'Company & API Settings', 'settings', $company['bran
     <?= csrf_field() ?>
 
     <h2>Company</h2>
+    <div class="alert alert-info" style="margin-bottom:8px;">
+      Workspace identifier: <code><?= e($company['slug'] ?? '') ?></code> · Plan: <strong><?= e(ucfirst((string)($company['plan'] ?? 'starter'))) ?></strong>
+      (<?= (int)company_user_count($companyId) ?> / <?= (int)plan_seat_limit((string)($company['plan'] ?? 'starter')) ?> seats used).
+      The slug is used in your webhook URLs and cannot be changed once issued.
+    </div>
     <label>Company name
       <input type="text" name="name" value="<?= e($company['name'] ?? '') ?>" required>
     </label>
@@ -191,11 +195,7 @@ layout_start($current_user, 'Company & API Settings', 'settings', $company['bran
     <label>Instance name
       <input type="text" name="evolution_instance" value="<?= e($company['evolution_instance'] ?? '') ?>" placeholder="aiserve-prod">
     </label>
-    <?php
-      $evoBase = $_SERVER['HTTPS'] ?? '';
-      $evoBaseUrl = (APP_BASE_URL ?: ((!empty($_SERVER['HTTPS']) ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? '')))
-                  . '/webhook/evolution.php?token=' . urlencode((string)($company['webhook_verify_token'] ?? ''));
-    ?>
+    <?php $evoBaseUrl = webhook_url_for($company, '/webhook/evolution.php'); ?>
     <div class="alert alert-info">
       <strong>Evolution webhook URL:</strong> <code><?= e($evoBaseUrl) ?></code><br>
       Set this in your Evolution instance webhook config. Pair the WhatsApp number at
@@ -217,10 +217,7 @@ layout_start($current_user, 'Company & API Settings', 'settings', $company['bran
         <small class="muted">Currently set: <code><?= e(substr($company['chatbot_bearer_token'], 0, 6)) ?>…<?= e(substr($company['chatbot_bearer_token'], -4)) ?></code></small>
       <?php endif; ?>
     </label>
-    <?php
-      $chatbotInboundUrl = (APP_BASE_URL ?: ((!empty($_SERVER['HTTPS']) ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? '')))
-                        . '/webhook/evolution.php?token=' . urlencode((string)($company['webhook_verify_token'] ?? ''));
-    ?>
+    <?php $chatbotInboundUrl = webhook_url_for($company, '/webhook/evolution.php'); ?>
     <div class="alert alert-info">
       <strong>Inbound webhook URL (give this to your partner):</strong> <code><?= e($chatbotInboundUrl) ?></code><br>
       The gateway should POST incoming WhatsApp messages to this URL using the

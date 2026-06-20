@@ -40,8 +40,8 @@ $year = date('Y');
       WhatsApp Business number — without sharing a phone, without logging out, without missing a message.
     </p>
     <div class="landing-cta">
-      <a class="btn btn-primary btn-lg" href="/login.php">Sign in to portal</a>
-      <a class="btn btn-lg" href="#features">See how it works</a>
+      <a class="btn btn-primary btn-lg" href="/register.php">Create workspace</a>
+      <a class="btn btn-lg" href="/login.php">Sign in</a>
     </div>
     <ul class="landing-trust">
       <li>WhatsApp Cloud API</li>
@@ -206,8 +206,9 @@ $year = date('Y');
 
 <section class="landing-cta-band">
   <h2>Ready to take your WhatsApp inbox seriously?</h2>
-  <p>Sign in to the portal or contact AiServe to set up a new tenant.</p>
-  <a class="btn btn-primary btn-lg" href="/login.php">Sign in to portal</a>
+  <p>Create your workspace in 30 seconds, then invite your team.</p>
+  <a class="btn btn-primary btn-lg" href="/register.php">Create workspace</a>
+  <a class="btn btn-lg" href="/login.php" style="margin-left:8px;">Sign in</a>
 </section>
 
 <footer class="landing-footer">

@@ -40,6 +40,21 @@ if (is_post()) {
     } elseif ($password !== '' && strlen($password) < 8) {
         $err = 'Password must be at least 8 characters.';
     } else {
+        // Seat-limit guard - block adding a new active user beyond the plan.
+        $isNewActive  = !$user && $status === 'active';
+        $reactivating = $user && $user['status'] !== 'active' && $status === 'active';
+        if ($isNewActive || $reactivating) {
+            $cstmt = $db->prepare('SELECT plan FROM companies WHERE id = ?');
+            $cstmt->execute([$companyId]);
+            $plan  = (string)($cstmt->fetchColumn() ?: 'starter');
+            $limit = plan_seat_limit($plan);
+            $used  = company_user_count($companyId);
+            if ($used >= $limit) {
+                $err = 'Seat limit reached (' . $used . ' / ' . $limit . ' on ' . ucfirst($plan) . ' plan). Deactivate someone first or upgrade the plan.';
+            }
+        }
+    }
+    if ($err === '') {
         try {
             if ($user) {
                 $sql = 'UPDATE users SET name=?, email=?, phone=?, role=?, department_id=?, status=?'

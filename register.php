@@ -28,7 +28,11 @@ if (is_post()) {
     $old['plan']    = in_array(($_POST['plan'] ?? 'growth'), ['starter','growth','enterprise'], true)
                     ? (string)$_POST['plan'] : 'growth';
 
-    if ($old['company'] === '' || $old['name'] === '' || $old['email'] === '') {
+    $accepted = !empty($_POST['accept_terms']);
+
+    if (!$accepted) {
+        $err = 'You must accept the Terms, Privacy Policy, and Disclaimer to continue.';
+    } elseif ($old['company'] === '' || $old['name'] === '' || $old['email'] === '') {
         $err = 'Company name, your name, and email are all required.';
     } elseif (!filter_var($old['email'], FILTER_VALIDATE_EMAIL)) {
         $err = 'Enter a valid email address.';
@@ -97,6 +101,8 @@ if (is_post()) {
 
                 log_activity($companyId, $userId, 'company_registered', 'company', $companyId,
                     'Workspace ' . $old['slug'] . ' created with plan=' . $old['plan']);
+                log_activity($companyId, $userId, 'legal_accepted', 'company', $companyId,
+                    'Terms+Privacy+Disclaimer accepted from ip=' . client_ip());
 
                 // Auto-login
                 $stmt = aiserve_db()->prepare('SELECT * FROM users WHERE id = ?');
@@ -175,10 +181,25 @@ if (is_post()) {
         </label>
       </fieldset>
 
+      <label class="legal-accept">
+        <input type="checkbox" name="accept_terms" value="1" required>
+        <span>
+          I have read and agree to the
+          <a href="/terms.php" target="_blank" rel="noopener">Terms of Service</a>,
+          <a href="/privacy.php" target="_blank" rel="noopener">Privacy Policy</a>, and
+          <a href="/disclaimer.php" target="_blank" rel="noopener">Disclaimer</a>.
+        </span>
+      </label>
+
       <button type="submit" class="btn btn-primary btn-block">Create workspace</button>
     </form>
 
     <p class="muted small">Already have an account? <a href="/login.php">Sign in</a>.</p>
+    <p class="muted small" style="text-align:center; margin-top: 8px;">
+      <a href="/terms.php">Terms</a> ·
+      <a href="/privacy.php">Privacy</a> ·
+      <a href="/disclaimer.php">Disclaimer</a>
+    </p>
   </div>
 
 <script>

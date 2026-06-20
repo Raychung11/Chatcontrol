@@ -77,6 +77,11 @@ if (is_post()) {
     <p class="muted small">
       New here? <a href="/register.php">Create a workspace</a>.
     </p>
+    <p class="muted small" style="text-align:center; margin-top: 8px;">
+      <a href="/terms.php">Terms</a> ·
+      <a href="/privacy.php">Privacy</a> ·
+      <a href="/disclaimer.php">Disclaimer</a>
+    </p>
   </div>
 </body>
 </html>

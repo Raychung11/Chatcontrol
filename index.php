@@ -260,9 +260,13 @@ $year = date('Y');
     <span class="dot">·</span>
     <a href="#features">Features</a>
     <span class="dot">·</span>
-    <a href="#providers">Providers</a>
-    <span class="dot">·</span>
     <a href="#plans">Plans</a>
+    <span class="dot">·</span>
+    <a href="/terms.php">Terms</a>
+    <span class="dot">·</span>
+    <a href="/privacy.php">Privacy</a>
+    <span class="dot">·</span>
+    <a href="/disclaimer.php">Disclaimer</a>
   </div>
 </footer>
 

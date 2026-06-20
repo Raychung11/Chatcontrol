@@ -489,6 +489,64 @@ textarea { resize: vertical; }
   }
   .chat-side.open { transform: translateX(0); }
   .chat-side-close { display: inline-flex; }
+
+  /* ---- Admin pages polish ---- */
+  .card { padding: 14px; margin-bottom: 12px; border-radius: 8px; }
+  .card h2 { font-size: 15px; }
+  .card-head { flex-wrap: wrap; gap: 8px; }
+  .card-head h2 { flex: 1 1 100%; }
+
+  /* Long URLs / tokens in info boxes need to wrap */
+  .alert { word-wrap: break-word; }
+  .alert code { word-break: break-all; white-space: normal; }
+
+  /* Tables -> auto-wrapped in .table-wrap by JS for horizontal scroll */
+  .table-wrap {
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    margin: 0 -14px; padding: 0 14px;
+    border-bottom: 1px solid var(--c-border);
+  }
+  .table-wrap .data-table { min-width: 560px; }
+  .data-table th, .data-table td { padding: 8px 10px; font-size: 12.5px; white-space: nowrap; }
+  .data-table .actions { white-space: nowrap; }
+  .data-table .actions form, .data-table .actions a { display: inline-block; margin-bottom: 4px; }
+
+  /* Forms become single-column-wide on phones */
+  .form-grid { max-width: 100%; gap: 10px; }
+
+  /* Inline forms (Tags admin, Routing rules, etc) stack their controls */
+  .inline-form { gap: 6px; }
+  .inline-form input[type="text"],
+  .inline-form input[type="search"],
+  .inline-form select { flex: 1 1 60%; }
+
+  /* Filter row on the Reports page */
+  .report-filter .filter-row { gap: 8px; }
+  .report-filter label { flex: 1 1 45%; }
+
+  /* Provider picker cards (Settings page) */
+  .provider-radio { padding: 10px; font-size: 13px; }
+  .provider-radio small { display: block; margin-top: 2px; }
+
+  /* Webhook log payload pre */
+  .webhook-payload { font-size: 11px; max-height: 240px; }
+
+  /* Stat cards (Dashboard + Reports) */
+  .report-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .stat-card { padding: 12px; }
+  .stat-num { font-size: 22px; }
+
+  /* Legal / static pages */
+  .legal-page { padding: 24px 16px 48px; font-size: 14px; }
+  .legal-page h1 { font-size: 22px; }
+  .legal-page h2 { font-size: 16px; margin: 20px 0 6px; padding-top: 6px; }
+
+  /* Login / register card spacing */
+  .login-card  { padding: 24px 18px; max-width: 100%; border-radius: 10px; }
+  .login-body  { padding: 16px; }
+
+  /* Cookie notice already has its own mobile rules - keep above the
+     hamburger drawer so it remains visible while sidebar is open */
 }
 
 /* ==========================================================

@@ -26,6 +26,17 @@
   if (sidebarOv)     sidebarOv.addEventListener('click', closeAllDrawers);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAllDrawers(); });
 
+  // Wrap admin data-tables so wide ones scroll horizontally on phones
+  // (rather than overflowing the card or shrinking columns to nothing).
+  document.querySelectorAll('.data-table').forEach((t) => {
+    const parent = t.parentElement;
+    if (!parent || parent.classList.contains('table-wrap')) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'table-wrap';
+    parent.insertBefore(wrap, t);
+    wrap.appendChild(t);
+  });
+
   const stream = document.getElementById('chat-stream');
   if (stream) stream.scrollTop = stream.scrollHeight;
 

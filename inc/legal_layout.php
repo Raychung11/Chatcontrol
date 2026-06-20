@@ -10,6 +10,7 @@
  */
 
 require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/cookie_notice.php';
 
 function legal_page_start(string $title): void
 {
@@ -61,6 +62,7 @@ function legal_page_end(): void
   </div>
 </footer>
 
+<?php cookie_notice(); ?>
 </body>
 </html>
 <?php

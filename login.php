@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/inc/auth.php';
+require_once __DIR__ . '/inc/cookie_notice.php';
 
 aiserve_start_session();
 
@@ -83,5 +84,6 @@ if (is_post()) {
       <a href="/disclaimer.php">Disclaimer</a>
     </p>
   </div>
+<?php cookie_notice(); ?>
 </body>
 </html>

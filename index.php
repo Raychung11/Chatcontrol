@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/inc/auth.php';
+require_once __DIR__ . '/inc/cookie_notice.php';
 
 // Logged-in users skip the landing page.
 if (current_user()) {
@@ -270,5 +271,6 @@ $year = date('Y');
   </div>
 </footer>
 
+<?php cookie_notice(); ?>
 </body>
 </html>

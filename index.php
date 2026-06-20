@@ -12,8 +12,8 @@ $year = date('Y');
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title><?= e(APP_NAME) ?> · One WhatsApp number, your whole team</title>
-  <meta name="description" content="AiServe Shared WhatsApp Inbox Portal — let 10+ staff manage one official WhatsApp Business number from one secure dashboard.">
+  <title><?= e(APP_NAME) ?> · WhatsApp customer service with AI assist</title>
+  <meta name="description" content="Shared WhatsApp inbox for customer service teams. AI drafts replies grounded in your knowledge base. Three provider options: Meta Cloud API, Evolution, or any partner gateway.">
   <link rel="stylesheet" href="/assets/css/app.css">
 </head>
 <body class="landing-body">
@@ -25,6 +25,7 @@ $year = date('Y');
   </a>
   <nav class="landing-nav-links">
     <a href="#features">Features</a>
+    <a href="#providers">Providers</a>
     <a href="#how">How it works</a>
     <a href="#plans">Plans</a>
     <a class="btn btn-primary btn-sm" href="/login.php">Sign in</a>
@@ -33,21 +34,22 @@ $year = date('Y');
 
 <section class="landing-hero">
   <div class="landing-hero-inner">
-    <span class="landing-eyebrow">Shared WhatsApp Inbox · for AiServe / SLV Group</span>
-    <h1>One WhatsApp number.<br>Your entire team.</h1>
+    <span class="landing-eyebrow">Shared WhatsApp Inbox · AI-assisted</span>
+    <h1>One WhatsApp number.<br>Your team. With AI.</h1>
     <p class="landing-lede">
-      Let 10+ agents reply, assign and track conversations from the same official
-      WhatsApp Business number — without sharing a phone, without logging out, without missing a message.
+      Run customer service on WhatsApp the way Intercom runs email. Multiple agents,
+      one shared inbox, live refresh, role-based access — and Claude drafts a reply
+      for every customer message, grounded in your own knowledge base.
     </p>
     <div class="landing-cta">
-      <a class="btn btn-primary btn-lg" href="/register.php">Create workspace</a>
+      <a class="btn btn-primary btn-lg" href="/register.php">Create workspace · free</a>
       <a class="btn btn-lg" href="/login.php">Sign in</a>
     </div>
     <ul class="landing-trust">
-      <li>WhatsApp Cloud API</li>
-      <li>Role-based access</li>
-      <li>24-hour window tracking</li>
-      <li>Activity logs</li>
+      <li>3 WhatsApp providers supported</li>
+      <li>AI drafts grounded in your docs</li>
+      <li>Live inbox refresh</li>
+      <li>Up to 10 agents on Growth</li>
     </ul>
   </div>
 
@@ -57,7 +59,7 @@ $year = date('Y');
         <span class="mock-dot dot-r"></span>
         <span class="mock-dot dot-y"></span>
         <span class="mock-dot dot-g"></span>
-        <span class="mock-url">inbox.aiserve.example.com</span>
+        <span class="mock-url">your-workspace.example.com</span>
       </div>
       <div class="mock-body">
         <div class="mock-side">
@@ -69,7 +71,7 @@ $year = date('Y');
         <div class="mock-list">
           <div class="mock-list-row">
             <div class="mock-avatar a1">N</div>
-            <div class="mock-list-text"><b>Nadia Lim</b><span>Hi, is the package still available?</span></div>
+            <div class="mock-list-text"><b>Nadia Lim</b><span>Hi, do you ship to Penang?</span></div>
             <span class="badge badge-open">Open</span>
           </div>
           <div class="mock-list-row">
@@ -79,7 +81,7 @@ $year = date('Y');
           </div>
           <div class="mock-list-row">
             <div class="mock-avatar a3">R</div>
-            <div class="mock-list-text"><b>Raj Subramaniam</b><span>Need to reschedule appointment</span></div>
+            <div class="mock-list-text"><b>Raj Subramaniam</b><span>Need to reschedule</span></div>
             <span class="badge badge-escalated">Esc.</span>
           </div>
           <div class="mock-list-row">
@@ -89,10 +91,14 @@ $year = date('Y');
           </div>
         </div>
         <div class="mock-chat">
-          <div class="mock-msg in"><span>Hi, is the package still available?</span></div>
-          <div class="mock-msg out"><span>Yes Nadia! Sending you the latest details now.</span></div>
-          <div class="mock-msg in"><span>Great, can I pay tomorrow?</span></div>
-          <div class="mock-msg out"><span>Of course — I'll hold it until 5pm tomorrow.</span></div>
+          <div class="mock-msg in"><span>Hi, do you ship to Penang?</span></div>
+          <div class="mock-msg out"><span>Hi Nadia! Yes we do — flat RM 8 within Peninsular Malaysia.</span></div>
+          <div class="mock-msg in"><span>Great, and what's your return policy?</span></div>
+          <div class="mock-ai-draft">
+            <div class="mock-ai-head">🤖 AI suggested reply <span class="mock-ai-meta">📚 Shipping &amp; returns FAQ</span></div>
+            <div class="mock-ai-body">We accept returns within 14 days of delivery as long as the item is unused and in its original packaging. Just reply here with your order number and we'll arrange the pickup.</div>
+            <div class="mock-ai-actions"><span class="mock-mini-btn">Use this</span><span class="mock-mini-btn">Regenerate</span></div>
+          </div>
           <div class="mock-composer">Type a reply…</div>
         </div>
       </div>
@@ -102,79 +108,113 @@ $year = date('Y');
 
 <section id="features" class="landing-section">
   <h2 class="landing-h2">Built for customer service teams that share one number</h2>
-  <p class="landing-sub">Everything you need to run WhatsApp like a real support desk.</p>
+  <p class="landing-sub">Everything you need to run WhatsApp like a real support desk — plus AI.</p>
   <div class="landing-grid">
+    <div class="feature-card feature-ai">
+      <h3>🤖 AI reply suggestions</h3>
+      <p>Claude drafts a reply for every customer message. Agents review, edit, send. AI never sends on its own. Per-workspace API key.</p>
+    </div>
+    <div class="feature-card feature-ai">
+      <h3>📚 Knowledge base</h3>
+      <p>Upload PDFs, Word docs, or paste your FAQs. The AI grounds answers in your own content — pricing, policies, hours. Citations shown on every draft.</p>
+    </div>
     <div class="feature-card">
-      <h3>Shared inbox</h3>
-      <p>Multiple agents see the same conversations in real time. Filter by Mine, Unassigned, Open, Pending, Closed, Escalated.</p>
+      <h3>Live shared inbox</h3>
+      <p>Auto-refreshes every 5 seconds. New messages appear without reload, delivery ticks update in place, sound alerts on new inbound.</p>
     </div>
     <div class="feature-card">
       <h3>Role-based access</h3>
-      <p>Super Admin, Manager, and Agent roles. Managers can monitor and assign; agents only see what's relevant to them.</p>
+      <p>Super Admin, Manager, and Agent roles. Managers monitor and assign; agents only see what's relevant.</p>
     </div>
     <div class="feature-card">
-      <h3>Smart assignment</h3>
-      <p>One agent owns each conversation, while managers can intervene. Reassign, change department, escalate in one click.</p>
+      <h3>Smart assignment &amp; routing</h3>
+      <p>Auto-route new conversations by keyword to the right department. Reassign, escalate, change owner in one click.</p>
     </div>
     <div class="feature-card">
-      <h3>24-hour window tracking</h3>
-      <p>We track Meta's customer service window per conversation and block free-text replies after expiry, prompting you to use an approved template.</p>
+      <h3>Templates &amp; 24h window</h3>
+      <p>For Cloud API tenants, we track Meta's customer service window per conversation and prompt template use after expiry.</p>
     </div>
     <div class="feature-card">
-      <h3>Internal notes</h3>
-      <p>Leave private context for teammates that the customer never sees — perfect for handovers and follow-ups.</p>
+      <h3>Internal notes &amp; tags</h3>
+      <p>Leave private context for teammates. Color-coded tags for filtering. Customers never see either.</p>
     </div>
     <div class="feature-card">
-      <h3>Templates</h3>
-      <p>Manage approved WhatsApp templates for follow-ups, reminders, payment nudges, and re-engagement.</p>
-    </div>
-    <div class="feature-card">
-      <h3>Reports</h3>
-      <p>Total conversations, average first response, per-agent reply count, daily and monthly volume — all in one page.</p>
+      <h3>Reports with date range</h3>
+      <p>Conversation totals, avg first response, avg resolution time, per-agent stats, daily volume, top tags. All filterable by date.</p>
     </div>
     <div class="feature-card">
       <h3>Activity logs</h3>
-      <p>Every login, assignment, status change, and reply is logged for auditing and team coaching.</p>
-    </div>
-    <div class="feature-card">
-      <h3>AI ready</h3>
-      <p>Reply suggestions, auto summaries, and FAQ answers are scaffolded — never auto-sent, always agent-approved.</p>
+      <p>Every login, assignment, status change, AI suggestion, and reply is logged for auditing and coaching.</p>
     </div>
   </div>
 </section>
 
-<section id="how" class="landing-section landing-alt">
-  <h2 class="landing-h2">How it works</h2>
+<section id="providers" class="landing-section landing-alt">
+  <h2 class="landing-h2">Pick your WhatsApp provider</h2>
+  <p class="landing-sub">Each workspace chooses its own. Switch anytime in Settings — the inbox stays exactly the same.</p>
+  <div class="landing-grid">
+    <div class="feature-card provider-card">
+      <h3>Meta Cloud API</h3>
+      <p class="muted small">Official, ban-safe, paid per conversation</p>
+      <ul class="provider-bullets">
+        <li>Stable &amp; supported by Meta</li>
+        <li>Requires Phone Number ID + access token</li>
+        <li>Templates required outside 24h window</li>
+      </ul>
+    </div>
+    <div class="feature-card provider-card">
+      <h3>Evolution API</h3>
+      <p class="muted small">Self-hosted, unofficial, free messaging</p>
+      <ul class="provider-bullets">
+        <li>QR pairing — no number migration</li>
+        <li>Docker compose included in repo</li>
+        <li>Risk: Meta may ban the number</li>
+      </ul>
+    </div>
+    <div class="feature-card provider-card">
+      <h3>Partner gateway</h3>
+      <p class="muted small">Any Bearer-token HTTP gateway</p>
+      <ul class="provider-bullets">
+        <li>Plug in your reseller's API</li>
+        <li>One-click test send from Settings</li>
+        <li>Outbound &amp; inbound both wired</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="how" class="landing-section">
+  <h2 class="landing-h2">Up and running in 5 minutes</h2>
   <div class="landing-steps">
     <div class="step">
       <div class="step-num">1</div>
-      <h3>Connect your WhatsApp number</h3>
-      <p>Plug in your Meta Cloud API credentials in Settings — Phone Number ID, Business Account ID, access token, webhook verify token.</p>
+      <h3>Create your workspace</h3>
+      <p>Sign up with company name, your email, password. Choose a plan. You're auto-logged in as the workspace admin in 30 seconds.</p>
     </div>
     <div class="step">
       <div class="step-num">2</div>
-      <h3>Invite your team</h3>
-      <p>Create departments, add agents and managers with role-based permissions. No per-agent WhatsApp licence needed — Meta charges per conversation, not per seat.</p>
+      <h3>Connect WhatsApp + AI</h3>
+      <p>Pick a provider in Settings (Cloud API, Evolution, or partner gateway). Drop in your Anthropic API key and upload your FAQ docs.</p>
     </div>
     <div class="step">
       <div class="step-num">3</div>
-      <h3>Reply faster, together</h3>
-      <p>Customers message your one official number; the team picks up assignments from the shared inbox, replies in seconds, and managers watch the queue.</p>
+      <h3>Invite your team &amp; reply</h3>
+      <p>Add up to 10 teammates on Growth. Customers message; AI drafts; agents send. Manager watches the queue, reports flag bottlenecks.</p>
     </div>
   </div>
 </section>
 
-<section id="plans" class="landing-section">
-  <h2 class="landing-h2">Plans designed for resale</h2>
-  <p class="landing-sub">Database is plan-aware from day one — start small, upgrade without migrations.</p>
+<section id="plans" class="landing-section landing-alt">
+  <h2 class="landing-h2">Plans</h2>
+  <p class="landing-sub">All plans include AI suggestions and the knowledge base. Bring your own Anthropic API key — you pay for AI at cost.</p>
   <div class="landing-grid plans">
     <div class="plan-card">
       <h3>Starter</h3>
       <ul>
         <li>3 agents</li>
         <li>1 WhatsApp number</li>
-        <li>Basic shared inbox</li>
-        <li>Internal notes</li>
+        <li>AI suggestions &amp; knowledge base</li>
+        <li>Shared inbox + notes + tags</li>
       </ul>
       <p class="muted small">For small teams getting started.</p>
     </div>
@@ -184,20 +224,20 @@ $year = date('Y');
       <ul>
         <li>10 agents</li>
         <li>1 WhatsApp number</li>
-        <li>Reports &amp; analytics</li>
-        <li>Assignment &amp; routing</li>
-        <li>Approved templates</li>
+        <li>Everything in Starter</li>
+        <li>Reports, routing rules, templates</li>
+        <li>All 3 provider options</li>
       </ul>
-      <p class="muted small">Built for SLV Group's typical customer service team.</p>
+      <p class="muted small">Built for typical customer-service teams.</p>
     </div>
     <div class="plan-card">
       <h3>Enterprise</h3>
       <ul>
         <li>Unlimited agents</li>
         <li>Multiple numbers</li>
-        <li>AI reply assistant</li>
-        <li>API integrations &amp; CRM</li>
+        <li>Everything in Growth</li>
         <li>Priority support</li>
+        <li>CRM integrations (Odoo coming)</li>
       </ul>
       <p class="muted small">For multi-brand operators and resellers.</p>
     </div>
@@ -212,11 +252,15 @@ $year = date('Y');
 </section>
 
 <footer class="landing-footer">
-  <div>&copy; <?= e((string)$year) ?> AiServe / SLV Group · Shared WhatsApp Inbox Portal</div>
+  <div>&copy; <?= e((string)$year) ?> <?= e(APP_NAME) ?></div>
   <div>
     <a href="/login.php">Sign in</a>
     <span class="dot">·</span>
+    <a href="/register.php">Sign up</a>
+    <span class="dot">·</span>
     <a href="#features">Features</a>
+    <span class="dot">·</span>
+    <a href="#providers">Providers</a>
     <span class="dot">·</span>
     <a href="#plans">Plans</a>
   </div>

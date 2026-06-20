@@ -505,6 +505,30 @@ textarea { resize: vertical; }
   border-radius: 6px; font-size: 11.5px; color: var(--c-muted);
 }
 
+/* AI draft panel inside the hero mock */
+.mock-ai-draft {
+  background: linear-gradient(180deg, #f7f3ff 0%, #efe9ff 100%);
+  border: 1px solid #d6c8f5; border-radius: 6px;
+  padding: 6px 8px; margin-top: 4px; font-size: 10.5px; line-height: 1.35;
+}
+.mock-ai-head { display: flex; justify-content: space-between; gap: 6px; color: #5a2eaa; font-weight: 600; margin-bottom: 3px; }
+.mock-ai-meta { color: #6f42c1; font-weight: 400; font-size: 10px; }
+.mock-ai-body { color: #2a1657; padding: 3px 0; }
+.mock-ai-actions { display: flex; gap: 4px; margin-top: 3px; }
+.mock-mini-btn { background: #fff; border: 1px solid #d6c8f5; color: #5a2eaa; border-radius: 4px; padding: 1px 6px; font-size: 9.5px; }
+
+/* Provider cards on the landing */
+.provider-card .provider-bullets { list-style: none; padding: 0; margin: 12px 0 0; }
+.provider-card .provider-bullets li { padding: 4px 0; font-size: 13px; color: var(--c-text); border-bottom: 1px dashed var(--c-border); }
+.provider-card .provider-bullets li:last-child { border-bottom: none; }
+
+/* AI-themed feature cards stand out */
+.feature-card.feature-ai {
+  background: linear-gradient(180deg, #f9f5ff 0%, #ffffff 60%);
+  border-color: #d6c8f5;
+}
+.feature-card.feature-ai h3 { color: #5a2eaa; }
+
 /* Feature sections */
 .landing-section { padding: 72px 48px; max-width: 1200px; margin: 0 auto; }
 .landing-section.landing-alt { background: #f9fafb; max-width: none; padding-left: 0; padding-right: 0; }

@@ -135,9 +135,18 @@ function relative_time(?string $datetime): string
 // -------------------- Asset cache-busting --------------------
 function asset_url(string $relPath): string
 {
-    $abs = __DIR__ . '/..' . $relPath;
-    $v   = @filemtime($abs) ?: 0;
-    return $relPath . ($v ? '?v=' . $v : '');
+    try {
+        $abs = __DIR__ . '/..' . $relPath;
+        if (is_file($abs)) {
+            $v = @filemtime($abs);
+            if ($v) {
+                return $relPath . '?v=' . $v;
+            }
+        }
+    } catch (Throwable $e) {
+        // Open_basedir restriction or weird host - fall through to bare URL.
+    }
+    return $relPath;
 }
 
 // -------------------- Service window --------------------

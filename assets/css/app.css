@@ -293,6 +293,17 @@ textarea { resize: vertical; }
 .msg-sender-ai { color: #6f42c1; }
 .msg-sender-ai::before { content: "🤖 "; }
 
+/* AI handover summary panel in the chat side */
+.summary-box {
+  margin-top: 8px;
+  background: linear-gradient(180deg, #f7f3ff 0%, #efe9ff 100%);
+  border: 1px solid #d6c8f5; border-radius: 8px;
+  padding: 10px 12px; font-size: 12.5px;
+}
+.summary-text { white-space: pre-wrap; line-height: 1.5; color: var(--c-text); }
+.summary-meta { margin-top: 8px; font-size: 11px; }
+.summary-actions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
+
 /* AI draft panel above the composer */
 .ai-draft {
   background: linear-gradient(180deg, #f7f3ff 0%, #efe9ff 100%);

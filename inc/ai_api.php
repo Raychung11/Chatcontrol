@@ -168,3 +168,115 @@ function ai_suggest_reply(array $company, array $conversation, array $messages):
         'kb_chars'   => $kb['char_count'] ?? 0,
     ];
 }
+
+/**
+ * Generate a structured handover summary of a conversation.
+ *
+ * @param array $messages Chronological message rows. Each row should include
+ *                        message_text, direction, sender_type, sender_name.
+ *
+ * @return array{ok:bool, summary?:string, error?:string, model?:string, usage?:array}
+ */
+function ai_summarize_conversation(array $company, array $messages): array
+{
+    if (!ai_is_configured($company)) {
+        return ['ok' => false, 'error' => 'AI is not enabled. Configure it in Admin → AI Settings.'];
+    }
+    $apiKey = ai_api_key($company);
+    if ($apiKey === '') {
+        return ['ok' => false, 'error' => 'No Anthropic API key configured.'];
+    }
+    if (!$messages) {
+        return ['ok' => false, 'error' => 'No conversation messages to summarize yet.'];
+    }
+
+    $model = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
+
+    // Build a readable transcript so the model has clear turn boundaries.
+    $transcript = '';
+    foreach ($messages as $m) {
+        $text = trim((string)($m['message_text'] ?? ''));
+        if ($text === '') continue;
+        $who = match ((string)($m['sender_type'] ?? '')) {
+            'customer' => 'Customer',
+            'agent'    => 'Agent (' . trim((string)($m['sender_name'] ?? 'us')) . ')',
+            'ai'       => 'AI bot',
+            default    => 'System',
+        };
+        $transcript .= $who . ': ' . $text . "\n";
+    }
+    $transcript = trim($transcript);
+    if ($transcript === '') {
+        return ['ok' => false, 'error' => 'Conversation has no text messages.'];
+    }
+
+    $systemPrompt =
+        "You produce concise WhatsApp customer-service handover summaries for a new "
+      . "agent who is about to take over the conversation. Output exactly these "
+      . "sections, in plain text (no markdown, no headings styling):\n\n"
+      . "Customer issue: [one or two sentences]\n"
+      . "Discussed so far: [two or three sentences]\n"
+      . "Open / next action: [one or two short bullet points, each starting with - ]\n"
+      . "Customer mood: [one short phrase, e.g. patient, frustrated, eager]\n\n"
+      . "Keep the whole summary under 180 words. Be specific and factual. Do not "
+      . "restate the transcript verbatim. If something is unclear from the transcript, "
+      . "say so explicitly instead of inventing details.";
+
+    $payload = [
+        'model'      => $model,
+        'max_tokens' => 600,
+        'system'     => [
+            ['type' => 'text', 'text' => $systemPrompt,
+             'cache_control' => ['type' => 'ephemeral']],
+        ],
+        'messages'   => [
+            ['role' => 'user',
+             'content' => "Conversation transcript (chronological):\n\n" . $transcript],
+        ],
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_HTTPHEADER     => [
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: ' . AI_API_VERSION,
+            'content-type: application/json',
+        ],
+        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($resp === false) {
+        return ['ok' => false, 'error' => 'Network error: ' . $err];
+    }
+    $data = json_decode((string)$resp, true);
+    if ($code !== 200) {
+        return [
+            'ok' => false,
+            'error' => (string)($data['error']['message'] ?? ('HTTP ' . $code)),
+            'model' => $model,
+        ];
+    }
+
+    $text = '';
+    foreach (($data['content'] ?? []) as $block) {
+        if (($block['type'] ?? '') === 'text') $text .= $block['text'];
+    }
+    $text = trim($text);
+    if ($text === '') {
+        return ['ok' => false, 'error' => 'Empty summary from model.'];
+    }
+
+    return [
+        'ok'      => true,
+        'summary' => $text,
+        'model'   => $model,
+        'usage'   => $data['usage'] ?? null,
+    ];
+}

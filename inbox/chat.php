@@ -351,6 +351,26 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
       <?php endif; ?>
     </div>
 
+    <?php if (!empty($company['ai_enabled'])): ?>
+    <div class="side-section">
+      <h3>Handover summary</h3>
+      <p class="muted small">AI-generated summary so a teammate can pick up cleanly.</p>
+      <button type="button" class="btn btn-sm" id="summarize-btn" data-conversation-id="<?= (int)$conv['id'] ?>">
+        🤖 Generate summary
+      </button>
+      <div id="summary-box" class="summary-box hidden">
+        <div class="summary-text" id="summary-text"></div>
+        <div class="summary-meta muted small" id="summary-meta"></div>
+        <div class="summary-actions">
+          <button type="button" class="btn btn-sm btn-primary" id="summary-save">Save as note</button>
+          <button type="button" class="btn btn-sm" id="summary-copy">Copy</button>
+          <button type="button" class="btn btn-sm" id="summary-regen">Regenerate</button>
+          <button type="button" class="btn btn-sm" id="summary-dismiss">Dismiss</button>
+        </div>
+      </div>
+    </div>
+    <?php endif; ?>
+
     <div class="side-section">
       <h3>Internal notes</h3>
       <ul class="note-list">

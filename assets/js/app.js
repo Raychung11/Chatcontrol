@@ -443,6 +443,120 @@
   });
 
   // =================================================================
+  // AI HANDOVER SUMMARY
+  // =================================================================
+  const sumBtn       = document.getElementById('summarize-btn');
+  const sumBox       = document.getElementById('summary-box');
+  const sumText      = document.getElementById('summary-text');
+  const sumMeta      = document.getElementById('summary-meta');
+  const sumSave      = document.getElementById('summary-save');
+  const sumCopy      = document.getElementById('summary-copy');
+  const sumRegen     = document.getElementById('summary-regen');
+  const sumDismiss   = document.getElementById('summary-dismiss');
+  let sumInflight = false;
+
+  async function generateSummary() {
+    if (!sumBtn || sumInflight) return;
+    const convId = sumBtn.dataset.conversationId;
+    sumInflight = true;
+    if (sumBox)  sumBox.classList.remove('hidden');
+    if (sumText) sumText.textContent = 'Generating handover summary…';
+    if (sumMeta) sumMeta.textContent = '';
+    if (sumSave) sumSave.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append('mode', 'generate');
+      fd.append('conversation_id', convId);
+      fd.append('_csrf', csrfToken);
+      const res  = await fetch('/api/ai_summarize.php', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) {
+        if (sumText) sumText.textContent = '⚠ ' + (data.error || 'Summarization failed');
+        if (sumSave) sumSave.disabled = true;
+        return;
+      }
+      if (sumText) sumText.textContent = data.summary || '';
+      if (sumMeta) sumMeta.textContent = (data.model || '') +
+        (data.usage ? ` · ${data.usage.input_tokens || 0} in / ${data.usage.output_tokens || 0} out tokens` : '');
+      if (sumSave) sumSave.disabled = false;
+    } catch (e) {
+      if (sumText) sumText.textContent = '⚠ ' + e.message;
+    } finally {
+      sumInflight = false;
+    }
+  }
+
+  if (sumBtn)   sumBtn.addEventListener('click', generateSummary);
+  if (sumRegen) sumRegen.addEventListener('click', generateSummary);
+
+  if (sumDismiss) sumDismiss.addEventListener('click', () => {
+    if (sumBox) sumBox.classList.add('hidden');
+    if (sumText) sumText.textContent = '';
+    if (sumMeta) sumMeta.textContent = '';
+  });
+
+  if (sumCopy) sumCopy.addEventListener('click', async () => {
+    if (!sumText || !sumText.textContent) return;
+    try {
+      await navigator.clipboard.writeText(sumText.textContent);
+      const old = sumCopy.textContent;
+      sumCopy.textContent = '✓ Copied';
+      setTimeout(() => { sumCopy.textContent = old; }, 1500);
+    } catch (e) {
+      // Fallback for browsers that block clipboard outside HTTPS
+      const ta = document.createElement('textarea');
+      ta.value = sumText.textContent;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (_) {}
+      ta.remove();
+    }
+  });
+
+  if (sumSave) sumSave.addEventListener('click', async () => {
+    if (!sumBtn || !sumText || !sumText.textContent) return;
+    const convId = sumBtn.dataset.conversationId;
+    sumSave.disabled = true;
+    const original = sumSave.textContent;
+    sumSave.textContent = 'Saving…';
+    try {
+      const fd = new FormData();
+      fd.append('mode', 'save_note');
+      fd.append('conversation_id', convId);
+      fd.append('summary_text', sumText.textContent);
+      fd.append('_csrf', csrfToken);
+      const res  = await fetch('/api/ai_summarize.php', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) {
+        alert(data.error || 'Could not save summary as note.');
+        sumSave.disabled = false;
+        sumSave.textContent = original;
+        return;
+      }
+      // Append the new note to the existing notes list so the user sees it
+      // without a reload.
+      const ul = document.querySelector('.note-list');
+      if (ul) {
+        const li = document.createElement('li');
+        li.innerHTML = '<div class="note-meta"><strong>You</strong> '
+                     + '<span class="muted small">just now</span></div>'
+                     + '<div class="note-body"></div>';
+        li.querySelector('.note-body').textContent =
+          '[AI handover summary - ' + new Date().toLocaleString() + ']\n\n' + sumText.textContent;
+        ul.appendChild(li);
+        const empty = ul.querySelector('.muted.small');
+        if (empty && empty.textContent && empty.textContent.includes('No notes')) empty.remove();
+      }
+      sumSave.textContent = '✓ Saved as note';
+      setTimeout(() => { sumSave.textContent = original; sumSave.disabled = false; }, 1500);
+    } catch (e) {
+      alert('Network error: ' + e.message);
+      sumSave.disabled = false;
+      sumSave.textContent = original;
+    }
+  });
+
+  // =================================================================
   // LIVE REFRESH
   // =================================================================
 

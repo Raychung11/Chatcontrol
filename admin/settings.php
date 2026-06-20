@@ -228,6 +228,49 @@ layout_start($current_user, 'Company & API Settings', 'settings', $company['bran
       partner's payload is different, paste a sample and we'll add an adapter.
     </div>
 
+    <div class="card chatbot-test">
+      <h3>Test connection</h3>
+      <p class="muted small">Sends one real WhatsApp message via the gateway to verify base URL + Bearer token. Use your own number for the first try.</p>
+      <div class="inline-form">
+        <input type="text" id="chatbot-test-to" placeholder="60123456789 (digits with country code, no +)" style="flex:1; min-width: 220px;">
+        <button type="button" class="btn" id="chatbot-test-btn">Send test message</button>
+      </div>
+      <p class="muted small" id="chatbot-test-status" style="margin-top:8px;"></p>
+    </div>
+
+    <script>
+    (function () {
+      const csrf = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+      const btn  = document.getElementById('chatbot-test-btn');
+      if (!btn) return;
+      btn.addEventListener('click', async () => {
+        const to = (document.getElementById('chatbot-test-to').value || '').trim();
+        const out = document.getElementById('chatbot-test-status');
+        if (!to) { out.textContent = 'Enter a recipient phone number first.'; out.style.color = '#b3261e'; return; }
+        btn.disabled = true; out.textContent = 'Sending…'; out.style.color = '';
+        try {
+          const fd = new FormData();
+          fd.append('to', to);
+          fd.append('_csrf', csrf);
+          const res  = await fetch('/api/test_chatbot.php', { method: 'POST', body: fd });
+          const data = await res.json().catch(() => ({}));
+          if (data.ok) {
+            out.textContent = '✓ Sent. wa_message_id=' + (data.wa_message_id || '?') + ' — check WhatsApp.';
+            out.style.color = '#1f7a3f';
+          } else {
+            out.textContent = '✗ ' + (data.error || ('HTTP ' + (data.http_code || res.status)));
+            out.style.color = '#b3261e';
+          }
+        } catch (e) {
+          out.textContent = '✗ Network error: ' + e.message;
+          out.style.color = '#b3261e';
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    })();
+    </script>
+
     <button class="btn btn-primary" type="submit">Save settings</button>
   </form>
 </div>

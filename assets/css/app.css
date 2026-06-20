@@ -285,6 +285,8 @@ textarea { resize: vertical; }
 .msg-out { justify-content: flex-end; }
 .msg-out .msg-bubble { background: #dcf8c6; color: #1a2330; border-top-right-radius: 2px; }
 .msg-sender { font-size: 11.5px; color: var(--c-primary-d); font-weight: 600; margin-bottom: 2px; }
+.msg-sender-ai { color: #6f42c1; }
+.msg-sender-ai::before { content: "🤖 "; }
 .msg-type-tag { font-size: 11px; color: var(--c-muted); margin-bottom: 4px; }
 .msg-meta { font-size: 11px; color: var(--c-muted); margin-top: 4px; text-align: right; display: inline-flex; gap: 4px; align-items: center; justify-content: flex-end; width: 100%; }
 .msg-error { color: var(--c-danger); cursor: help; }

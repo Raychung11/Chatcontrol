@@ -16,8 +16,12 @@ function message_bubble_html(array $m): string
     $html  = '<div class="msg ' . $cls . '" data-msg-id="' . (int)$m['id'] . '">';
     $html .= '<div class="msg-bubble">';
 
-    if ($isOut && !empty($m['sender_name'])) {
-        $html .= '<div class="msg-sender">' . e($m['sender_name']) . '</div>';
+    if ($isOut) {
+        if (($m['sender_type'] ?? '') === 'ai') {
+            $html .= '<div class="msg-sender msg-sender-ai">AI bot</div>';
+        } elseif (!empty($m['sender_name'])) {
+            $html .= '<div class="msg-sender">' . e($m['sender_name']) . '</div>';
+        }
     }
 
     if (($m['message_type'] ?? 'text') !== 'text' && $m['message_type'] !== '') {

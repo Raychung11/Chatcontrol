@@ -177,20 +177,19 @@ function handle_evolution_message(array $company, array $msg, string $raw): bool
         return false;
     }
 
-    // If this is our own outgoing message echoed back, we've already inserted
-    // the row in /api/send_message.php. Skip.
-    if ($fromMe) {
-        return false;
-    }
-
+    // Dedupe first - covers both echoes of our own portal sends (already
+    // written by /api/send_message.php) and Evolution's at-least-once
+    // re-delivery of the same event.
     $db = aiserve_db();
-
-    // Dedupe
     $check = $db->prepare('SELECT id FROM messages WHERE wa_message_id = ? LIMIT 1');
     $check->execute([$waMsgId]);
     if ($check->fetchColumn()) {
         return false;
     }
+    // A `fromMe` event that survives the dedupe is an outgoing message we
+    // did NOT send from the portal - typically the partner's AI bot reply
+    // or a message typed on a linked WhatsApp device. We still want it in
+    // the inbox so agents see the full conversation thread.
 
     // Decode message body / media
     $messageType = (string)($msg['messageType'] ?? 'unknown');
@@ -283,34 +282,56 @@ function handle_evolution_message(array $company, array $msg, string $raw): bool
     $conv = $stmt->fetch();
 
     if (!$conv) {
+        // A brand-new conversation that starts with a fromMe message would be
+        // odd (the bot replied to nobody) - still create it so we have a row.
         $route = apply_routing_rules($companyId, $body);
+        $unread     = $fromMe ? 0       : 1;
+        $custMsgAt  = $fromMe ? null    : $messageDate;
+        $windowExp  = $fromMe ? null    : $expiryDate;
+        $firstResp  = $fromMe ? $messageDate : null;
         $ins = $db->prepare(
             'INSERT INTO conversations
                 (company_id, contact_id, department_id, assigned_user_id, status,
                  last_message_text, last_message_at,
-                 last_customer_message_at, service_window_expires_at, unread_count)
-             VALUES (?, ?, ?, ?, "open", ?, ?, ?, ?, 1)'
+                 last_customer_message_at, service_window_expires_at,
+                 unread_count, first_response_at)
+             VALUES (?, ?, ?, ?, "open", ?, ?, ?, ?, ?, ?)'
         );
         $ins->execute([
             $companyId, $contactId,
             $route['department_id'], $route['assigned_user_id'],
-            $previewText, $messageDate, $messageDate, $expiryDate,
+            $previewText, $messageDate, $custMsgAt, $windowExp,
+            $unread, $firstResp,
         ]);
         $conversationId = (int)$db->lastInsertId();
     } else {
         $conversationId = (int)$conv['id'];
         $newStatus = ($conv['status'] === 'closed') ? 'open' : $conv['status'];
-        $upd = $db->prepare(
-            'UPDATE conversations
-             SET status = ?,
-                 last_message_text = ?,
-                 last_message_at = ?,
-                 last_customer_message_at = ?,
-                 service_window_expires_at = ?,
-                 unread_count = unread_count + 1
-             WHERE id = ?'
-        );
-        $upd->execute([$newStatus, $previewText, $messageDate, $messageDate, $expiryDate, $conversationId]);
+        if ($fromMe) {
+            // Outgoing (bot) reply: update last_message_* + first_response_at,
+            // but DO NOT touch unread_count or the customer service window.
+            $upd = $db->prepare(
+                'UPDATE conversations
+                 SET status = ?,
+                     last_message_text = ?,
+                     last_message_at   = ?,
+                     first_response_at = COALESCE(first_response_at, ?)
+                 WHERE id = ?'
+            );
+            $upd->execute([$newStatus, $previewText, $messageDate, $messageDate, $conversationId]);
+        } else {
+            $upd = $db->prepare(
+                'UPDATE conversations
+                 SET status = ?,
+                     last_message_text = ?,
+                     last_message_at = ?,
+                     last_customer_message_at = ?,
+                     service_window_expires_at = ?,
+                     unread_count = unread_count + 1
+                 WHERE id = ?'
+            );
+            $upd->execute([$newStatus, $previewText, $messageDate, $messageDate, $expiryDate, $conversationId]);
+        }
     }
 
     // ---- Inbound media: persist base64 to disk if present ----
@@ -333,27 +354,34 @@ function handle_evolution_message(array $company, array $msg, string $raw): bool
     }
 
     // ---- Insert message row ----
+    $senderType = $fromMe ? 'ai'       : 'customer';
+    $direction  = $fromMe ? 'outgoing' : 'incoming';
+    $status     = $fromMe ? 'sent'     : 'received';
+    $sentAt     = $fromMe ? $messageDate : null;
+
     try {
         $ins = $db->prepare(
             'INSERT INTO messages
                 (company_id, conversation_id, contact_id, sender_type, wa_message_id, direction,
                  message_type, message_text, media_mime_type, media_filename, media_local_path,
-                 raw_payload, status, created_at)
-             VALUES (?, ?, ?, "customer", ?, "incoming", ?, ?, ?, ?, ?, ?, "received", ?)'
+                 raw_payload, status, sent_at, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $ins->execute([
             $companyId, $conversationId, $contactId,
-            $waMsgId, $kind, $body,
+            $senderType, $waMsgId, $direction,
+            $kind, $body,
             $mediaMime, $mediaName, $mediaLocalPath,
-            $raw, $messageDate,
+            $raw, $status, $sentAt, $messageDate,
         ]);
     } catch (Throwable $e) {
         error_log('[AiServe evolution] insert message failed: ' . $e->getMessage());
         return false;
     }
 
-    log_activity($companyId, null, 'message_received', 'conversation', $conversationId,
-        'Inbound ' . $kind . ' from ' . $waId . ' via Evolution');
+    $action = $fromMe ? 'ai_reply_received' : 'message_received';
+    $desc   = ($fromMe ? 'Outbound AI/bot ' : 'Inbound ') . $kind . ' ' . ($fromMe ? 'to ' : 'from ') . $waId . ' via Evolution';
+    log_activity($companyId, null, $action, 'conversation', $conversationId, $desc);
     return true;
 }
 

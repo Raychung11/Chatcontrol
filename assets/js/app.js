@@ -6,6 +6,26 @@
   const csrfToken = csrfMeta ? csrfMeta.getAttribute('content') : '';
   const POLL_MS   = 5000;
 
+  // ---- Mobile drawers (sidebar + chat side panel) -----------------
+  const sidebar       = document.querySelector('.sidebar');
+  const sidebarOv     = document.getElementById('sidebar-overlay');
+  const navToggle     = document.getElementById('nav-toggle');
+  const chatSide      = document.getElementById('chat-side');
+  const chatSideOpen  = document.getElementById('chat-side-toggle');
+  const chatSideClose = document.getElementById('chat-side-close');
+
+  function openSidebar()  { if (sidebar)  sidebar.classList.add('open');  if (sidebarOv) sidebarOv.hidden = false; }
+  function closeSidebar() { if (sidebar)  sidebar.classList.remove('open'); if (sidebarOv) sidebarOv.hidden = true;  }
+  function openChatSide()  { if (chatSide) chatSide.classList.add('open');  if (sidebarOv) sidebarOv.hidden = false; }
+  function closeChatSide() { if (chatSide) chatSide.classList.remove('open'); if (sidebarOv) sidebarOv.hidden = true;  }
+  function closeAllDrawers() { closeSidebar(); closeChatSide(); }
+
+  if (navToggle)     navToggle.addEventListener('click', openSidebar);
+  if (chatSideOpen)  chatSideOpen.addEventListener('click', openChatSide);
+  if (chatSideClose) chatSideClose.addEventListener('click', closeChatSide);
+  if (sidebarOv)     sidebarOv.addEventListener('click', closeAllDrawers);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAllDrawers(); });
+
   const stream = document.getElementById('chat-stream');
   if (stream) stream.scrollTop = stream.scrollHeight;
 

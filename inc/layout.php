@@ -28,8 +28,10 @@ function layout_start(array $current_user, string $page_title = '', string $acti
 <?php
     require __DIR__ . '/sidebar.php';
 ?>
+  <div class="sidebar-overlay" id="sidebar-overlay" hidden></div>
   <main class="app-main">
     <header class="app-header">
+      <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Open menu">☰</button>
       <h1 class="app-title"><?= e($page_title) ?></h1>
       <div class="app-header-actions" id="app-header-actions"></div>
     </header>

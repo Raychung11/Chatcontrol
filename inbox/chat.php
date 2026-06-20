@@ -124,6 +124,7 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
         <?php if ($enforceWindow && !$windowOpen): ?>
           <span class="badge badge-failed" title="24-hour service window expired">Window expired</span>
         <?php endif; ?>
+        <button type="button" class="chat-side-toggle" id="chat-side-toggle" aria-label="Conversation info">ⓘ</button>
       </div>
     </header>
 
@@ -247,7 +248,8 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
     </footer>
   </section>
 
-  <aside class="chat-side">
+  <aside class="chat-side" id="chat-side">
+    <button type="button" class="chat-side-close" id="chat-side-close" aria-label="Close">×</button>
     <div class="side-section">
       <h3>Customer</h3>
       <div class="kv"><span>Name</span><strong><?= e($conv['display_name'] ?: $conv['profile_name'] ?: '—') ?></strong></div>

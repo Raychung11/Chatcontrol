@@ -292,6 +292,17 @@ textarea { resize: vertical; }
 .msg-sender { font-size: 11.5px; color: var(--c-primary-d); font-weight: 600; margin-bottom: 2px; }
 .msg-sender-ai { color: #6f42c1; }
 .msg-sender-ai::before { content: "🤖 "; }
+
+/* AI draft panel above the composer */
+.ai-draft {
+  background: linear-gradient(180deg, #f7f3ff 0%, #efe9ff 100%);
+  border: 1px solid #d6c8f5; border-radius: 8px; padding: 10px 12px;
+  margin-bottom: 8px; font-size: 13px;
+}
+.ai-draft-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.ai-draft-head strong { color: #5a2eaa; font-size: 12.5px; }
+.ai-draft-body { white-space: pre-wrap; color: var(--c-text); padding: 6px 0; min-height: 18px; }
+.ai-draft-actions { display: flex; gap: 6px; margin-top: 4px; }
 .msg-type-tag { font-size: 11px; color: var(--c-muted); margin-bottom: 4px; }
 .msg-meta { font-size: 11px; color: var(--c-muted); margin-top: 4px; text-align: right; display: inline-flex; gap: 4px; align-items: center; justify-content: flex-end; width: 100%; }
 .msg-error { color: var(--c-danger); cursor: help; }

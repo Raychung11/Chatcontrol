@@ -355,6 +355,59 @@
   });
 
   // =================================================================
+  // AI REPLY SUGGESTION
+  // =================================================================
+  const aiBtn        = document.getElementById('ai-suggest-btn');
+  const aiPanel      = document.getElementById('ai-draft');
+  const aiBody       = document.getElementById('ai-draft-body');
+  const aiMeta       = document.getElementById('ai-draft-meta');
+  const aiUseBtn     = document.getElementById('ai-draft-use');
+  const aiRegenBtn   = document.getElementById('ai-draft-regen');
+  const aiDismissBtn = document.getElementById('ai-draft-dismiss');
+  let aiInflight = false;
+
+  async function fetchAiSuggestion() {
+    if (!composer || aiInflight || !composer.dataset.aiEnabled || composer.dataset.aiEnabled !== '1') return;
+    const convId = composer.querySelector('input[name="conversation_id"]').value;
+    aiInflight = true;
+    if (aiPanel) {
+      aiPanel.classList.remove('hidden');
+      if (aiBody) aiBody.textContent = 'Thinking…';
+      if (aiMeta) aiMeta.textContent = '';
+    }
+    try {
+      const fd = new FormData();
+      fd.append('conversation_id', convId);
+      fd.append('_csrf', csrfToken);
+      const res  = await fetch('/api/ai_suggest.php', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) {
+        if (aiBody) aiBody.textContent = '⚠ ' + (data.error || 'AI request failed');
+        if (aiMeta) aiMeta.textContent = '';
+        return;
+      }
+      if (aiBody) aiBody.textContent = data.suggestion || '';
+      if (aiMeta) aiMeta.textContent = (data.model || '') +
+        (data.usage ? ` · ${data.usage.input_tokens || 0} in / ${data.usage.output_tokens || 0} out tokens` : '');
+    } catch (e) {
+      if (aiBody) aiBody.textContent = '⚠ ' + e.message;
+    } finally {
+      aiInflight = false;
+    }
+  }
+
+  if (aiBtn) aiBtn.addEventListener('click', fetchAiSuggestion);
+  if (aiRegenBtn) aiRegenBtn.addEventListener('click', fetchAiSuggestion);
+  if (aiUseBtn) aiUseBtn.addEventListener('click', () => {
+    const ta = document.getElementById('composer-text');
+    if (ta && aiBody) { ta.value = aiBody.textContent || ''; ta.focus(); }
+    if (aiPanel) aiPanel.classList.add('hidden');
+  });
+  if (aiDismissBtn) aiDismissBtn.addEventListener('click', () => {
+    if (aiPanel) aiPanel.classList.add('hidden');
+  });
+
+  // =================================================================
   // LIVE REFRESH
   // =================================================================
 
@@ -383,8 +436,13 @@
         stream.insertAdjacentHTML('beforeend', data.messages_html);
         stream.setAttribute('data-last-msg-id', String(data.last_msg_id));
         if (wasNearBottom) stream.scrollTop = stream.scrollHeight;
-        if (data.new_inbound && hidden()) beep();
-        else if (data.new_inbound) beep();
+        if (data.new_inbound) {
+          beep();
+          // Auto-suggest a draft if the workspace has it enabled.
+          if (composer && composer.dataset.aiAuto === '1') {
+            fetchAiSuggestion();
+          }
+        }
       }
 
       // Update delivery ticks on existing outgoing bubbles

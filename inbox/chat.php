@@ -179,13 +179,33 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
           </form>
         <?php endif; ?>
       <?php else: ?>
-        <form id="composer-form" class="composer-form">
+        <?php $aiEnabled = !empty($company['ai_enabled']); $aiAuto = !empty($company['ai_auto_suggest']); ?>
+        <form id="composer-form" class="composer-form"
+              data-ai-enabled="<?= $aiEnabled ? '1' : '0' ?>"
+              data-ai-auto="<?= $aiAuto ? '1' : '0' ?>">
           <?= csrf_field() ?>
           <input type="hidden" name="conversation_id" value="<?= (int)$conv['id'] ?>">
+          <?php if ($aiEnabled): ?>
+            <div id="ai-draft" class="ai-draft hidden">
+              <div class="ai-draft-head">
+                <strong>🤖 AI suggested reply</strong>
+                <span class="muted small" id="ai-draft-meta"></span>
+              </div>
+              <div class="ai-draft-body" id="ai-draft-body"></div>
+              <div class="ai-draft-actions">
+                <button type="button" class="btn btn-sm btn-primary" id="ai-draft-use">Use this</button>
+                <button type="button" class="btn btn-sm" id="ai-draft-regen">Regenerate</button>
+                <button type="button" class="btn btn-sm" id="ai-draft-dismiss">Dismiss</button>
+              </div>
+            </div>
+          <?php endif; ?>
           <textarea name="message_text" id="composer-text" rows="2" maxlength="4000"
                     placeholder="Type a reply (the customer will see this on WhatsApp)…" required></textarea>
           <div class="composer-actions">
             <div class="composer-extras">
+              <?php if ($aiEnabled): ?>
+                <button type="button" class="btn btn-sm" id="ai-suggest-btn" title="Get an AI draft for the customer's last message">🤖 AI suggest</button>
+              <?php endif; ?>
               <?php if ($templates && $supportsTemplates): ?>
                 <button type="button" class="btn btn-sm" id="open-template-picker">Send template</button>
               <?php endif; ?>

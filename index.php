@@ -26,7 +26,6 @@ $year = date('Y');
   </a>
   <nav class="landing-nav-links">
     <a href="#features">Features</a>
-    <a href="#providers">Providers</a>
     <a href="#how">How it works</a>
     <a href="#plans">Plans</a>
     <a class="btn btn-primary btn-sm" href="/login.php">Sign in</a>
@@ -47,7 +46,7 @@ $year = date('Y');
       <a class="btn btn-lg" href="/login.php">Sign in</a>
     </div>
     <ul class="landing-trust">
-      <li>3 WhatsApp providers supported</li>
+      <li>One official WhatsApp number</li>
       <li>AI drafts grounded in your docs</li>
       <li>Live inbox refresh</li>
       <li>Up to 10 agents on Growth</li>
@@ -146,40 +145,6 @@ $year = date('Y');
     <div class="feature-card">
       <h3>Activity logs</h3>
       <p>Every login, assignment, status change, AI suggestion, and reply is logged for auditing and coaching.</p>
-    </div>
-  </div>
-</section>
-
-<section id="providers" class="landing-section landing-alt">
-  <h2 class="landing-h2">Pick your WhatsApp provider</h2>
-  <p class="landing-sub">Each workspace chooses its own. Switch anytime in Settings — the inbox stays exactly the same.</p>
-  <div class="landing-grid">
-    <div class="feature-card provider-card">
-      <h3>Meta Cloud API</h3>
-      <p class="muted small">Official, ban-safe, paid per conversation</p>
-      <ul class="provider-bullets">
-        <li>Stable &amp; supported by Meta</li>
-        <li>Requires Phone Number ID + access token</li>
-        <li>Templates required outside 24h window</li>
-      </ul>
-    </div>
-    <div class="feature-card provider-card">
-      <h3>Evolution API</h3>
-      <p class="muted small">Self-hosted, unofficial, free messaging</p>
-      <ul class="provider-bullets">
-        <li>QR pairing — no number migration</li>
-        <li>Docker compose included in repo</li>
-        <li>Risk: Meta may ban the number</li>
-      </ul>
-    </div>
-    <div class="feature-card provider-card">
-      <h3>Partner gateway</h3>
-      <p class="muted small">Any Bearer-token HTTP gateway</p>
-      <ul class="provider-bullets">
-        <li>Plug in your reseller's API</li>
-        <li>One-click test send from Settings</li>
-        <li>Outbound &amp; inbound both wired</li>
-      </ul>
     </div>
   </div>
 </section>

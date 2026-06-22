@@ -85,7 +85,6 @@ if (!$rows) {
 }
 
 $perConv = [];
-$conversations = 0;
 foreach ($rows as $r) {
     $cid = (int)$r['conversation_id'];
     $perConv[$cid] = $perConv[$cid] ?? [];
@@ -95,7 +94,7 @@ foreach ($rows as $r) {
 $samples = [];
 foreach ($perConv as $cid => $msgs) {
     foreach ($msgs as $m) {
-        $samples[] = $m;
+        $samples[] = ['conversation_id' => $cid, 'text' => $m];
     }
 }
 $conversations = count($perConv);

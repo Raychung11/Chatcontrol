@@ -283,11 +283,13 @@ function ai_summarize_conversation(array $company, array $messages): array
 
 /**
  * Analyze recent customer messages and identify the most common discussion
- * topics. Returns a structured list the analytics page can render directly.
+ * topics. Returns a structured list the analytics page can render directly,
+ * AND a list of conversation ids that the model believes belong to each
+ * topic - used by the "Apply as tag" flow to bulk-tag conversations.
  *
  * @param array $company        Full companies row.
- * @param array $messageSamples Array of strings - each is a customer message
- *                              (or short conversation excerpt) to analyze.
+ * @param array $messageSamples Array of {conversation_id => int, text => string}
+ *                              entries to analyze.
  * @param int   $periodDays     Just passed through into the response for
  *                              the UI; doesn't affect the model call.
  *
@@ -309,32 +311,42 @@ function ai_analyze_topics(array $company, array $messageSamples, int $periodDay
     $model = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
 
     // Cap total input - 200K chars keeps the bill predictable and fits
-    // comfortably inside Haiku's context window.
+    // comfortably inside Haiku's context window. Each line prefixed with
+    // [Conv N] so the model can return conversation ids per topic.
     $combined = '';
-    foreach ($messageSamples as $i => $msg) {
-        $line = ($i + 1) . '. ' . trim((string)$msg) . "\n";
+    foreach ($messageSamples as $msg) {
+        $cid  = (int)($msg['conversation_id'] ?? 0);
+        $text = trim((string)($msg['text'] ?? ''));
+        if ($cid <= 0 || $text === '') continue;
+        $line = '[Conv ' . $cid . '] ' . $text . "\n";
         if (mb_strlen($combined) + mb_strlen($line) > 180000) break;
         $combined .= $line;
     }
 
     $systemPrompt =
         "You analyze customer-service conversations and identify the most common "
-      . "discussion topics. Return a JSON object with this exact structure:\n\n"
+      . "discussion topics. Each input line is prefixed with [Conv N] where N is "
+      . "the conversation id.\n\n"
+      . "Return a JSON object with this exact structure:\n\n"
       . "{\n"
       . "  \"topics\": [\n"
       . "    {\n"
       . "      \"topic\": \"Short name (2-5 words, capitalized, e.g. 'Shipping & delivery')\",\n"
-      . "      \"count\": <approximate number of conversations on this topic>,\n"
+      . "      \"count\": <number of unique conversations on this topic>,\n"
       . "      \"summary\": \"One-sentence description of what customers ask\",\n"
-      . "      \"examples\": [\"example customer message 1\", \"example customer message 2\"]\n"
+      . "      \"examples\": [\"example customer message 1\", \"example customer message 2\"],\n"
+      . "      \"conversation_ids\": [123, 145, 187]\n"
       . "    }\n"
       . "  ]\n"
       . "}\n\n"
       . "Rules:\n"
       . "- 5 to 12 topics, sorted by count descending\n"
-      . "- Merge similar topics (e.g. shipping cost + delivery time + tracking = 'Shipping & delivery')\n"
+      . "- Merge similar topics (shipping cost + delivery time + tracking = 'Shipping & delivery')\n"
       . "- Use the customer's language for topic names (English unless most messages are in another language)\n"
-      . "- Examples should be the most representative actual customer messages from the input - copy them verbatim\n"
+      . "- conversation_ids must be the UNIQUE list of [Conv N] ids whose messages belong to that topic\n"
+      . "- count must equal the length of conversation_ids\n"
+      . "- A conversation can belong to multiple topics if it asks about multiple things\n"
+      . "- Examples must be ACTUAL customer messages from the input, copied verbatim (without the [Conv N] prefix)\n"
       . "- Output ONLY the JSON object, no markdown fences, no preamble";
 
     $payload = [

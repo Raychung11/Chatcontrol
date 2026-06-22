@@ -86,10 +86,11 @@ window.__initialTopics = {
     statusEl.textContent = meta.join(' · ');
 
     let html = '<div class="topic-list">';
-    data.topics.forEach(t => {
+    data.topics.forEach((t, idx) => {
       const count = Number(t.count) || 0;
       const pct = Math.round((count / maxCount) * 100);
-      html += '<div class="topic-row">';
+      const ids = Array.isArray(t.conversation_ids) ? t.conversation_ids : [];
+      html += '<div class="topic-row" data-topic-idx="' + idx + '">';
       html +=   '<div class="topic-head">';
       html +=     '<span class="topic-name">' + escapeHtml(t.topic || 'Untitled') + '</span>';
       html +=     '<span class="topic-count">' + count + '</span>';
@@ -97,6 +98,16 @@ window.__initialTopics = {
       html +=   '<div class="topic-bar"><span class="topic-bar-fill" style="width:' + pct + '%"></span></div>';
       if (t.summary) {
         html += '<p class="topic-summary muted small">' + escapeHtml(t.summary) + '</p>';
+      }
+      if (ids.length) {
+        html += '<div class="topic-actions">';
+        html +=   '<button type="button" class="btn btn-sm topic-tag-btn" '
+              +       'data-topic="' + escapeHtml(t.topic || '') + '" '
+              +       'data-ids="' + escapeHtml(JSON.stringify(ids)) + '">'
+              +     '🏷 Apply as tag to ' + ids.length + ' conversations'
+              +   '</button>';
+        html +=   '<span class="topic-action-status muted small"></span>';
+        html += '</div>';
       }
       if (Array.isArray(t.examples) && t.examples.length) {
         html += '<details class="topic-examples"><summary>Example messages</summary><ul>';
@@ -109,6 +120,40 @@ window.__initialTopics = {
     });
     html += '</div>';
     resultEl.innerHTML = html;
+    bindTagButtons();
+  }
+
+  function bindTagButtons() {
+    resultEl.querySelectorAll('.topic-tag-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const status = btn.parentElement.querySelector('.topic-action-status');
+        btn.disabled = true;
+        if (status) { status.textContent = 'Tagging…'; status.style.color = ''; }
+        try {
+          const fd = new FormData();
+          fd.append('topic', btn.dataset.topic);
+          fd.append('conversation_ids', btn.dataset.ids);
+          fd.append('_csrf', csrf);
+          const res = await fetch('/api/topic_tag_apply.php', { method: 'POST', body: fd });
+          const data = await res.json().catch(() => ({}));
+          if (!data.ok) {
+            if (status) { status.textContent = '✗ ' + (data.error || 'Failed'); status.style.color = '#b3261e'; }
+            btn.disabled = false;
+            return;
+          }
+          if (status) {
+            status.innerHTML = '✓ Tagged ' + data.newly_tagged + ' new + ' +
+              (data.valid - data.newly_tagged) + ' already tagged · ' +
+              '<a href="' + escapeHtml(data.filter_url) + '">View in inbox</a>';
+            status.style.color = '#1f7a3f';
+          }
+          btn.textContent = '✓ Tag applied';
+        } catch (e) {
+          if (status) { status.textContent = '✗ ' + e.message; status.style.color = '#b3261e'; }
+          btn.disabled = false;
+        }
+      });
+    });
   }
 
   async function run(refresh) {

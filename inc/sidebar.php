@@ -32,6 +32,10 @@ $role   = $current_user['role'] ?? 'agent';
       <a href="/admin/webhook_log.php" class="<?= $active === 'webhook_log' ? 'active' : '' ?>">Webhook log</a>
       <a href="/admin/ai_settings.php" class="<?= $active === 'ai_settings' ? 'active' : '' ?>">AI Settings</a>
     <?php endif; ?>
+    <?php if (is_platform_admin() && !is_impersonating()): ?>
+      <div class="sidebar-section">Platform</div>
+      <a href="/admin/workspaces.php" class="<?= $active === 'workspaces' ? 'active' : '' ?>">Workspaces</a>
+    <?php endif; ?>
   </nav>
 
   <div class="sidebar-footer">

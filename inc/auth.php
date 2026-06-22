@@ -13,9 +13,11 @@ function current_user(): ?array
         return null;
     }
     static $cached = null;
-    if ($cached && (int)$cached['id'] === (int)$_SESSION['user_id']) {
+    $sessionTag = (int)$_SESSION['user_id'] . ':' . (int)($_SESSION['_impersonate_company_id'] ?? 0);
+    if ($cached && ($cached['_tag'] ?? '') === $sessionTag) {
         return $cached;
     }
+
     $stmt = aiserve_db()->prepare(
         'SELECT u.*, d.name AS department_name
          FROM users u
@@ -23,12 +25,81 @@ function current_user(): ?array
          WHERE u.id = ? AND u.status = "active" LIMIT 1'
     );
     $stmt->execute([(int)$_SESSION['user_id']]);
-    $cached = $stmt->fetch() ?: null;
-    if (!$cached) {
+    $user = $stmt->fetch() ?: null;
+    if (!$user) {
         // user disabled / deleted mid-session
         $_SESSION = [];
+        $cached = null;
+        return null;
     }
+
+    // Impersonation: swap company_id + role so every existing data-scope
+    // and role-check works as if logged in as a super admin of the target.
+    if (!empty($_SESSION['_impersonate_company_id'])) {
+        $targetId = (int)$_SESSION['_impersonate_company_id'];
+        $cStmt = aiserve_db()->prepare('SELECT id, name, slug, plan FROM companies WHERE id = ? AND status = "active" LIMIT 1');
+        $cStmt->execute([$targetId]);
+        $target = $cStmt->fetch();
+        if ($target && !empty($user['is_platform_admin'])) {
+            $user['_real_user_id']     = (int)$user['id'];
+            $user['_real_company_id']  = (int)$user['company_id'];
+            $user['_real_role']        = (string)$user['role'];
+            $user['_real_name']        = (string)$user['name'];
+            $user['_impersonating']    = true;
+            $user['_impersonated_company'] = $target;
+            $user['company_id']        = (int)$target['id'];
+            $user['role']              = 'super_admin';
+        } else {
+            // Stale or unauthorized impersonation - drop it.
+            unset($_SESSION['_impersonate_company_id']);
+        }
+    }
+
+    $user['_tag'] = $sessionTag;
+    $cached = $user;
     return $cached;
+}
+
+function is_platform_admin(): bool
+{
+    $u = current_user();
+    if (!$u) return false;
+    // While impersonating, the real role is in _real_role. The is_platform_admin
+    // flag stays on the real user row.
+    return !empty($u['_real_user_id'])
+        ? (bool)(aiserve_db()->query('SELECT is_platform_admin FROM users WHERE id = ' . (int)$u['_real_user_id'])->fetchColumn())
+        : (bool)($u['is_platform_admin'] ?? 0);
+}
+
+function is_impersonating(): bool
+{
+    aiserve_start_session();
+    return !empty($_SESSION['_impersonate_company_id']);
+}
+
+function start_impersonation(int $targetCompanyId): bool
+{
+    $u = current_user();
+    if (!$u || empty($u['is_platform_admin']) || is_impersonating()) {
+        return false;
+    }
+    aiserve_start_session();
+    $_SESSION['_impersonate_company_id'] = $targetCompanyId;
+    log_activity($targetCompanyId, (int)$u['id'], 'impersonation_start', 'company', $targetCompanyId,
+        'Platform admin ' . $u['email'] . ' impersonating workspace ' . $targetCompanyId);
+    return true;
+}
+
+function stop_impersonation(): void
+{
+    aiserve_start_session();
+    if (!empty($_SESSION['_impersonate_company_id'])) {
+        $cid = (int)$_SESSION['_impersonate_company_id'];
+        $uid = (int)($_SESSION['user_id'] ?? 0);
+        log_activity($cid, $uid, 'impersonation_stop', 'company', $cid,
+            'Platform admin ended impersonation');
+    }
+    unset($_SESSION['_impersonate_company_id']);
 }
 
 function require_login(): array

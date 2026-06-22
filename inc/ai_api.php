@@ -280,3 +280,123 @@ function ai_summarize_conversation(array $company, array $messages): array
         'usage'   => $data['usage'] ?? null,
     ];
 }
+
+/**
+ * Analyze recent customer messages and identify the most common discussion
+ * topics. Returns a structured list the analytics page can render directly.
+ *
+ * @param array $company        Full companies row.
+ * @param array $messageSamples Array of strings - each is a customer message
+ *                              (or short conversation excerpt) to analyze.
+ * @param int   $periodDays     Just passed through into the response for
+ *                              the UI; doesn't affect the model call.
+ *
+ * @return array{ok:bool, topics?:array, model?:string, usage?:array, error?:string}
+ */
+function ai_analyze_topics(array $company, array $messageSamples, int $periodDays): array
+{
+    if (!ai_is_configured($company)) {
+        return ['ok' => false, 'error' => 'AI is not enabled for this workspace.'];
+    }
+    $apiKey = ai_api_key($company);
+    if ($apiKey === '') {
+        return ['ok' => false, 'error' => 'No Anthropic API key configured.'];
+    }
+    if (!$messageSamples) {
+        return ['ok' => false, 'error' => 'No conversation messages in this period.'];
+    }
+
+    $model = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
+
+    // Cap total input - 200K chars keeps the bill predictable and fits
+    // comfortably inside Haiku's context window.
+    $combined = '';
+    foreach ($messageSamples as $i => $msg) {
+        $line = ($i + 1) . '. ' . trim((string)$msg) . "\n";
+        if (mb_strlen($combined) + mb_strlen($line) > 180000) break;
+        $combined .= $line;
+    }
+
+    $systemPrompt =
+        "You analyze customer-service conversations and identify the most common "
+      . "discussion topics. Return a JSON object with this exact structure:\n\n"
+      . "{\n"
+      . "  \"topics\": [\n"
+      . "    {\n"
+      . "      \"topic\": \"Short name (2-5 words, capitalized, e.g. 'Shipping & delivery')\",\n"
+      . "      \"count\": <approximate number of conversations on this topic>,\n"
+      . "      \"summary\": \"One-sentence description of what customers ask\",\n"
+      . "      \"examples\": [\"example customer message 1\", \"example customer message 2\"]\n"
+      . "    }\n"
+      . "  ]\n"
+      . "}\n\n"
+      . "Rules:\n"
+      . "- 5 to 12 topics, sorted by count descending\n"
+      . "- Merge similar topics (e.g. shipping cost + delivery time + tracking = 'Shipping & delivery')\n"
+      . "- Use the customer's language for topic names (English unless most messages are in another language)\n"
+      . "- Examples should be the most representative actual customer messages from the input - copy them verbatim\n"
+      . "- Output ONLY the JSON object, no markdown fences, no preamble";
+
+    $payload = [
+        'model'      => $model,
+        'max_tokens' => 2000,
+        'system'     => [
+            ['type' => 'text', 'text' => $systemPrompt,
+             'cache_control' => ['type' => 'ephemeral']],
+        ],
+        'messages'   => [
+            ['role'    => 'user',
+             'content' => "Customer messages from the last {$periodDays} days "
+                        . "(one per line, format: 'N. message'):\n\n" . $combined],
+        ],
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_TIMEOUT        => 60,
+        CURLOPT_HTTPHEADER     => [
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: ' . AI_API_VERSION,
+            'content-type: application/json',
+        ],
+        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($resp === false) {
+        return ['ok' => false, 'error' => 'Network error: ' . $err];
+    }
+    $data = json_decode((string)$resp, true);
+    if ($code !== 200) {
+        return [
+            'ok' => false,
+            'error' => (string)($data['error']['message'] ?? ('HTTP ' . $code)),
+        ];
+    }
+
+    $text = '';
+    foreach (($data['content'] ?? []) as $block) {
+        if (($block['type'] ?? '') === 'text') $text .= $block['text'];
+    }
+    $text = trim($text);
+    // Defensive: strip code fences if the model included them anyway.
+    if (preg_match('/^```(?:json)?\s*(.+?)\s*```$/s', $text, $m)) {
+        $text = trim($m[1]);
+    }
+    $parsed = json_decode($text, true);
+    if (!is_array($parsed) || !isset($parsed['topics']) || !is_array($parsed['topics'])) {
+        return ['ok' => false, 'error' => 'Model returned malformed JSON.', 'raw' => $text];
+    }
+
+    return [
+        'ok'     => true,
+        'topics' => $parsed['topics'],
+        'model'  => $model,
+        'usage'  => $data['usage'] ?? null,
+    ];
+}

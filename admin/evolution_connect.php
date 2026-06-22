@@ -3,6 +3,10 @@ require_once __DIR__ . '/../inc/layout.php';
 require_once __DIR__ . '/../inc/evolution_api.php';
 
 $current_user = require_role(['super_admin']);
+if (!is_platform_admin()) {
+    http_response_code(403);
+    exit('This page is reserved for platform administrators.');
+}
 $companyId    = (int)$current_user['company_id'];
 $db           = aiserve_db();
 

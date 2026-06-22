@@ -18,7 +18,7 @@ managers monitor performance.
 
 ## Highlights
 
-- Three-tier RBAC (Super Admin / Manager / Agent)
+- Three-tier RBAC (Workspace Admin / Manager / Agent)
 - Shared inbox with live status badges, filters, search, departments
 - Conversation assignment, reassignment, escalation, close/reopen
 - Internal notes (not shown to the customer)

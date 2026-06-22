@@ -16,7 +16,7 @@ ON DUPLICATE KEY UPDATE `name`=VALUES(`name`);
 INSERT INTO `users`
   (`id`,`company_id`,`department_id`,`name`,`email`,`phone`,`password_hash`,`role`,`status`)
 VALUES
-  (1,1,1,'Super Admin','admin@aiserve.local',NULL,
+  (1,1,1,'Workspace Admin','admin@aiserve.local',NULL,
    '$2y$12$rX41zMxvmlcuSAfOotA4zOIXp/eq2bs3kGOM/U9.eJP6ebo6SU5Iu',
    'super_admin','active')
 ON DUPLICATE KEY UPDATE `name`=VALUES(`name`);

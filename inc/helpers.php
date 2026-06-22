@@ -167,7 +167,7 @@ function normalize_phone(string $raw): string
 function role_label(string $role): string
 {
     return match ($role) {
-        'super_admin' => 'Super Admin',
+        'super_admin' => 'Workspace Admin',
         'manager'     => 'Manager',
         'agent'       => 'Agent',
         default       => ucfirst($role),

@@ -94,9 +94,34 @@ try {
 http_response_code($httpStatus);
 echo $httpStatus === 200 ? 'EVENT_RECEIVED' : 'BAD_REQUEST';
 
+// Release the gateway connection BEFORE we spend several seconds calling
+// Anthropic for the auto-reply. The gateway only needs the 200 above.
+if (function_exists('fastcgi_finish_request')) {
+    fastcgi_finish_request();
+}
+
+// First-touch auto-reply: every conversation that just received a new
+// customer message gets a chance. Guards inside ai_first_touch_handle()
+// short-circuit when the workspace has it disabled.
+require_once __DIR__ . '/../inc/ai_api.php';
+foreach (webhook_touched_conversation_ids() as $cid) {
+    ai_first_touch_handle($company, $cid);
+}
+
 // =============================================================
 // Functions
 // =============================================================
+
+/**
+ * Conversations that received a new customer message during this request.
+ * Filled by handle_incoming_message(), drained at the bottom of the file.
+ */
+function webhook_touched_conversation_ids(?int $append = null): array
+{
+    static $ids = [];
+    if ($append !== null) { $ids[] = $append; return []; }
+    return $ids;
+}
 
 function process_webhook_payload(array $company, array $payload, string $raw): void
 {
@@ -319,6 +344,7 @@ function handle_incoming_message(array $company, array $value, array $msg, strin
 
     log_activity($companyId, null, 'message_received', 'conversation', $conversationId,
         'Inbound ' . $msgType . ' from ' . $waId);
+    webhook_touched_conversation_ids($conversationId);
 }
 
 function handle_status_update(array $company, array $status): void

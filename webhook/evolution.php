@@ -127,9 +127,27 @@ try {
 http_response_code($httpStatus);
 echo $httpStatus === 200 ? 'OK' : 'BAD_REQUEST';
 
+if (function_exists('fastcgi_finish_request')) {
+    fastcgi_finish_request();
+}
+
+// First-touch auto-reply path. Guards inside ai_first_touch_handle()
+// short-circuit when the workspace has it disabled.
+require_once __DIR__ . '/../inc/ai_api.php';
+foreach (evolution_touched_conversation_ids() as $cid) {
+    ai_first_touch_handle($company, $cid);
+}
+
 // =============================================================
 // Functions
 // =============================================================
+
+function evolution_touched_conversation_ids(?int $append = null): array
+{
+    static $ids = [];
+    if ($append !== null) { $ids[] = $append; return []; }
+    return $ids;
+}
 
 /**
  * Evolution sometimes wraps a single object in `data` and sometimes sends
@@ -379,6 +397,12 @@ function handle_evolution_message(array $company, array $msg, string $raw): bool
     $action = $fromMe ? 'ai_reply_received' : 'message_received';
     $desc   = ($fromMe ? 'Outbound AI/bot ' : 'Inbound ') . $kind . ' ' . ($fromMe ? 'to ' : 'from ') . $waId . ' via Evolution';
     log_activity($companyId, null, $action, 'conversation', $conversationId, $desc);
+
+    // Mark this conversation for first-touch auto-reply consideration only
+    // if the message is INCOMING (not our own AI bot echo).
+    if (!$fromMe) {
+        evolution_touched_conversation_ids($conversationId);
+    }
     return true;
 }
 

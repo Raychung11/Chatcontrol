@@ -412,3 +412,212 @@ function ai_analyze_topics(array $company, array $messageSamples, int $periodDay
         'usage'  => $data['usage'] ?? null,
     ];
 }
+
+// =============================================================================
+// First-touch auto-reply
+// =============================================================================
+
+/**
+ * Default escalation phrases - if any of these appear in the customer's first
+ * message, we skip auto-reply and let a human handle it. Workspaces can
+ * override the list in Settings.
+ */
+const AI_DEFAULT_ESCALATION_PHRASES =
+    'human,agent,manager,representative,refund,complaint,cancel,broken,scam,'
+  . 'angry,disappointed,lawsuit,legal,sue,emergency,urgent,asap';
+
+/**
+ * Decide whether to auto-reply to a customer's first message and (if yes)
+ * generate the reply. Does NOT send - the caller (webhook) does that.
+ *
+ * Guards (any failing one short-circuits with a "skipped" reason):
+ *   1. ai_enabled + ai_first_touch both ON for this workspace
+ *   2. AI is properly configured (API key present)
+ *   3. Conversation has no assigned agent yet
+ *   4. Customer has sent exactly one message in this conversation
+ *      (so we don't re-fire on the 2nd/3rd inbound)
+ *   5. Customer's message doesn't contain any escalation phrase
+ *   6. Workspace's daily AI-send cap not reached
+ *
+ * @return array{ok:bool, reply_text?:string, skipped?:string, model?:string, usage?:array, error?:string}
+ */
+function ai_first_touch_decide(array $company, array $conversation, string $customerMessage): array
+{
+    if (empty($company['ai_enabled']) || empty($company['ai_first_touch'])) {
+        return ['ok' => false, 'skipped' => 'disabled'];
+    }
+    if (ai_api_key($company) === '') {
+        return ['ok' => false, 'skipped' => 'no_api_key'];
+    }
+    if (!empty($conversation['assigned_user_id'])) {
+        return ['ok' => false, 'skipped' => 'assigned'];
+    }
+
+    $db = aiserve_db();
+
+    // Guard 4 - this must be the customer's FIRST inbound on this conversation.
+    $check = $db->prepare(
+        'SELECT COUNT(*) FROM messages
+         WHERE conversation_id = ? AND direction = "incoming"'
+    );
+    $check->execute([(int)$conversation['id']]);
+    if ((int)$check->fetchColumn() !== 1) {
+        return ['ok' => false, 'skipped' => 'not_first_touch'];
+    }
+
+    // Guard 5 - escalation phrases.
+    $rawPhrases = trim((string)($company['ai_escalation_phrases'] ?? '')) ?: AI_DEFAULT_ESCALATION_PHRASES;
+    $phrases = array_filter(array_map(fn($p) => trim(mb_strtolower($p)), explode(',', $rawPhrases)));
+    $msgLower = mb_strtolower($customerMessage);
+    foreach ($phrases as $phrase) {
+        if ($phrase !== '' && str_contains($msgLower, $phrase)) {
+            return ['ok' => false, 'skipped' => 'escalation_phrase:' . $phrase];
+        }
+    }
+
+    // Guard 6 - daily cap.
+    $cap = (int)($company['ai_daily_cap'] ?? 200);
+    if ($cap > 0) {
+        $cnt = $db->prepare(
+            'SELECT COUNT(*) FROM messages
+             WHERE company_id = ? AND sender_type = "ai"
+               AND created_at >= CURDATE()'
+        );
+        $cnt->execute([(int)$company['id']]);
+        if ((int)$cnt->fetchColumn() >= $cap) {
+            return ['ok' => false, 'skipped' => 'daily_cap_' . $cap];
+        }
+    }
+
+    // Generate the reply via the same path the AI suggest button uses (so KB
+    // grounding + system prompt + prompt caching all apply).
+    $messages = [
+        ['direction' => 'incoming', 'message_text' => $customerMessage],
+    ];
+    $r = ai_suggest_reply($company, $conversation, $messages);
+    if (!$r['ok']) {
+        return ['ok' => false, 'skipped' => 'ai_error', 'error' => $r['error'] ?? 'unknown'];
+    }
+
+    return [
+        'ok'         => true,
+        'reply_text' => (string)$r['suggestion'],
+        'model'      => $r['model']  ?? null,
+        'usage'      => $r['usage']  ?? null,
+        'kb_titles'  => $r['kb_titles'] ?? [],
+    ];
+}
+
+/**
+ * Find or create the workspace's "AI replied" tag and attach it to a
+ * conversation. Used by ai_first_touch_handle so managers can filter the
+ * inbox to just AI-handled threads at a glance.
+ */
+function ai_first_touch_tag_conversation(int $companyId, int $conversationId): void
+{
+    $db = aiserve_db();
+    try {
+        $stmt = $db->prepare('SELECT id FROM conversation_tags WHERE company_id = ? AND name = ? LIMIT 1');
+        $stmt->execute([$companyId, 'AI replied']);
+        $tagId = (int)($stmt->fetchColumn() ?: 0);
+        if ($tagId === 0) {
+            $db->prepare('INSERT INTO conversation_tags (company_id, name, color) VALUES (?, ?, ?)')
+               ->execute([$companyId, 'AI replied', '#6f42c1']);
+            $tagId = (int)$db->lastInsertId();
+        }
+        $db->prepare('INSERT IGNORE INTO conversation_tag_map (conversation_id, tag_id) VALUES (?, ?)')
+           ->execute([$conversationId, $tagId]);
+    } catch (Throwable $e) {
+        error_log('[ai_first_touch_tag] ' . $e->getMessage());
+    }
+}
+
+/**
+ * Full first-touch flow:
+ *   - Reload company + conversation + last customer message from DB
+ *   - ai_first_touch_decide(); if skipped, log activity and return
+ *   - Send via the provider dispatch (Cloud / Evolution / Chatbot gateway)
+ *   - Persist the outgoing message row with sender_type='ai'
+ *   - Update conversation last_message_* + first_response_at
+ *   - Tag the conversation "AI replied"
+ *   - log_activity for every outcome
+ *
+ * Intended to be called from the webhook AFTER the customer's message has
+ * been written and AFTER fastcgi_finish_request() so the gateway isn't held
+ * waiting for the AI round-trip.
+ */
+function ai_first_touch_handle(array $company, int $conversationId): void
+{
+    require_once __DIR__ . '/provider.php';
+
+    try {
+        $db = aiserve_db();
+        $stmt = $db->prepare(
+            'SELECT c.*, ct.wa_id, ct.display_name, ct.profile_name
+             FROM conversations c
+             INNER JOIN contacts ct ON ct.id = c.contact_id
+             WHERE c.id = ? LIMIT 1'
+        );
+        $stmt->execute([$conversationId]);
+        $conv = $stmt->fetch();
+        if (!$conv) return;
+
+        $stmt = $db->prepare(
+            'SELECT message_text FROM messages
+             WHERE conversation_id = ? AND direction = "incoming"
+             ORDER BY id ASC LIMIT 1'
+        );
+        $stmt->execute([$conversationId]);
+        $customerMessage = (string)($stmt->fetchColumn() ?: '');
+        if ($customerMessage === '') return;
+
+        $decision = ai_first_touch_decide($company, $conv, $customerMessage);
+        if (!$decision['ok']) {
+            log_activity((int)$company['id'], null, 'ai_first_touch_skipped',
+                'conversation', $conversationId,
+                'reason=' . ($decision['skipped'] ?? '?')
+              . ($decision['error'] ?? '' ? ' err=' . mb_substr($decision['error'], 0, 100) : ''));
+            return;
+        }
+
+        $reply = $decision['reply_text'];
+        $send  = provider_send_text($company, (string)$conv['wa_id'], $reply);
+
+        if (!$send['ok']) {
+            log_activity((int)$company['id'], null, 'ai_first_touch_failed',
+                'conversation', $conversationId,
+                'send_error=' . mb_substr((string)($send['error'] ?? ''), 0, 200));
+            return;
+        }
+
+        // Persist + update conversation.
+        $db->prepare(
+            'INSERT INTO messages
+                (company_id, conversation_id, contact_id, sender_type,
+                 wa_message_id, direction, message_type, message_text,
+                 status, sent_at, created_at)
+             VALUES (?, ?, ?, "ai", ?, "outgoing", "text", ?, "sent", NOW(), NOW())'
+        )->execute([
+            (int)$company['id'], $conversationId, (int)$conv['contact_id'],
+            $send['wa_message_id'], $reply,
+        ]);
+
+        $db->prepare(
+            'UPDATE conversations
+             SET last_message_text  = ?,
+                 last_message_at    = NOW(),
+                 first_response_at  = COALESCE(first_response_at, NOW())
+             WHERE id = ?'
+        )->execute([mb_substr($reply, 0, 500), $conversationId]);
+
+        ai_first_touch_tag_conversation((int)$company['id'], $conversationId);
+
+        log_activity((int)$company['id'], null, 'ai_first_touch_sent',
+            'conversation', $conversationId,
+            'model=' . ($decision['model'] ?? '?')
+          . ' tokens=' . json_encode($decision['usage'] ?? [])
+          . ' kb=' . count($decision['kb_titles'] ?? []));
+    } catch (Throwable $e) {
+        error_log('[ai_first_touch_handle] ' . $e->getMessage());
+    }
+}

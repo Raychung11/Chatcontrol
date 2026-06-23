@@ -13,6 +13,9 @@ if (is_post()) {
     csrf_check();
     $enabled      = !empty($_POST['ai_enabled']) ? 1 : 0;
     $autoSuggest  = !empty($_POST['ai_auto_suggest']) ? 1 : 0;
+    $firstTouch   = !empty($_POST['ai_first_touch'])  ? 1 : 0;
+    $escalation   = trim((string)($_POST['ai_escalation_phrases'] ?? ''));
+    $dailyCap     = max(0, (int)($_POST['ai_daily_cap'] ?? 200));
     $model        = trim((string)($_POST['ai_model'] ?? AI_DEFAULT_MODEL)) ?: AI_DEFAULT_MODEL;
     $systemPrompt = trim((string)($_POST['ai_system_prompt'] ?? ''));
     $apiKey       = trim((string)($_POST['ai_api_key'] ?? ''));
@@ -27,9 +30,14 @@ if (is_post()) {
     $db->prepare(
         'UPDATE companies
          SET ai_enabled = ?, ai_provider = "claude", ai_model = ?,
-             ai_api_key = ?, ai_system_prompt = ?, ai_auto_suggest = ?
+             ai_api_key = ?, ai_system_prompt = ?, ai_auto_suggest = ?,
+             ai_first_touch = ?, ai_escalation_phrases = ?, ai_daily_cap = ?
          WHERE id = ?'
-    )->execute([$enabled, $model, $apiKey ?: null, $systemPrompt ?: null, $autoSuggest, $companyId]);
+    )->execute([
+        $enabled, $model, $apiKey ?: null, $systemPrompt ?: null, $autoSuggest,
+        $firstTouch, $escalation ?: null, $dailyCap,
+        $companyId,
+    ]);
 
     log_activity($companyId, (int)$current_user['id'], 'ai_settings_updated', 'company', $companyId);
     $msg = 'AI settings saved.';
@@ -65,6 +73,50 @@ layout_start($current_user, 'AI Settings', 'ai_settings');
       <input type="checkbox" name="ai_auto_suggest" value="1" <?= !empty($company['ai_auto_suggest']) ? 'checked' : '' ?>>
       <span><strong>Auto-suggest</strong> a draft as soon as a customer message arrives (still requires agent to click Send)</span>
     </label>
+
+    <h3>First-touch auto-reply</h3>
+    <p class="muted small">
+      When a NEW customer messages your number, the AI sends them an instant reply
+      (grounded in your Knowledge base) without waiting for a human. After the AI
+      responds once, your agents take over the conversation as normal.
+      <strong>If your provider has its own AI auto-reply enabled, turn theirs off first
+      so customers don't get duplicate replies.</strong>
+    </p>
+
+    <label class="check-row">
+      <input type="checkbox" name="ai_first_touch" value="1" <?= !empty($company['ai_first_touch']) ? 'checked' : '' ?>>
+      <span><strong>Enable first-touch auto-reply</strong> — AI handles only the very first message of each new conversation</span>
+    </label>
+
+    <label>Escalation phrases <small class="muted">(comma-separated)</small>
+      <textarea name="ai_escalation_phrases" rows="3"
+                placeholder="<?= e(AI_DEFAULT_ESCALATION_PHRASES) ?>"><?= e((string)($company['ai_escalation_phrases'] ?? '')) ?></textarea>
+      <small class="muted">
+        If a customer's first message contains any of these phrases, auto-reply is
+        skipped and a human handles it. Leave blank to use the built-in default
+        (shown as placeholder above).
+      </small>
+    </label>
+
+    <label>Daily cap <small class="muted">(per workspace, resets at midnight UTC)</small>
+      <input type="number" name="ai_daily_cap" min="0" max="9999" required
+             value="<?= (int)($company['ai_daily_cap'] ?? 200) ?>">
+      <small class="muted">Hard ceiling on AI-sent messages per day. Set 0 to disable the cap.</small>
+    </label>
+
+    <?php
+      $todayCount = (int)$db->query(
+        'SELECT COUNT(*) FROM messages WHERE company_id = ' . $companyId
+        . ' AND sender_type = "ai" AND created_at >= CURDATE()'
+      )->fetchColumn();
+      $cap = (int)($company['ai_daily_cap'] ?? 200);
+    ?>
+    <div class="alert alert-info">
+      <strong>Today so far:</strong> <?= $todayCount ?> AI-sent message<?= $todayCount === 1 ? '' : 's' ?>
+      <?php if ($cap > 0): ?>
+        of <?= $cap ?> cap (<?= $cap > 0 ? round($todayCount / $cap * 100) : 0 ?>%).
+      <?php endif; ?>
+    </div>
 
     <h3>Model</h3>
     <label>Model

@@ -12,6 +12,7 @@
 require_once __DIR__ . '/../inc/auth.php';
 require_once __DIR__ . '/../inc/provider.php';
 require_once __DIR__ . '/../inc/whatsapp_api.php';
+require_once __DIR__ . '/../inc/channels.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -66,9 +67,13 @@ $company = load_company_settings((int)$user['company_id']);
 if (!$company) {
     json_response(['ok' => false, 'error' => 'Company settings missing.'], 500);
 }
+$channel = channel_for_conversation($conv);
+if (!$channel) {
+    json_response(['ok' => false, 'error' => 'This conversation has no channel. Configure a channel in Admin → Channels.'], 500);
+}
 
 // 24-hour service window only applies on the official Cloud API.
-if (provider_enforces_24h_window($company) && !is_within_service_window($conv['service_window_expires_at'])) {
+if (provider_enforces_24h_window($channel) && !is_within_service_window($conv['service_window_expires_at'])) {
     json_response([
         'ok'    => false,
         'error' => '24-hour reply window expired. Please send an approved template message instead.',
@@ -79,18 +84,18 @@ if (provider_enforces_24h_window($company) && !is_within_service_window($conv['s
 // 1. Save pending outgoing message
 $ins = $db->prepare(
     'INSERT INTO messages
-        (company_id, conversation_id, contact_id, sender_type, sender_user_id,
+        (company_id, channel_id, conversation_id, contact_id, sender_type, sender_user_id,
          direction, message_type, message_text, status)
-     VALUES (?, ?, ?, "agent", ?, "outgoing", "text", ?, "pending")'
+     VALUES (?, ?, ?, ?, "agent", ?, "outgoing", "text", ?, "pending")'
 );
 $ins->execute([
-    (int)$user['company_id'], $conversationId, (int)$conv['contact_id'],
+    (int)$user['company_id'], (int)$channel['id'], $conversationId, (int)$conv['contact_id'],
     (int)$user['id'], $messageText,
 ]);
 $messageRowId = (int)$db->lastInsertId();
 
 // 2. Call provider (Meta Cloud API or Evolution)
-$result = provider_send_text($company, (string)$conv['wa_id'], $messageText);
+$result = provider_send_text($channel, (string)$conv['wa_id'], $messageText);
 
 // 3. Persist outcome
 if ($result['ok']) {

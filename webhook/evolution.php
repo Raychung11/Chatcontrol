@@ -21,13 +21,20 @@ require_once __DIR__ . '/../inc/evolution_api.php';
 
 header('Cache-Control: no-store');
 
-// Multi-tenant: ?company=<slug> picks the tenant. Falls back to
-// ACTIVE_COMPANY_ID for legacy single-tenant deployments.
-$company = resolve_company_for_webhook();
+require_once __DIR__ . '/../inc/channels.php';
+$channel = resolve_channel_for_webhook();
+if (!$channel) {
+    http_response_code(404);
+    error_log('[AiServe evolution] Unknown channel/tenant: ch=' . ($_GET['ch'] ?? '(none)')
+              . ' company=' . ($_GET['company'] ?? '(none)'));
+    exit('Unknown channel.');
+}
+$stmt = aiserve_db()->prepare('SELECT * FROM companies WHERE id = ? LIMIT 1');
+$stmt->execute([(int)$channel['company_id']]);
+$company = $stmt->fetch();
 if (!$company) {
     http_response_code(404);
-    error_log('[AiServe evolution] Unknown tenant: company=' . ($_GET['company'] ?? '(none)'));
-    exit('Unknown tenant.');
+    exit('Unknown company.');
 }
 
 // Auth - either matching apikey header or matching ?token query
@@ -76,7 +83,7 @@ if (!is_array($payload)) {
             case 'MESSAGES_UPSERT':
                 $rows = evolution_extract_messages($payload);
                 foreach ($rows as $msg) {
-                    if (handle_evolution_message($company, $msg, $rawBody)) {
+                    if (handle_evolution_message($company, $channel, $msg, $rawBody)) {
                         $messageCount++;
                     }
                 }
@@ -163,7 +170,7 @@ function evolution_extract_messages(array $payload): array
 /**
  * @return bool true if the row ended up persisted (incoming customer msg).
  */
-function handle_evolution_message(array $company, array $msg, string $raw): bool
+function handle_evolution_message(array $company, array $channel, array $msg, string $raw): bool
 {
     $key            = $msg['key'] ?? [];
     $remoteJid      = (string)($key['remoteJid']      ?? '');
@@ -306,14 +313,14 @@ function handle_evolution_message(array $company, array $msg, string $raw): bool
         $firstResp  = $fromMe ? $messageDate : null;
         $ins = $db->prepare(
             'INSERT INTO conversations
-                (company_id, contact_id, department_id, assigned_user_id, status,
+                (company_id, channel_id, contact_id, department_id, assigned_user_id, status,
                  last_message_text, last_message_at,
                  last_customer_message_at, service_window_expires_at,
                  unread_count, first_response_at)
-             VALUES (?, ?, ?, ?, "open", ?, ?, ?, ?, ?, ?)'
+             VALUES (?, ?, ?, ?, ?, "open", ?, ?, ?, ?, ?, ?)'
         );
         $ins->execute([
-            $companyId, $contactId,
+            $companyId, (int)$channel['id'], $contactId,
             $route['department_id'], $route['assigned_user_id'],
             $previewText, $messageDate, $custMsgAt, $windowExp,
             $unread, $firstResp,
@@ -377,13 +384,13 @@ function handle_evolution_message(array $company, array $msg, string $raw): bool
     try {
         $ins = $db->prepare(
             'INSERT INTO messages
-                (company_id, conversation_id, contact_id, sender_type, wa_message_id, direction,
+                (company_id, channel_id, conversation_id, contact_id, sender_type, wa_message_id, direction,
                  message_type, message_text, media_mime_type, media_filename, media_local_path,
                  raw_payload, status, sent_at, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $ins->execute([
-            $companyId, $conversationId, $contactId,
+            $companyId, (int)$channel['id'], $conversationId, $contactId,
             $senderType, $waMsgId, $direction,
             $kind, $body,
             $mediaMime, $mediaName, $mediaLocalPath,

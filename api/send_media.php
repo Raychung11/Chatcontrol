@@ -14,6 +14,7 @@
 require_once __DIR__ . '/../inc/auth.php';
 require_once __DIR__ . '/../inc/provider.php';
 require_once __DIR__ . '/../inc/whatsapp_api.php';
+require_once __DIR__ . '/../inc/channels.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -60,8 +61,12 @@ $company = load_company_settings((int)$user['company_id']);
 if (!$company) {
     json_response(['ok' => false, 'error' => 'Company settings missing.'], 500);
 }
+$channel = channel_for_conversation($conv);
+if (!$channel) {
+    json_response(['ok' => false, 'error' => 'This conversation has no channel.'], 500);
+}
 
-if (provider_enforces_24h_window($company) && !is_within_service_window($conv['service_window_expires_at'])) {
+if (provider_enforces_24h_window($channel) && !is_within_service_window($conv['service_window_expires_at'])) {
     json_response(['ok' => false, 'error' => '24-hour reply window expired. Send a template instead.', 'window_expired' => true], 400);
 }
 
@@ -78,12 +83,12 @@ if ($localPath !== '') {
 // Persist pending message row first
 $ins = $db->prepare(
     'INSERT INTO messages
-        (company_id, conversation_id, contact_id, sender_type, sender_user_id,
+        (company_id, channel_id, conversation_id, contact_id, sender_type, sender_user_id,
          direction, message_type, message_text, media_mime_type, media_filename, media_id, media_local_path, status)
-     VALUES (?, ?, ?, "agent", ?, "outgoing", ?, ?, ?, ?, ?, ?, "pending")'
+     VALUES (?, ?, ?, ?, "agent", ?, "outgoing", ?, ?, ?, ?, ?, ?, "pending")'
 );
 $ins->execute([
-    (int)$user['company_id'], $conversationId, (int)$conv['contact_id'],
+    (int)$user['company_id'], (int)$channel['id'], $conversationId, (int)$conv['contact_id'],
     (int)$user['id'], $kind,
     $caption !== '' ? $caption : ('[' . $kind . ']' . ($filename ? ' ' . $filename : '')),
     $mime, $filename, $mediaId, $safeLocalPath,
@@ -91,18 +96,18 @@ $ins->execute([
 $messageRowId = (int)$db->lastInsertId();
 
 // Cloud API needs Meta's media_id. Evolution and AiServe Chatbot need the local file.
-$mediaRef = (provider_name($company) === 'cloud_api')
+$mediaRef = (provider_name($channel) === 'cloud_api')
     ? $mediaId
     : ($safeLocalPath ?: '');
 
 if ($mediaRef === '') {
     $db->prepare('UPDATE messages SET status="failed", error_message=? WHERE id=?')
-       ->execute(['Missing media reference for provider ' . provider_name($company), $messageRowId]);
+       ->execute(['Missing media reference for provider ' . provider_name($channel), $messageRowId]);
     json_response(['ok' => false, 'error' => 'Missing media reference.'], 400);
 }
 
 $result = provider_send_media(
-    $company, (string)$conv['wa_id'], $kind, $mediaRef,
+    $channel, (string)$conv['wa_id'], $kind, $mediaRef,
     $caption !== '' ? $caption : null, $filename ?: null, $mime ?: null
 );
 

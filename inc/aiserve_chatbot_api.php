@@ -105,7 +105,7 @@ function chatbot_send_media(array $company, string $waId, string $kind, string $
             'http_code' => 400, 'raw' => null,
         ];
     }
-    $publicUrl = chatbot_public_media_url($company, $localPath);
+    $publicUrl = chatbot_public_media_url($company, $localPath); // $company here is actually the channel
     if ($publicUrl === null) {
         return [
             'ok' => false, 'wa_message_id' => null,
@@ -160,35 +160,41 @@ function chatbot_not_configured_error(): array
 
 /**
  * Build a signed public URL to a local media file under /uploads.
- * The signature uses the company's webhook_verify_token as the HMAC key
- * so an external caller (the gateway) can fetch the file without auth.
+ * The signature uses the channel's webhook_token as the HMAC key so an
+ * external caller (the gateway) can fetch the file without auth.
  *
- * Returns null if there's no signing secret configured.
+ * The first argument is a CHANNEL row (the chatbot dispatch already passes
+ * the channel, not the company). Channel.company_id resolves the uploads
+ * subdirectory.
+ *
+ * Returns null if no signing secret is configured.
  */
-function chatbot_public_media_url(array $company, string $localPath): ?string
+function chatbot_public_media_url(array $channel, string $localPath): ?string
 {
-    $secret = (string)($company['webhook_verify_token'] ?? '');
+    $secret = (string)($channel['webhook_token'] ?? '');
     if ($secret === '') {
         return null;
     }
-    $companyId = (int)$company['id'];
+    $companyId = (int)($channel['company_id'] ?? 0);
+    $channelId = (int)($channel['id']         ?? 0);
+    if ($companyId <= 0 || $channelId <= 0) return null;
+
     $uploadsDir = realpath(__DIR__ . '/../uploads');
     $real       = realpath($localPath);
     if (!$uploadsDir || !$real || !str_starts_with($real, $uploadsDir . '/')) {
         return null;
     }
     $rel = substr($real, strlen($uploadsDir) + 1);
-    // Strip leading "{company_id}/" prefix for the public URL.
     $prefix = $companyId . '/';
     if (!str_starts_with($rel, $prefix)) {
         return null;
     }
     $relForCompany = substr($rel, strlen($prefix));
-    $payload = $companyId . ':' . $relForCompany;
+    $payload = $channelId . ':' . $relForCompany;
     $sig = hash_hmac('sha256', $payload, $secret);
 
     $base = APP_BASE_URL ?: ((!empty($_SERVER['HTTPS']) ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? ''));
-    return $base . '/api/media_public.php?c=' . $companyId
+    return $base . '/api/media_public.php?ch=' . $channelId
                  . '&p=' . rawurlencode($relForCompany)
                  . '&sig=' . $sig;
 }

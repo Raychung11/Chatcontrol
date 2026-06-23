@@ -13,6 +13,7 @@
 require_once __DIR__ . '/../inc/auth.php';
 require_once __DIR__ . '/../inc/provider.php';
 require_once __DIR__ . '/../inc/whatsapp_api.php';
+require_once __DIR__ . '/../inc/channels.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -54,6 +55,13 @@ $company = load_company_settings((int)$user['company_id']);
 if (!$company) {
     json_response(['ok' => false, 'error' => 'Company settings missing.'], 500);
 }
+// The Meta upload step needs a specific channel's credentials. Caller can
+// pass channel_id in the POST; otherwise use the workspace's default.
+$channelId = (int)($_POST['channel_id'] ?? 0);
+$channel = $channelId > 0 ? channel_by_id($channelId) : channel_default_for_company((int)$user['company_id']);
+if (!$channel || (int)$channel['company_id'] !== (int)$user['company_id']) {
+    json_response(['ok' => false, 'error' => 'No channel configured for this workspace.'], 500);
+}
 
 // 1. Move to /uploads/{company_id}/agent_outgoing/
 $baseDir = __DIR__ . '/../uploads/' . (int)$user['company_id'] . '/agent_outgoing';
@@ -70,7 +78,7 @@ if (!move_uploaded_file($tmp, $dest)) {
 @chmod($dest, 0640);
 
 // 2. Upload to provider (no-op for Evolution; Meta requires it)
-$result = provider_upload_media($company, $dest, $mime);
+$result = provider_upload_media($channel, $dest, $mime);
 if (!$result['ok']) {
     @unlink($dest);
     json_response(['ok' => false, 'error' => $result['error'] ?: 'Upload failed.'], 502);
@@ -92,7 +100,8 @@ json_response([
     'preview_url' => $previewUrl,
     'local_path'  => $dest,
     'rel_path'    => 'company-' . (int)$user['company_id'] . '/agent_outgoing/' . $filename,
-    'provider'    => provider_name($company),
+    'provider'    => provider_name($channel),
+    'channel_id'  => (int)$channel['id'],
 ]);
 
 function media_kind_from_mime(string $mime): ?string

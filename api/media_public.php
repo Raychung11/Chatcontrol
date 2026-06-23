@@ -1,24 +1,24 @@
 <?php
 /**
- * GET /api/media_public.php?c=<company_id>&p=<rel_path>&sig=<hmac_sha256>
+ * GET /api/media_public.php?ch=<channel_id>&p=<rel_path>&sig=<hmac_sha256>
+ *  (or legacy: ?c=<company_id>&p=<rel_path>&sig=<hmac_sha256>)
  *
  * Unauthenticated, HMAC-signed file serving. Used by the AiServe Chatbot
  * gateway to fetch outbound media files (its sendMessage endpoint takes a
  * mediaUrl, not a file upload, so we have to expose the bytes by URL).
  *
- * The signature is computed by chatbot_public_media_url() in
- * inc/aiserve_chatbot_api.php using the company's webhook_verify_token as
- * the HMAC key. Anyone with the URL can fetch the file, so the URL is
- * effectively a bearer token - share carefully.
+ * Signature secret is the channel's webhook_token (new) or the company's
+ * webhook_verify_token (legacy URLs in flight at deploy time).
  */
 
 require_once __DIR__ . '/../inc/helpers.php';
 
-$companyId = (int)($_GET['c'] ?? 0);
-$rel       = (string)($_GET['p'] ?? '');
-$sig       = (string)($_GET['sig'] ?? '');
+$channelId = (int)($_GET['ch'] ?? 0);
+$companyIdLegacy = (int)($_GET['c'] ?? 0);
+$rel = (string)($_GET['p'] ?? '');
+$sig = (string)($_GET['sig'] ?? '');
 
-if ($companyId <= 0 || $rel === '' || $sig === '' || strlen($sig) !== 64) {
+if (($channelId <= 0 && $companyIdLegacy <= 0) || $rel === '' || strlen($sig) !== 64) {
     http_response_code(400);
     exit('Bad request.');
 }
@@ -27,15 +27,31 @@ if (str_contains($rel, '..') || str_contains($rel, '\\')) {
     exit('Bad path.');
 }
 
-$stmt = aiserve_db()->prepare('SELECT webhook_verify_token FROM companies WHERE id = ? LIMIT 1');
-$stmt->execute([$companyId]);
-$secret = (string)($stmt->fetchColumn() ?: '');
-if ($secret === '') {
+$db = aiserve_db();
+$secret    = '';
+$companyId = 0;
+
+if ($channelId > 0) {
+    $stmt = $db->prepare('SELECT company_id, webhook_token FROM channels WHERE id = ? LIMIT 1');
+    $stmt->execute([$channelId]);
+    $row = $stmt->fetch();
+    if ($row) {
+        $companyId = (int)$row['company_id'];
+        $secret    = (string)$row['webhook_token'];
+    }
+    $expected = hash_hmac('sha256', $channelId . ':' . $rel, $secret);
+} else {
+    $companyId = $companyIdLegacy;
+    $stmt = $db->prepare('SELECT webhook_verify_token FROM companies WHERE id = ? LIMIT 1');
+    $stmt->execute([$companyId]);
+    $secret = (string)($stmt->fetchColumn() ?: '');
+    $expected = hash_hmac('sha256', $companyId . ':' . $rel, $secret);
+}
+
+if ($secret === '' || $companyId <= 0) {
     http_response_code(403);
     exit('Forbidden.');
 }
-
-$expected = hash_hmac('sha256', $companyId . ':' . $rel, $secret);
 if (!hash_equals($expected, $sig)) {
     http_response_code(403);
     exit('Bad signature.');

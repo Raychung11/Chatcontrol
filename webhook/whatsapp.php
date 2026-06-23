@@ -15,13 +15,22 @@ require_once __DIR__ . '/../inc/whatsapp_api.php';
 
 header('Cache-Control: no-store');
 
-// Multi-tenant: ?company=<slug> picks the tenant. Falls back to
-// ACTIVE_COMPANY_ID for legacy single-tenant deployments.
-$company = resolve_company_for_webhook();
+// Multi-channel: ?ch=<token> picks one channel. Falls back to a workspace's
+// default channel via the legacy ?company=<slug>+token routing.
+require_once __DIR__ . '/../inc/channels.php';
+$channel = resolve_channel_for_webhook();
+if (!$channel) {
+    http_response_code(404);
+    error_log('[AiServe webhook] Unknown channel/tenant: ch=' . ($_GET['ch'] ?? '(none)')
+              . ' company=' . ($_GET['company'] ?? '(none)'));
+    exit('Unknown channel.');
+}
+$stmt = aiserve_db()->prepare('SELECT * FROM companies WHERE id = ? LIMIT 1');
+$stmt->execute([(int)$channel['company_id']]);
+$company = $stmt->fetch();
 if (!$company) {
     http_response_code(404);
-    error_log('[AiServe webhook] Unknown tenant: company=' . ($_GET['company'] ?? '(none)'));
-    exit('Unknown tenant.');
+    exit('Unknown company.');
 }
 
 // -------------------- GET verification --------------------
@@ -69,7 +78,7 @@ if (!is_array($payload)) {
     }
 
     try {
-        process_webhook_payload($company, $payload, $rawBody);
+        process_webhook_payload($company, $channel, $payload, $rawBody);
     } catch (Throwable $e) {
         $errorText = mb_substr('Exception: ' . $e->getMessage(), 0, 500);
         error_log('[AiServe webhook] ' . $errorText);
@@ -123,7 +132,7 @@ function webhook_touched_conversation_ids(?int $append = null): array
     return $ids;
 }
 
-function process_webhook_payload(array $company, array $payload, string $raw): void
+function process_webhook_payload(array $company, array $channel, array $payload, string $raw): void
 {
     if (($payload['object'] ?? '') !== 'whatsapp_business_account') {
         error_log('[AiServe webhook] Unexpected object: ' . ($payload['object'] ?? ''));
@@ -135,7 +144,7 @@ function process_webhook_payload(array $company, array $payload, string $raw): v
             $value = $change['value'] ?? [];
             if (!empty($value['messages'])) {
                 foreach ($value['messages'] as $msg) {
-                    handle_incoming_message($company, $value, $msg, $raw);
+                    handle_incoming_message($company, $channel, $value, $msg, $raw);
                 }
             }
             if (!empty($value['statuses'])) {
@@ -147,7 +156,7 @@ function process_webhook_payload(array $company, array $payload, string $raw): v
     }
 }
 
-function handle_incoming_message(array $company, array $value, array $msg, string $raw): void
+function handle_incoming_message(array $company, array $channel, array $value, array $msg, string $raw): void
 {
     $waMessageId = (string)($msg['id'] ?? '');
     if ($waMessageId === '') {
@@ -271,13 +280,13 @@ function handle_incoming_message(array $company, array $value, array $msg, strin
         $route = apply_routing_rules($companyId, $body);
         $ins = $db->prepare(
             'INSERT INTO conversations
-                (company_id, contact_id, department_id, assigned_user_id, status,
+                (company_id, channel_id, contact_id, department_id, assigned_user_id, status,
                  last_message_text, last_message_at,
                  last_customer_message_at, service_window_expires_at, unread_count)
-             VALUES (?, ?, ?, ?, "open", ?, ?, ?, ?, 1)'
+             VALUES (?, ?, ?, ?, ?, "open", ?, ?, ?, ?, 1)'
         );
         $ins->execute([
-            $companyId, $contactId,
+            $companyId, (int)$channel['id'], $contactId,
             $route['department_id'], $route['assigned_user_id'],
             $previewText, $messageDate, $messageDate, $expiryDate,
         ]);
@@ -308,12 +317,12 @@ function handle_incoming_message(array $company, array $value, array $msg, strin
     try {
         $ins = $db->prepare(
             'INSERT INTO messages
-                (company_id, conversation_id, contact_id, sender_type, wa_message_id, direction,
+                (company_id, channel_id, conversation_id, contact_id, sender_type, wa_message_id, direction,
                  message_type, message_text, media_mime_type, media_filename, media_id, raw_payload, status, created_at)
-             VALUES (?, ?, ?, "customer", ?, "incoming", ?, ?, ?, ?, ?, ?, "received", ?)'
+             VALUES (?, ?, ?, ?, "customer", ?, "incoming", ?, ?, ?, ?, ?, ?, "received", ?)'
         );
         $ins->execute([
-            $companyId, $conversationId, $contactId,
+            $companyId, (int)$channel['id'], $conversationId, $contactId,
             $waMessageId, $msgType, $body,
             $mediaMime, $mediaFilename, $mediaId, $raw,
             $messageDate,

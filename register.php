@@ -98,6 +98,14 @@ if (is_post()) {
                 ]);
                 $userId = (int)$db->lastInsertId();
 
+                // Default channel so the workspace has something to send through.
+                require_once __DIR__ . '/inc/channels.php';
+                $token = channel_generate_webhook_token();
+                $db->prepare(
+                    'INSERT INTO channels (company_id, name, provider, webhook_token, is_default, status)
+                     VALUES (?, ?, "cloud_api", ?, 1, "active")'
+                )->execute([$companyId, $old['company'] . ' default', $token]);
+
                 $db->commit();
 
                 log_activity($companyId, $userId, 'company_registered', 'company', $companyId,

@@ -549,6 +549,7 @@ function ai_first_touch_tag_conversation(int $companyId, int $conversationId): v
 function ai_first_touch_handle(array $company, int $conversationId): void
 {
     require_once __DIR__ . '/provider.php';
+    require_once __DIR__ . '/channels.php';
 
     try {
         $db = aiserve_db();
@@ -581,7 +582,13 @@ function ai_first_touch_handle(array $company, int $conversationId): void
         }
 
         $reply = $decision['reply_text'];
-        $send  = provider_send_text($company, (string)$conv['wa_id'], $reply);
+        $channel = channel_for_conversation($conv);
+        if (!$channel) {
+            log_activity((int)$company['id'], null, 'ai_first_touch_failed',
+                'conversation', $conversationId, 'no_channel');
+            return;
+        }
+        $send  = provider_send_text($channel, (string)$conv['wa_id'], $reply);
 
         if (!$send['ok']) {
             log_activity((int)$company['id'], null, 'ai_first_touch_failed',
@@ -593,12 +600,12 @@ function ai_first_touch_handle(array $company, int $conversationId): void
         // Persist + update conversation.
         $db->prepare(
             'INSERT INTO messages
-                (company_id, conversation_id, contact_id, sender_type,
+                (company_id, channel_id, conversation_id, contact_id, sender_type,
                  wa_message_id, direction, message_type, message_text,
                  status, sent_at, created_at)
-             VALUES (?, ?, ?, "ai", ?, "outgoing", "text", ?, "sent", NOW(), NOW())'
+             VALUES (?, ?, ?, ?, "ai", ?, "outgoing", "text", ?, "sent", NOW(), NOW())'
         )->execute([
-            (int)$company['id'], $conversationId, (int)$conv['contact_id'],
+            (int)$company['id'], (int)$channel['id'], $conversationId, (int)$conv['contact_id'],
             $send['wa_message_id'], $reply,
         ]);
 

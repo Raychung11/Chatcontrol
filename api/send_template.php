@@ -15,6 +15,7 @@
 require_once __DIR__ . '/../inc/auth.php';
 require_once __DIR__ . '/../inc/provider.php';
 require_once __DIR__ . '/../inc/whatsapp_api.php';
+require_once __DIR__ . '/../inc/channels.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -75,28 +76,32 @@ $company = load_company_settings((int)$user['company_id']);
 if (!$company) {
     json_response(['ok' => false, 'error' => 'Company settings missing.'], 500);
 }
+$channel = channel_for_conversation($conv);
+if (!$channel) {
+    json_response(['ok' => false, 'error' => 'This conversation has no channel.'], 500);
+}
 
 // Persist pending row
 $ins = $db->prepare(
     'INSERT INTO messages
-       (company_id, conversation_id, contact_id, sender_type, sender_user_id,
+       (company_id, channel_id, conversation_id, contact_id, sender_type, sender_user_id,
         direction, message_type, template_name, message_text, status)
-     VALUES (?, ?, ?, "agent", ?, "outgoing", "template", ?, ?, "pending")'
+     VALUES (?, ?, ?, ?, "agent", ?, "outgoing", "template", ?, ?, "pending")'
 );
 $ins->execute([
-    (int)$user['company_id'], $conversationId, (int)$conv['contact_id'],
+    (int)$user['company_id'], (int)$channel['id'], $conversationId, (int)$conv['contact_id'],
     (int)$user['id'], $tpl['template_name'], $preview,
 ]);
 $messageRowId = (int)$db->lastInsertId();
 
-if (!provider_supports_templates($company)) {
+if (!provider_supports_templates($channel)) {
     $db->prepare('UPDATE messages SET status="failed", error_message=? WHERE id=?')
        ->execute(['Templates only supported on Cloud API provider.', $messageRowId]);
     json_response(['ok' => false, 'error' => 'Templates are only available with the Meta Cloud API provider.'], 400);
 }
 
 $result = provider_send_template(
-    $company,
+    $channel,
     (string)$conv['wa_id'],
     (string)$tpl['template_name'],
     (string)$tpl['language'],

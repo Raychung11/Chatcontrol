@@ -74,11 +74,13 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
     }
 
     $sql = 'SELECT c.*, ct.display_name, ct.profile_name, ct.phone AS contact_phone, ct.wa_id,
-                   u.name AS agent_name, d.name AS department_name
+                   u.name AS agent_name, d.name AS department_name,
+                   ch.name AS channel_name, ch.display_phone AS channel_phone
             FROM conversations c
             INNER JOIN contacts ct ON ct.id = c.contact_id
             LEFT  JOIN users    u  ON u.id  = c.assigned_user_id
             LEFT  JOIN departments d ON d.id = c.department_id
+            LEFT  JOIN channels  ch ON ch.id = c.channel_id
             WHERE ' . implode(' AND ', $where) . '
             ORDER BY (c.status = "closed") ASC, COALESCE(c.last_message_at, c.created_at) DESC
             LIMIT 200';
@@ -148,6 +150,9 @@ function inbox_row_html(array $c, array $tags): string
     $html .= '<span class="row-meta">' . e($c['agent_name'] ? 'Assigned: ' . $c['agent_name'] : 'Unassigned') . '</span>';
     if (!empty($c['department_name'])) {
         $html .= '<span class="row-meta">· ' . e($c['department_name']) . '</span>';
+    }
+    if (!empty($c['channel_name'])) {
+        $html .= '<span class="row-meta">📞 ' . e($c['channel_name']) . '</span>';
     }
     foreach ($tags as $tg) {
         $html .= '<span class="tag-chip" style="background: ' . e($tg['color']) . '">' . e($tg['name']) . '</span>';

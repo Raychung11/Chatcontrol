@@ -118,6 +118,10 @@ $year = date('Y');
       <h3>📚 Knowledge base</h3>
       <p>Upload PDFs, Word docs, or paste your FAQs. The AI grounds answers in your own content — pricing, policies, hours. Citations shown on every draft.</p>
     </div>
+    <div class="feature-card feature-ai">
+      <h3>📊 Topics analytics</h3>
+      <p>AI groups conversations by theme. See exactly what customers ask about most, with example messages and one-click tagging.</p>
+    </div>
     <div class="feature-card">
       <h3>Live shared inbox</h3>
       <p>Auto-refreshes every 5 seconds. New messages appear without reload, delivery ticks update in place, sound alerts on new inbound.</p>

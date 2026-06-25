@@ -628,3 +628,329 @@ function ai_first_touch_handle(array $company, int $conversationId): void
         error_log('[ai_first_touch_handle] ' . $e->getMessage());
     }
 }
+
+// =============================================================================
+// Always-on AI auto-reply + business hours mode (Phase 12)
+// =============================================================================
+
+/**
+ * Default schedule used when business hours are enabled but the workspace
+ * hasn't customised the JSON yet. Mon-Fri 9-18, weekend closed.
+ */
+const BUSINESS_HOURS_DEFAULT = [
+    'mon' => ['09:00', '18:00'],
+    'tue' => ['09:00', '18:00'],
+    'wed' => ['09:00', '18:00'],
+    'thu' => ['09:00', '18:00'],
+    'fri' => ['09:00', '18:00'],
+    'sat' => null,
+    'sun' => null,
+];
+
+const OFF_HOURS_DEFAULT_MESSAGE =
+    "Thanks for reaching out! We're currently outside our service hours. "
+  . "Our team will reply as soon as we're back. For urgent matters, please "
+  . "include the word \"urgent\" in your message and a human will be paged.";
+
+function business_hours_schedule(array $company): array
+{
+    $raw = trim((string)($company['business_hours_schedule'] ?? ''));
+    if ($raw === '') return BUSINESS_HOURS_DEFAULT;
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) return BUSINESS_HOURS_DEFAULT;
+    // Fill missing days with null so day lookup never KeyErrors.
+    foreach (['mon','tue','wed','thu','fri','sat','sun'] as $d) {
+        if (!array_key_exists($d, $decoded)) $decoded[$d] = null;
+    }
+    return $decoded;
+}
+
+/**
+ * Are we currently inside the workspace's business hours?
+ */
+function is_inside_business_hours(array $company, ?int $now = null): bool
+{
+    if (empty($company['business_hours_enabled'])) return true;  // not enforced = always "open"
+    $tz   = (string)($company['business_hours_timezone'] ?? '') ?: ((string)($company['timezone'] ?? 'Asia/Kuala_Lumpur'));
+    try {
+        $dt  = new DateTime('@' . ($now ?? time()));
+        $dt->setTimezone(new DateTimeZone($tz));
+    } catch (Throwable $e) {
+        return true;  // bad TZ -> treat as open rather than blocking everyone
+    }
+    $dayKey = strtolower($dt->format('D'));  // Mon, Tue...
+    $dayKey = substr($dayKey, 0, 3);
+    $sched  = business_hours_schedule($company);
+    $window = $sched[$dayKey] ?? null;
+    if (!is_array($window) || count($window) !== 2) return false;
+    [$openStr, $closeStr] = $window;
+    $hm = $dt->format('H:i');
+    return ($hm >= $openStr) && ($hm < $closeStr);
+}
+
+/**
+ * Has the workspace already sent its off-hours notice on this conversation
+ * within the last 12 hours? Used so we don't ping the customer repeatedly
+ * if they message multiple times overnight.
+ */
+function off_hours_message_already_sent(int $conversationId): bool
+{
+    $stmt = aiserve_db()->prepare(
+        'SELECT COUNT(*) FROM messages
+         WHERE conversation_id = ?
+           AND sender_type = "system"
+           AND created_at > NOW() - INTERVAL 12 HOUR'
+    );
+    $stmt->execute([$conversationId]);
+    return (int)$stmt->fetchColumn() > 0;
+}
+
+/**
+ * Find-or-create the tag we slap on conversations that received an
+ * off-hours reply.
+ */
+function off_hours_tag_conversation(int $companyId, int $conversationId): void
+{
+    $db = aiserve_db();
+    try {
+        $stmt = $db->prepare('SELECT id FROM conversation_tags WHERE company_id = ? AND name = ? LIMIT 1');
+        $stmt->execute([$companyId, 'Out of hours']);
+        $tagId = (int)($stmt->fetchColumn() ?: 0);
+        if ($tagId === 0) {
+            $db->prepare('INSERT INTO conversation_tags (company_id, name, color) VALUES (?, ?, ?)')
+               ->execute([$companyId, 'Out of hours', '#f0ad4e']);
+            $tagId = (int)$db->lastInsertId();
+        }
+        $db->prepare('INSERT IGNORE INTO conversation_tag_map (conversation_id, tag_id) VALUES (?, ?)')
+           ->execute([$conversationId, $tagId]);
+    } catch (Throwable $e) {
+        error_log('[off_hours_tag] ' . $e->getMessage());
+    }
+}
+
+/**
+ * Send the workspace's off-hours templated message via the conversation's
+ * channel. Persists as sender_type='system' so it never counts toward the
+ * AI daily cap or shows the 🤖 bubble.
+ */
+function send_off_hours_message(array $company, int $conversationId): void
+{
+    require_once __DIR__ . '/provider.php';
+    require_once __DIR__ . '/channels.php';
+
+    try {
+        $db = aiserve_db();
+        $stmt = $db->prepare(
+            'SELECT c.*, ct.wa_id
+             FROM conversations c
+             INNER JOIN contacts ct ON ct.id = c.contact_id
+             WHERE c.id = ? LIMIT 1'
+        );
+        $stmt->execute([$conversationId]);
+        $conv = $stmt->fetch();
+        if (!$conv) return;
+
+        $channel = channel_for_conversation($conv);
+        if (!$channel) return;
+
+        $msg = trim((string)($company['off_hours_message'] ?? '')) ?: OFF_HOURS_DEFAULT_MESSAGE;
+
+        $send = provider_send_text($channel, (string)$conv['wa_id'], $msg);
+        if (!$send['ok']) {
+            log_activity((int)$company['id'], null, 'off_hours_failed',
+                'conversation', $conversationId,
+                'send_error=' . mb_substr((string)($send['error'] ?? ''), 0, 200));
+            return;
+        }
+
+        $db->prepare(
+            'INSERT INTO messages
+                (company_id, channel_id, conversation_id, contact_id, sender_type,
+                 wa_message_id, direction, message_type, message_text,
+                 status, sent_at, created_at)
+             VALUES (?, ?, ?, ?, "system", ?, "outgoing", "text", ?, "sent", NOW(), NOW())'
+        )->execute([
+            (int)$company['id'], (int)$channel['id'], $conversationId, (int)$conv['contact_id'],
+            $send['wa_message_id'], $msg,
+        ]);
+
+        // Park as pending so agents see "waiting for office hours" at a glance.
+        $db->prepare(
+            'UPDATE conversations
+             SET status = IF(status = "open", "pending", status),
+                 last_message_text = ?, last_message_at = NOW()
+             WHERE id = ?'
+        )->execute([mb_substr($msg, 0, 500), $conversationId]);
+
+        off_hours_tag_conversation((int)$company['id'], $conversationId);
+
+        log_activity((int)$company['id'], null, 'off_hours_sent',
+            'conversation', $conversationId, 'len=' . mb_strlen($msg));
+    } catch (Throwable $e) {
+        error_log('[send_off_hours_message] ' . $e->getMessage());
+    }
+}
+
+/**
+ * Always-on AI: handle ANY customer message (not just the first), as long as
+ * no human has taken the conversation. Reuses the first-touch decision
+ * helper but skips the "exactly 1 inbound" guard.
+ */
+function ai_always_on_handle(array $company, int $conversationId): void
+{
+    require_once __DIR__ . '/provider.php';
+    require_once __DIR__ . '/channels.php';
+
+    try {
+        $db = aiserve_db();
+        $stmt = $db->prepare(
+            'SELECT c.*, ct.wa_id, ct.display_name, ct.profile_name
+             FROM conversations c
+             INNER JOIN contacts ct ON ct.id = c.contact_id
+             WHERE c.id = ? LIMIT 1'
+        );
+        $stmt->execute([$conversationId]);
+        $conv = $stmt->fetch();
+        if (!$conv) return;
+
+        // Pull recent message context (last 20) just like ai_suggest does.
+        $mstmt = $db->prepare(
+            'SELECT direction, sender_type, message_text, message_type, created_at
+             FROM messages
+             WHERE conversation_id = ?
+               AND message_text IS NOT NULL AND message_text <> ""
+             ORDER BY id DESC LIMIT 20'
+        );
+        $mstmt->execute([$conversationId]);
+        $history = array_reverse($mstmt->fetchAll());
+        if (!$history) return;
+
+        $lastInbound = '';
+        foreach (array_reverse($history) as $m) {
+            if ($m['direction'] === 'incoming') { $lastInbound = (string)$m['message_text']; break; }
+        }
+        if ($lastInbound === '') return;
+
+        // Re-use the first-touch guards EXCEPT "exactly one inbound" - that's the whole point of always-on.
+        if (empty($company['ai_enabled']) || empty($company['ai_always_on'])) return;
+        if (ai_api_key($company) === '') return;
+        if (!empty($conv['assigned_user_id'])) {
+            log_activity((int)$company['id'], null, 'ai_always_on_skipped',
+                'conversation', $conversationId, 'reason=assigned');
+            return;
+        }
+
+        // Escalation phrases
+        $raw = trim((string)($company['ai_escalation_phrases'] ?? '')) ?: AI_DEFAULT_ESCALATION_PHRASES;
+        foreach (array_filter(array_map(fn($p) => trim(mb_strtolower($p)), explode(',', $raw))) as $phrase) {
+            if ($phrase !== '' && str_contains(mb_strtolower($lastInbound), $phrase)) {
+                log_activity((int)$company['id'], null, 'ai_always_on_skipped',
+                    'conversation', $conversationId, 'reason=escalation:' . $phrase);
+                return;
+            }
+        }
+
+        // Daily cap
+        $cap = (int)($company['ai_daily_cap'] ?? 200);
+        if ($cap > 0) {
+            $cnt = $db->prepare(
+                'SELECT COUNT(*) FROM messages WHERE company_id = ? AND sender_type = "ai" AND created_at >= CURDATE()'
+            );
+            $cnt->execute([(int)$company['id']]);
+            if ((int)$cnt->fetchColumn() >= $cap) {
+                log_activity((int)$company['id'], null, 'ai_always_on_skipped',
+                    'conversation', $conversationId, 'reason=daily_cap_' . $cap);
+                return;
+            }
+        }
+
+        // Call Claude with the full conversation history (so it has context).
+        $r = ai_suggest_reply($company, $conv, $history);
+        if (!$r['ok']) {
+            log_activity((int)$company['id'], null, 'ai_always_on_skipped',
+                'conversation', $conversationId, 'reason=ai_error:' . mb_substr((string)($r['error'] ?? ''), 0, 100));
+            return;
+        }
+
+        $channel = channel_for_conversation($conv);
+        if (!$channel) return;
+
+        $reply = (string)$r['suggestion'];
+        $send  = provider_send_text($channel, (string)$conv['wa_id'], $reply);
+        if (!$send['ok']) {
+            log_activity((int)$company['id'], null, 'ai_always_on_failed',
+                'conversation', $conversationId,
+                'send_error=' . mb_substr((string)($send['error'] ?? ''), 0, 200));
+            return;
+        }
+
+        $db->prepare(
+            'INSERT INTO messages
+                (company_id, channel_id, conversation_id, contact_id, sender_type,
+                 wa_message_id, direction, message_type, message_text,
+                 status, sent_at, created_at)
+             VALUES (?, ?, ?, ?, "ai", ?, "outgoing", "text", ?, "sent", NOW(), NOW())'
+        )->execute([
+            (int)$company['id'], (int)$channel['id'], $conversationId, (int)$conv['contact_id'],
+            $send['wa_message_id'], $reply,
+        ]);
+
+        $db->prepare(
+            'UPDATE conversations
+             SET last_message_text  = ?,
+                 last_message_at    = NOW(),
+                 first_response_at  = COALESCE(first_response_at, NOW())
+             WHERE id = ?'
+        )->execute([mb_substr($reply, 0, 500), $conversationId]);
+
+        ai_first_touch_tag_conversation((int)$company['id'], $conversationId);
+
+        log_activity((int)$company['id'], null, 'ai_always_on_sent',
+            'conversation', $conversationId,
+            'model=' . ($r['model'] ?? '?') . ' tokens=' . json_encode($r['usage'] ?? []));
+    } catch (Throwable $e) {
+        error_log('[ai_always_on_handle] ' . $e->getMessage());
+    }
+}
+
+/**
+ * Top-level inbound automation entry point. Called from both webhook
+ * receivers after they've finished writing the customer's message. Decides
+ * what (if anything) to do back to the customer:
+ *
+ *   1. If business hours are enforced AND we're outside them: send the
+ *      templated off-hours message (once per 12h per conversation).
+ *      No further automation runs - human takes over in the morning.
+ *
+ *   2. Else if AI always-on is enabled: AI handles every message until
+ *      a human takes the conversation.
+ *
+ *   3. Else if AI first-touch is enabled: AI handles only the FIRST
+ *      inbound on a fresh conversation (existing behavior).
+ */
+function inbound_automation_handle(array $company, int $conversationId): void
+{
+    try {
+        // 1. Business hours
+        if (!empty($company['business_hours_enabled']) && !is_inside_business_hours($company)) {
+            if (!off_hours_message_already_sent($conversationId)) {
+                send_off_hours_message($company, $conversationId);
+            }
+            return;
+        }
+
+        // 2. AI always-on
+        if (!empty($company['ai_enabled']) && !empty($company['ai_always_on'])) {
+            ai_always_on_handle($company, $conversationId);
+            return;
+        }
+
+        // 3. AI first-touch (legacy/single-fire)
+        if (!empty($company['ai_enabled']) && !empty($company['ai_first_touch'])) {
+            ai_first_touch_handle($company, $conversationId);
+        }
+    } catch (Throwable $e) {
+        error_log('[inbound_automation_handle] ' . $e->getMessage());
+    }
+}
+

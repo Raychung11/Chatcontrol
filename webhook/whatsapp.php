@@ -114,7 +114,7 @@ if (function_exists('fastcgi_finish_request')) {
 // short-circuit when the workspace has it disabled.
 require_once __DIR__ . '/../inc/ai_api.php';
 foreach (webhook_touched_conversation_ids() as $cid) {
-    ai_first_touch_handle($company, $cid);
+    inbound_automation_handle($company, $cid);
 }
 
 // =============================================================

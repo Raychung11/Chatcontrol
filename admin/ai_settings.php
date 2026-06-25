@@ -14,11 +14,34 @@ if (is_post()) {
     $enabled      = !empty($_POST['ai_enabled']) ? 1 : 0;
     $autoSuggest  = !empty($_POST['ai_auto_suggest']) ? 1 : 0;
     $firstTouch   = !empty($_POST['ai_first_touch'])  ? 1 : 0;
+    $alwaysOn     = !empty($_POST['ai_always_on'])    ? 1 : 0;
     $escalation   = trim((string)($_POST['ai_escalation_phrases'] ?? ''));
     $dailyCap     = max(0, (int)($_POST['ai_daily_cap'] ?? 200));
     $model        = trim((string)($_POST['ai_model'] ?? AI_DEFAULT_MODEL)) ?: AI_DEFAULT_MODEL;
     $systemPrompt = trim((string)($_POST['ai_system_prompt'] ?? ''));
     $apiKey       = trim((string)($_POST['ai_api_key'] ?? ''));
+
+    // Business hours fields
+    $bhEnabled    = !empty($_POST['business_hours_enabled']) ? 1 : 0;
+    $bhTimezone   = trim((string)($_POST['business_hours_timezone'] ?? '')) ?: APP_TIMEZONE;
+    $offHoursMsg  = trim((string)($_POST['off_hours_message'] ?? ''));
+
+    // Build schedule JSON from per-day inputs
+    $schedule = [];
+    foreach (['mon','tue','wed','thu','fri','sat','sun'] as $d) {
+        $on = !empty($_POST['bh_' . $d . '_open']);
+        if ($on) {
+            $start = (string)($_POST['bh_' . $d . '_start'] ?? '09:00');
+            $end   = (string)($_POST['bh_' . $d . '_end']   ?? '18:00');
+            // Validate HH:MM format; reset to defaults if malformed
+            $start = preg_match('/^\d{2}:\d{2}$/', $start) ? $start : '09:00';
+            $end   = preg_match('/^\d{2}:\d{2}$/', $end)   ? $end   : '18:00';
+            $schedule[$d] = [$start, $end];
+        } else {
+            $schedule[$d] = null;
+        }
+    }
+    $scheduleJson = json_encode($schedule, JSON_UNESCAPED_UNICODE);
 
     // Keep existing key if field left blank
     if ($apiKey === '') {
@@ -31,11 +54,16 @@ if (is_post()) {
         'UPDATE companies
          SET ai_enabled = ?, ai_provider = "claude", ai_model = ?,
              ai_api_key = ?, ai_system_prompt = ?, ai_auto_suggest = ?,
-             ai_first_touch = ?, ai_escalation_phrases = ?, ai_daily_cap = ?
+             ai_first_touch = ?, ai_always_on = ?,
+             ai_escalation_phrases = ?, ai_daily_cap = ?,
+             business_hours_enabled = ?, business_hours_timezone = ?,
+             business_hours_schedule = ?, off_hours_message = ?
          WHERE id = ?'
     )->execute([
         $enabled, $model, $apiKey ?: null, $systemPrompt ?: null, $autoSuggest,
-        $firstTouch, $escalation ?: null, $dailyCap,
+        $firstTouch, $alwaysOn,
+        $escalation ?: null, $dailyCap,
+        $bhEnabled, $bhTimezone, $scheduleJson, $offHoursMsg ?: null,
         $companyId,
     ]);
 
@@ -116,6 +144,79 @@ layout_start($current_user, 'AI Settings', 'ai_settings');
       <?php if ($cap > 0): ?>
         of <?= $cap ?> cap (<?= $cap > 0 ? round($todayCount / $cap * 100) : 0 ?>%).
       <?php endif; ?>
+    </div>
+
+    <h3>Always-on AI auto-reply</h3>
+    <p class="muted small">
+      AI replies to <strong>every</strong> customer message — not just the first — until an
+      agent assigns themselves to the conversation. Useful for high-volume / off-hours
+      coverage. Same guardrails apply (escalation phrases, daily cap, no reply if a human
+      is already on it).
+    </p>
+    <label class="check-row">
+      <input type="checkbox" name="ai_always_on" value="1" <?= !empty($company['ai_always_on']) ? 'checked' : '' ?>>
+      <span><strong>Enable always-on AI</strong> — AI handles full conversations until an agent takes over</span>
+    </label>
+
+    <h3>Business hours mode</h3>
+    <p class="muted small">
+      When enabled, customers messaging outside business hours get an instant templated
+      reply ("we're closed") and the conversation is marked Pending for tomorrow. Inside
+      business hours, normal AI / agent flow runs. Off-hours mode takes precedence over
+      always-on AI — at night the templated message goes out, not an AI reply.
+    </p>
+
+    <label class="check-row">
+      <input type="checkbox" name="business_hours_enabled" value="1" <?= !empty($company['business_hours_enabled']) ? 'checked' : '' ?>>
+      <span><strong>Enforce business hours</strong></span>
+    </label>
+
+    <label>Timezone
+      <input type="text" name="business_hours_timezone"
+             value="<?= e((string)($company['business_hours_timezone'] ?? APP_TIMEZONE)) ?>"
+             placeholder="Asia/Kuala_Lumpur">
+    </label>
+
+    <?php
+      $schedule = business_hours_schedule($company);
+      $days = [
+        'mon' => 'Monday', 'tue' => 'Tuesday', 'wed' => 'Wednesday',
+        'thu' => 'Thursday', 'fri' => 'Friday',
+        'sat' => 'Saturday', 'sun' => 'Sunday',
+      ];
+    ?>
+    <fieldset class="hours-grid">
+      <legend>Schedule</legend>
+      <?php foreach ($days as $key => $label):
+        $row     = $schedule[$key] ?? null;
+        $open    = is_array($row);
+        $start   = $open ? $row[0] : '09:00';
+        $end     = $open ? $row[1] : '18:00';
+      ?>
+        <div class="hours-row">
+          <label>
+            <input type="checkbox" name="bh_<?= e($key) ?>_open" value="1" <?= $open ? 'checked' : '' ?>>
+            <strong><?= e($label) ?></strong>
+          </label>
+          <input type="time" name="bh_<?= e($key) ?>_start" value="<?= e($start) ?>">
+          <span class="muted">to</span>
+          <input type="time" name="bh_<?= e($key) ?>_end"   value="<?= e($end)   ?>">
+        </div>
+      <?php endforeach; ?>
+    </fieldset>
+
+    <label>Off-hours reply message <small class="muted">(leave blank to use the built-in default)</small>
+      <textarea name="off_hours_message" rows="3"
+                placeholder="<?= e(OFF_HOURS_DEFAULT_MESSAGE) ?>"><?= e((string)($company['off_hours_message'] ?? '')) ?></textarea>
+    </label>
+
+    <?php
+      $bhStatus = !empty($company['business_hours_enabled'])
+        ? (is_inside_business_hours($company) ? 'Open right now' : 'Closed right now')
+        : 'Not enforced — always open';
+    ?>
+    <div class="alert alert-info">
+      <strong>Current status:</strong> <?= e($bhStatus) ?>
     </div>
 
     <h3>Model</h3>

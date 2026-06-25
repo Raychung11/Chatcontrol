@@ -16,6 +16,7 @@ $year = date('Y');
   <title><?= e(APP_NAME) ?> · WhatsApp customer service with AI assist</title>
   <meta name="description" content="Shared WhatsApp inbox for customer service teams. AI drafts replies grounded in your knowledge base. Three provider options: Meta Cloud API, Evolution, or any partner gateway.">
   <link rel="stylesheet" href="<?= e(asset_url('/assets/css/app.css')) ?>">
+  <?= pwa_head_tags() ?>
 </head>
 <body class="landing-body">
 
@@ -241,5 +242,6 @@ $year = date('Y');
 </footer>
 
 <?php cookie_notice(); ?>
+<script src="<?= e(asset_url('/assets/js/pwa.js')) ?>" defer></script>
 </body>
 </html>

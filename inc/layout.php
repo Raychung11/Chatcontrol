@@ -22,6 +22,7 @@ function layout_start(array $current_user, string $page_title = '', string $acti
   <title><?= e($page_title ? $page_title . ' · ' : '') . e(APP_NAME) ?></title>
   <link rel="stylesheet" href="<?= e(asset_url('/assets/css/app.css')) ?>">
   <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
+  <?= pwa_head_tags() ?>
 </head>
 <body<?= is_impersonating() ? ' class="impersonating"' : '' ?>>
 <?php if (is_impersonating()): ?>
@@ -61,6 +62,7 @@ function layout_end(): void
   </main>
 </div>
 <script src="<?= e(asset_url('/assets/js/app.js')) ?>" defer></script>
+<script src="<?= e(asset_url('/assets/js/pwa.js')) ?>" defer></script>
 </body>
 </html>
 <?php

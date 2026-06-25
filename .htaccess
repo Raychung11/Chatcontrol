@@ -18,3 +18,15 @@ RedirectMatch 403 ^/sql/.*
 <FilesMatch "\.(sql|md|log|env|ini)$">
   Require all denied
 </FilesMatch>
+
+# Service worker must serve from / with the right MIME so browsers register it.
+<Files "sw.js">
+  Header set Content-Type "application/javascript"
+  Header set Service-Worker-Allowed "/"
+  Header set Cache-Control "no-cache"
+</Files>
+
+# Manifest MIME (some hosts default to text/plain)
+<Files "manifest.json">
+  Header set Content-Type "application/manifest+json"
+</Files>

@@ -134,6 +134,7 @@ if (is_post()) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Create your workspace · <?= e(APP_NAME) ?></title>
   <link rel="stylesheet" href="<?= e(asset_url('/assets/css/app.css')) ?>">
+  <?= pwa_head_tags() ?>
 </head>
 <body class="login-body">
   <div class="login-card register-card">
@@ -229,5 +230,6 @@ if (is_post()) {
   })();
 </script>
 <?php cookie_notice(); ?>
+<script src="<?= e(asset_url('/assets/js/pwa.js')) ?>" defer></script>
 </body>
 </html>

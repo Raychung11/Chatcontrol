@@ -22,6 +22,7 @@ function legal_page_start(string $title): void
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title><?= e($title) ?> · <?= e(APP_NAME) ?></title>
   <link rel="stylesheet" href="<?= e(asset_url('/assets/css/app.css')) ?>">
+  <?= pwa_head_tags() ?>
 </head>
 <body class="landing-body">
 
@@ -63,6 +64,7 @@ function legal_page_end(): void
 </footer>
 
 <?php cookie_notice(); ?>
+<script src="<?= e(asset_url('/assets/js/pwa.js')) ?>" defer></script>
 </body>
 </html>
 <?php

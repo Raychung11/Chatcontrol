@@ -8,6 +8,9 @@ config/db_config.local.php
 uploads/*
 !uploads/.gitkeep
 
+# PWA icon cache (regenerated on demand)
+assets/img/cache/
+
 # OS / editor
 .DS_Store
 Thumbs.db

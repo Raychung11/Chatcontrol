@@ -132,6 +132,24 @@ function relative_time(?string $datetime): string
     return date('M j', $ts);
 }
 
+// -------------------- PWA head tags --------------------
+/**
+ * Emit the standard PWA / iOS web-app meta tags. Drop into every <head>
+ * so every entry page (landing, login, register, app shell, legal pages)
+ * advertises the same install metadata to browsers.
+ */
+function pwa_head_tags(): string
+{
+    $h  = '<link rel="manifest" href="/manifest.json">' . "\n";
+    $h .= '  <meta name="theme-color" content="#25D366">' . "\n";
+    $h .= '  <meta name="apple-mobile-web-app-capable" content="yes">' . "\n";
+    $h .= '  <meta name="apple-mobile-web-app-status-bar-style" content="default">' . "\n";
+    $h .= '  <meta name="apple-mobile-web-app-title" content="AiServe">' . "\n";
+    $h .= '  <link rel="apple-touch-icon" href="/assets/img/icon.php?size=180">' . "\n";
+    $h .= '  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/icon.php?size=32">';
+    return $h;
+}
+
 // -------------------- Asset cache-busting --------------------
 function asset_url(string $relPath): string
 {

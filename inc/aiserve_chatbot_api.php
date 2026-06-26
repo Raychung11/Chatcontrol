@@ -43,13 +43,18 @@ function chatbot_post_form(array $company, string $path, array $fields): array
     $url = chatbot_base($company) . $path;
     $ch = curl_init($url);
     curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST           => true,
-        CURLOPT_TIMEOUT        => 30,
-        CURLOPT_HTTPHEADER     => [
+        CURLOPT_RETURNTRANSFER    => true,
+        CURLOPT_POST              => true,
+        CURLOPT_TIMEOUT           => 30,
+        // Force fresh DNS lookup every request. Prevents PHP-FPM from
+        // re-using a stale OS-level resolver answer when the partner
+        // gateway gets a new IP after a restart.
+        CURLOPT_DNS_CACHE_TIMEOUT => 0,
+        CURLOPT_FRESH_CONNECT     => true,
+        CURLOPT_HTTPHEADER        => [
             'Authorization: Bearer ' . (string)$company['chatbot_bearer_token'],
         ],
-        CURLOPT_POSTFIELDS     => $fields, // multipart form-data
+        CURLOPT_POSTFIELDS        => $fields, // multipart form-data
     ]);
     $resp = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);

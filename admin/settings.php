@@ -22,6 +22,10 @@ if (is_post()) {
     $defaultDeptId     = $_POST['default_department_id'] ?? '';
     $defaultDeptId     = ($defaultDeptId === '' || $defaultDeptId === '0') ? null : (int)$defaultDeptId;
 
+    $alertEnabled      = !empty($_POST['alert_failed_sends_enabled']) ? 1 : 0;
+    $alertThreshold    = max(1, (int)($_POST['alert_failed_sends_threshold'] ?? 5));
+    $alertEmail        = trim((string)($_POST['alert_email'] ?? ''));
+
     $provider          = (string)($_POST['provider'] ?? 'cloud_api');
     if (!in_array($provider, ['cloud_api', 'evolution', 'aiserve_chatbot'], true)) $provider = 'cloud_api';
     $evoBaseUrl        = trim((string)($_POST['evolution_base_url'] ?? ''));
@@ -62,7 +66,8 @@ if (is_post()) {
                 api_version = ?, access_token = ?, webhook_verify_token = ?,
                 brand_color = ?, timezone = ?, default_department_id = ?,
                 provider = ?, evolution_base_url = ?, evolution_api_key = ?, evolution_instance = ?,
-                chatbot_base_url = ?, chatbot_bearer_token = ?
+                chatbot_base_url = ?, chatbot_bearer_token = ?,
+                alert_failed_sends_enabled = ?, alert_failed_sends_threshold = ?, alert_email = ?
              WHERE id = ?'
         );
         $upd->execute([
@@ -76,6 +81,7 @@ if (is_post()) {
             $evoInstance ?: null,
             rtrim($chatbotUrl, '/') ?: null,
             $chatbotToken ?: null,
+            $alertEnabled, $alertThreshold, $alertEmail ?: null,
             $companyId,
         ]);
         log_activity($companyId, (int)$current_user['id'], 'settings_updated', 'company', $companyId, 'Company settings updated');
@@ -267,6 +273,32 @@ layout_start($current_user, 'Company & API Settings', 'settings', $company['bran
       });
     })();
     </script>
+
+    <h2>Operational alerts</h2>
+    <p class="muted small">
+      Get an email when outbound sends start failing in bulk — usually means
+      a wrong Bearer token, an expired gateway, or partner-side downtime.
+    </p>
+    <label class="check-row">
+      <input type="checkbox" name="alert_failed_sends_enabled" value="1"
+             <?= !empty($company['alert_failed_sends_enabled']) ? 'checked' : '' ?>>
+      <span><strong>Email me when outbound sends fail in bulk</strong></span>
+    </label>
+    <label>Threshold <small class="muted">(N failures in 10 min triggers one alert; min 1)</small>
+      <input type="number" name="alert_failed_sends_threshold" min="1" max="999"
+             value="<?= (int)($company['alert_failed_sends_threshold'] ?? 5) ?>">
+    </label>
+    <label>Recipient email <small class="muted">(leave blank to send to all Workspace Admins)</small>
+      <input type="email" name="alert_email"
+             value="<?= e((string)($company['alert_email'] ?? '')) ?>"
+             placeholder="ops@yourcompany.com">
+    </label>
+    <div class="alert alert-info">
+      Alerts run via cron every 5 minutes. Same workspace gets at most one
+      alert per 30 minutes (cooldown) so a sustained outage doesn't spam you.
+      See <a href="/docs/CRON.md" target="_blank">CRON setup</a> if you
+      haven't installed the cron job yet.
+    </div>
 
     <button class="btn btn-primary" type="submit">Save settings</button>
   </form>

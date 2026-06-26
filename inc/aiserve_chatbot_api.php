@@ -18,6 +18,7 @@
  */
 
 require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/dns_helper.php';
 
 function chatbot_is_configured(array $company): bool
 {
@@ -42,20 +43,25 @@ function chatbot_post_form(array $company, string $path, array $fields): array
 {
     $url = chatbot_base($company) . $path;
     $ch = curl_init($url);
-    curl_setopt_array($ch, [
+    $opts = [
         CURLOPT_RETURNTRANSFER    => true,
         CURLOPT_POST              => true,
         CURLOPT_TIMEOUT           => 30,
-        // Force fresh DNS lookup every request. Prevents PHP-FPM from
-        // re-using a stale OS-level resolver answer when the partner
-        // gateway gets a new IP after a restart.
         CURLOPT_DNS_CACHE_TIMEOUT => 0,
         CURLOPT_FRESH_CONNECT     => true,
+        CURLOPT_FORBID_REUSE      => true,
         CURLOPT_HTTPHEADER        => [
             'Authorization: Bearer ' . (string)$company['chatbot_bearer_token'],
         ],
         CURLOPT_POSTFIELDS        => $fields, // multipart form-data
-    ]);
+    ];
+    // Bypass Hostinger's stale OS resolver - look up the host via Google DoH
+    // and pin the IP at the curl layer.
+    $resolved = fresh_dns_resolve_entry($url);
+    if ($resolved) {
+        $opts[CURLOPT_RESOLVE] = [$resolved['entry']];
+    }
+    curl_setopt_array($ch, $opts);
     $resp = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     $err  = curl_error($ch);

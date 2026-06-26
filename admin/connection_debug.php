@@ -18,6 +18,7 @@
 
 require_once __DIR__ . '/../inc/layout.php';
 require_once __DIR__ . '/../inc/channels.php';
+require_once __DIR__ . '/../inc/dns_helper.php';
 
 $current_user = require_role(['super_admin']);
 $companyId    = (int)$current_user['company_id'];
@@ -59,15 +60,22 @@ if ($channel) {
 
     // 2. DNS resolution test
     if ($host !== '') {
-        $resolvedIp = @gethostbyname($host);
-        $diag['DNS A record'] = ($resolvedIp === $host) ? 'FAILED - host did not resolve' : $resolvedIp;
+        $sysIp = @gethostbyname($host);
+        $diag['DNS A (system resolver)'] = ($sysIp === $host) ? 'FAILED - host did not resolve' : $sysIp;
+        $freshIp = fresh_dns_resolve($host);
+        $diag['DNS A (Google DoH, fresh)'] = $freshIp ?: 'FAILED - DoH lookup did not return an A record';
+        if ($sysIp && $freshIp && $sysIp !== $freshIp) {
+            $diag['DNS mismatch detected'] = 'System resolver is STALE - using ' . $sysIp
+                . ' but global DNS says ' . $freshIp
+                . '. The CURLOPT_RESOLVE override will pin requests to ' . $freshIp . '.';
+        }
     }
 
     // 3. HEAD test against base URL (catches DNS / SSL / connect failures
     //    without sending any payload)
     if ($baseUrl !== '') {
         $ch = curl_init($baseUrl);
-        curl_setopt_array($ch, [
+        $headOpts = [
             CURLOPT_RETURNTRANSFER    => true,
             CURLOPT_NOBODY            => true,
             CURLOPT_HEADER            => true,
@@ -79,7 +87,10 @@ if ($channel) {
             CURLOPT_DNS_CACHE_TIMEOUT => 0,
             CURLOPT_FRESH_CONNECT     => true,
             CURLOPT_FORBID_REUSE      => true,
-        ]);
+        ];
+        $resolved = fresh_dns_resolve_entry($baseUrl);
+        if ($resolved) $headOpts[CURLOPT_RESOLVE] = [$resolved['entry']];
+        curl_setopt_array($ch, $headOpts);
         $headResp = curl_exec($ch);
         $info = curl_getinfo($ch);
         $diag['HEAD curl_errno']      = curl_errno($ch) . ' (' . curl_strerror(curl_errno($ch)) . ')';
@@ -105,7 +116,7 @@ if (is_post() && $channel) {
     if ($to !== '' && strlen($to) >= 8) {
         $url = rtrim((string)$channel['chatbot_base_url'], '/') . '/api/boardcast/sendMessage';
         $ch  = curl_init($url);
-        curl_setopt_array($ch, [
+        $sendOpts = [
             CURLOPT_RETURNTRANSFER    => true,
             CURLOPT_POST              => true,
             CURLOPT_HEADER            => true,
@@ -122,7 +133,13 @@ if (is_post() && $channel) {
             ],
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
-        ]);
+        ];
+        $sendResolved = fresh_dns_resolve_entry($url);
+        if ($sendResolved) $sendOpts[CURLOPT_RESOLVE] = [$sendResolved['entry']];
+        curl_setopt_array($ch, $sendOpts);
+        if ($sendResolved) {
+            $sendDiag['Pinned to IP (via DoH)'] = $sendResolved['ip'];
+        }
         $resp = curl_exec($ch);
         $info = curl_getinfo($ch);
         $sendDiag['POST URL']             = $url;

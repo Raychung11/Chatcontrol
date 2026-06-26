@@ -68,14 +68,17 @@ if ($channel) {
     if ($baseUrl !== '') {
         $ch = curl_init($baseUrl);
         curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_NOBODY         => true,
-            CURLOPT_HEADER         => true,
-            CURLOPT_TIMEOUT        => 10,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_VERBOSE        => false,
+            CURLOPT_RETURNTRANSFER    => true,
+            CURLOPT_NOBODY            => true,
+            CURLOPT_HEADER            => true,
+            CURLOPT_TIMEOUT           => 10,
+            CURLOPT_FOLLOWLOCATION    => true,
+            CURLOPT_SSL_VERIFYPEER    => true,
+            CURLOPT_SSL_VERIFYHOST    => 2,
+            CURLOPT_VERBOSE           => false,
+            CURLOPT_DNS_CACHE_TIMEOUT => 0,
+            CURLOPT_FRESH_CONNECT     => true,
+            CURLOPT_FORBID_REUSE      => true,
         ]);
         $headResp = curl_exec($ch);
         $info = curl_getinfo($ch);
@@ -103,11 +106,14 @@ if (is_post() && $channel) {
         $url = rtrim((string)$channel['chatbot_base_url'], '/') . '/api/boardcast/sendMessage';
         $ch  = curl_init($url);
         curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST           => true,
-            CURLOPT_HEADER         => true,
-            CURLOPT_TIMEOUT        => 30,
-            CURLOPT_HTTPHEADER     => [
+            CURLOPT_RETURNTRANSFER    => true,
+            CURLOPT_POST              => true,
+            CURLOPT_HEADER            => true,
+            CURLOPT_TIMEOUT           => 30,
+            CURLOPT_DNS_CACHE_TIMEOUT => 0,
+            CURLOPT_FRESH_CONNECT     => true,
+            CURLOPT_FORBID_REUSE      => true,
+            CURLOPT_HTTPHEADER        => [
                 'Authorization: Bearer ' . (string)$channel['chatbot_bearer_token'],
             ],
             CURLOPT_POSTFIELDS     => [

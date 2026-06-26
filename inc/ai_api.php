@@ -441,6 +441,204 @@ function ai_analyze_topics(array $company, array $messageSamples, int $periodDay
 }
 
 // =============================================================================
+// Routing rule builder
+// =============================================================================
+
+/**
+ * Turn a plain-English instruction ("send pricing questions to Sales") into a
+ * structured routing rule the admin can review and save. The admin always sees
+ * the suggestion in the form before it gets committed - we never auto-create.
+ *
+ * @param array  $company     Full companies row (for ai_api_key + model).
+ * @param string $description Operator's natural-language ask.
+ * @param array  $departments [{id, name}, ...] active departments for the workspace.
+ * @param array  $users       [{id, name, role}, ...] optional agents for assignment.
+ * @return array{ok:bool, suggestion?:array, error?:string, model?:string, usage?:array}
+ */
+function ai_suggest_routing_rule(array $company, string $description, array $departments, array $users = []): array
+{
+    if (!ai_is_configured($company)) {
+        return ['ok' => false, 'error' => 'AI is not enabled for this workspace.'];
+    }
+    $apiKey = ai_api_key($company);
+    if ($apiKey === '') {
+        return ['ok' => false, 'error' => 'No Anthropic API key configured.'];
+    }
+    $description = trim($description);
+    if ($description === '') {
+        return ['ok' => false, 'error' => 'Please describe what you want to route.'];
+    }
+    if (!$departments) {
+        return ['ok' => false, 'error' => 'No active departments exist yet - add one first.'];
+    }
+
+    $model = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
+
+    $deptLines = [];
+    foreach ($departments as $d) {
+        $deptLines[] = '- ' . (string)$d['name'];
+    }
+    $userLines = [];
+    foreach ($users as $u) {
+        $userLines[] = '- ' . (string)$u['name'];
+    }
+
+    $systemPrompt =
+        "You convert a customer-service manager's plain-English routing intent "
+      . "into a structured rule for a WhatsApp inbox. Each rule matches text in "
+      . "the FIRST incoming customer message of a new conversation, then sends "
+      . "the conversation to a department (and optionally a default agent).\n\n"
+      . "Return a single JSON object with this exact structure:\n\n"
+      . "{\n"
+      . "  \"match_type\": \"contains\" | \"starts_with\" | \"equals\" | \"regex\",\n"
+      . "  \"match_value\": \"the text or regex to match\",\n"
+      . "  \"department_name\": \"exact name from the department list\",\n"
+      . "  \"assigned_user_name\": \"exact name from the user list, or null\",\n"
+      . "  \"priority\": 1-9999 (lower runs first; default 100),\n"
+      . "  \"explanation\": \"one short sentence explaining why this rule fits\"\n"
+      . "}\n\n"
+      . "Rules:\n"
+      . "- Pick the SIMPLEST match_type that works. Prefer 'contains' for keyword intents.\n"
+      . "- Use 'starts_with' only when the operator clearly says 'starts with' or describes a code/prefix.\n"
+      . "- Use 'equals' only when the operator clearly says 'exact match' or 'equals'.\n"
+      . "- Use 'regex' only when keyword variants need alternation (e.g. 'refund|return|money back'). Write valid PHP PCRE without surrounding /slashes/.\n"
+      . "- match_value must be lowercase unless the source clearly demands case-sensitive matching.\n"
+      . "- department_name MUST be an exact match from the provided list. If no department clearly fits, set it to the closest one and explain.\n"
+      . "- assigned_user_name MUST be an exact match from the user list or null. Default to null unless the operator names a person.\n"
+      . "- Output ONLY the JSON object. No markdown fences, no preamble.";
+
+    $userPrompt =
+        "Available departments:\n" . implode("\n", $deptLines) . "\n\n"
+      . ($userLines ? "Available agents:\n" . implode("\n", $userLines) . "\n\n" : '')
+      . "Operator's instruction:\n" . $description;
+
+    $payload = [
+        'model'      => $model,
+        'max_tokens' => 500,
+        'system'     => [
+            ['type' => 'text', 'text' => $systemPrompt,
+             'cache_control' => ['type' => 'ephemeral']],
+        ],
+        'messages'   => [
+            ['role' => 'user', 'content' => $userPrompt],
+        ],
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_HTTPHEADER     => [
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: ' . AI_API_VERSION,
+            'content-type: application/json',
+        ],
+        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($resp === false) {
+        return ['ok' => false, 'error' => 'Network error: ' . $err];
+    }
+    $data = json_decode((string)$resp, true);
+    if ($code !== 200) {
+        return [
+            'ok'    => false,
+            'error' => (string)($data['error']['message'] ?? ('HTTP ' . $code)),
+        ];
+    }
+
+    $text = '';
+    foreach (($data['content'] ?? []) as $block) {
+        if (($block['type'] ?? '') === 'text') $text .= $block['text'];
+    }
+    $text = trim($text);
+    if (preg_match('/^```(?:json)?\s*(.+?)\s*```$/s', $text, $m)) {
+        $text = trim($m[1]);
+    }
+    $parsed = json_decode($text, true);
+    if (!is_array($parsed)) {
+        $start = strpos($text, '{');
+        $end   = strrpos($text, '}');
+        if ($start !== false && $end !== false && $end > $start) {
+            $parsed = json_decode(substr($text, $start, $end - $start + 1), true);
+        }
+    }
+    if (!is_array($parsed)) {
+        return ['ok' => false, 'error' => 'Model returned malformed JSON.', 'raw' => $text];
+    }
+
+    $matchType = strtolower(trim((string)($parsed['match_type'] ?? 'contains')));
+    if (!in_array($matchType, ['contains', 'starts_with', 'equals', 'regex'], true)) {
+        $matchType = 'contains';
+    }
+    $matchValue = trim((string)($parsed['match_value'] ?? ''));
+    if ($matchValue === '') {
+        return ['ok' => false, 'error' => 'Model did not produce a match value.', 'raw' => $text];
+    }
+    if ($matchType === 'regex'
+        && @preg_match('/' . str_replace('/', '\\/', $matchValue) . '/iu', '') === false) {
+        return ['ok' => false, 'error' => 'Model produced an invalid regex pattern.', 'raw' => $text];
+    }
+
+    // Resolve department name -> id from the workspace's actual list.
+    $deptId   = 0;
+    $deptName = trim((string)($parsed['department_name'] ?? ''));
+    foreach ($departments as $d) {
+        if (strcasecmp((string)$d['name'], $deptName) === 0) {
+            $deptId   = (int)$d['id'];
+            $deptName = (string)$d['name'];
+            break;
+        }
+    }
+    if ($deptId <= 0) {
+        return [
+            'ok'    => false,
+            'error' => 'Model picked department "' . $deptName . '" which does not exist. Try rephrasing or add the department first.',
+            'raw'   => $text,
+        ];
+    }
+
+    // Optional agent.
+    $userId   = null;
+    $userName = null;
+    $rawUser  = $parsed['assigned_user_name'] ?? null;
+    if (is_string($rawUser) && trim($rawUser) !== '' && strtolower(trim($rawUser)) !== 'null') {
+        foreach ($users as $u) {
+            if (strcasecmp((string)$u['name'], trim($rawUser)) === 0) {
+                $userId   = (int)$u['id'];
+                $userName = (string)$u['name'];
+                break;
+            }
+        }
+    }
+
+    $priority = (int)($parsed['priority'] ?? 100);
+    if ($priority < 1)    $priority = 100;
+    if ($priority > 9999) $priority = 9999;
+
+    return [
+        'ok'         => true,
+        'suggestion' => [
+            'match_type'         => $matchType,
+            'match_value'        => $matchValue,
+            'department_id'      => $deptId,
+            'department_name'    => $deptName,
+            'assigned_user_id'   => $userId,
+            'assigned_user_name' => $userName,
+            'priority'           => $priority,
+            'explanation'        => trim((string)($parsed['explanation'] ?? '')),
+        ],
+        'model'      => $model,
+        'usage'      => $data['usage'] ?? null,
+    ];
+}
+
+// =============================================================================
 // First-touch auto-reply
 // =============================================================================
 

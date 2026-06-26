@@ -116,14 +116,31 @@ layout_start($current_user, 'Routing rules', 'routing');
   </p>
 
   <h2>Add rule</h2>
-  <form method="post" class="form-grid">
+
+  <div class="ai-rule-builder" style="background:#f4f9f6;border:1px dashed #c6e0d0;border-radius:8px;padding:14px 16px;margin-bottom:18px;">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;">
+      <strong>Describe in plain English</strong>
+      <span class="muted small">AI fills the form below for you to review.</span>
+    </div>
+    <p class="muted small" style="margin:6px 0 8px 0;">
+      e.g. <em>"send refund and return questions to Customer Service"</em>
+      · <em>"route orders starting with BUY- to Sales, assign to Sarah"</em>
+    </p>
+    <div style="display:flex;gap:8px;">
+      <input type="text" id="ai-rule-desc" placeholder="What should this rule do?" style="flex:1;">
+      <button type="button" class="btn btn-primary" id="ai-rule-suggest-btn">Suggest rule</button>
+    </div>
+    <div id="ai-rule-status" class="small" style="margin-top:8px;"></div>
+  </div>
+
+  <form method="post" class="form-grid" id="rule-form">
     <?= csrf_field() ?>
     <input type="hidden" name="action" value="create">
     <label>Priority
-      <input type="number" name="priority" value="100" min="1" max="9999">
+      <input type="number" name="priority" id="f-priority" value="100" min="1" max="9999">
     </label>
     <label>Match type
-      <select name="match_type">
+      <select name="match_type" id="f-match-type">
         <option value="contains">contains</option>
         <option value="starts_with">starts_with</option>
         <option value="equals">equals</option>
@@ -131,10 +148,10 @@ layout_start($current_user, 'Routing rules', 'routing');
       </select>
     </label>
     <label>Match value
-      <input type="text" name="match_value" required placeholder="e.g. invoice, refund, BUY-…">
+      <input type="text" name="match_value" id="f-match-value" required placeholder="e.g. invoice, refund, BUY-…">
     </label>
     <label>Send to department
-      <select name="department_id" required>
+      <select name="department_id" id="f-dept" required>
         <option value="">— select department —</option>
         <?php foreach ($departments as $d): ?>
           <option value="<?= (int)$d['id'] ?>"><?= e($d['name']) ?></option>
@@ -142,7 +159,7 @@ layout_start($current_user, 'Routing rules', 'routing');
       </select>
     </label>
     <label>Default assigned agent (optional)
-      <select name="assigned_user_id">
+      <select name="assigned_user_id" id="f-user">
         <option value="0">— none —</option>
         <?php foreach ($users as $u): ?>
           <option value="<?= (int)$u['id'] ?>"><?= e($u['name']) ?> (<?= e(role_label($u['role'])) ?>)</option>
@@ -152,6 +169,64 @@ layout_start($current_user, 'Routing rules', 'routing');
     <button class="btn btn-primary" type="submit">Add rule</button>
   </form>
 </div>
+
+<script>
+(function () {
+  const csrf = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+  const desc   = document.getElementById('ai-rule-desc');
+  const btn    = document.getElementById('ai-rule-suggest-btn');
+  const status = document.getElementById('ai-rule-status');
+
+  function setStatus(text, color) {
+    status.textContent = text;
+    status.style.color = color || '';
+  }
+
+  async function suggest() {
+    const value = desc.value.trim();
+    if (!value) {
+      setStatus('Type what you want this rule to do first.', '#b3261e');
+      desc.focus();
+      return;
+    }
+    btn.disabled = true;
+    setStatus('Asking AI…', '');
+    try {
+      const fd = new FormData();
+      fd.append('description', value);
+      fd.append('_csrf', csrf);
+      const res = await fetch('/api/ai_routing_suggest.php', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) {
+        setStatus('✗ ' + (data.error || 'Failed'), '#b3261e');
+        return;
+      }
+      const s = data.suggestion;
+      document.getElementById('f-priority').value     = s.priority || 100;
+      document.getElementById('f-match-type').value   = s.match_type || 'contains';
+      document.getElementById('f-match-value').value  = s.match_value || '';
+      document.getElementById('f-dept').value         = s.department_id || '';
+      document.getElementById('f-user').value         = s.assigned_user_id || '0';
+
+      const parts = [];
+      parts.push('✓ Filled below.');
+      if (s.explanation) parts.push(s.explanation);
+      parts.push('Review and click Add rule to save.');
+      setStatus(parts.join(' '), '#1f7a3f');
+      document.getElementById('f-match-value').focus();
+    } catch (e) {
+      setStatus('✗ Network error: ' + e.message, '#b3261e');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  btn.addEventListener('click', suggest);
+  desc.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); suggest(); }
+  });
+})();
+</script>
 
 <div class="card">
   <h2>Existing rules</h2>

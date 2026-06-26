@@ -34,6 +34,7 @@ $role   = $current_user['role'] ?? 'agent';
       <?php if (is_platform_admin()): ?>
         <a href="/admin/evolution_connect.php" class="<?= $active === 'evolution_connect' ? 'active' : '' ?>">Connect WhatsApp</a>
         <a href="/admin/webhook_log.php" class="<?= $active === 'webhook_log' ? 'active' : '' ?>">Webhook log</a>
+        <a href="/admin/connection_debug.php" class="<?= $active === 'connection_debug' ? 'active' : '' ?>">Connection debug</a>
       <?php endif; ?>
     <?php endif; ?>
     <?php if (is_platform_admin() && !is_impersonating()): ?>

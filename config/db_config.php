@@ -69,5 +69,23 @@ function aiserve_db(): PDO
         exit('Database connection error. Please contact administrator.');
     }
 
+    // Hostinger's MySQL server defaults to UTC, but the portal stores
+    // wall-clock timestamps via NOW() / CURRENT_TIMESTAMP and renders them
+    // with fmt_dt() under APP_TIMEZONE. To keep MySQL-side time matching
+    // the rest of the app, set the session timezone to APP_TIMEZONE's
+    // current offset on every connect. Computed dynamically so it picks
+    // up DST changes for timezones that observe them.
+    try {
+        $tz = new DateTimeZone(APP_TIMEZONE);
+        $offsetSecs = $tz->getOffset(new DateTime('now', $tz));
+        $h = (int)($offsetSecs / 3600);
+        $m = abs((int)(($offsetSecs % 3600) / 60));
+        $sign = $h >= 0 ? '+' : '-';
+        $tzString = sprintf('%s%02d:%02d', $sign, abs($h), $m);
+        $pdo->exec("SET time_zone = '" . $tzString . "'");
+    } catch (Throwable $e) {
+        error_log('[AiServe] Could not set MySQL session timezone: ' . $e->getMessage());
+    }
+
     return $pdo;
 }

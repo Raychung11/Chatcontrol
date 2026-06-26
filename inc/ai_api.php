@@ -350,8 +350,11 @@ function ai_analyze_topics(array $company, array $messageSamples, int $periodDay
       . "- Output ONLY the JSON object, no markdown fences, no preamble";
 
     $payload = [
+        // 6000 leaves headroom for workspaces with hundreds of conversations -
+        // the JSON output grows with conversation_ids arrays + example strings,
+        // and 2000 truncated mid-array on busy accounts.
         'model'      => $model,
-        'max_tokens' => 2000,
+        'max_tokens' => 6000,
         'system'     => [
             ['type' => 'text', 'text' => $systemPrompt,
              'cache_control' => ['type' => 'ephemeral']],
@@ -396,13 +399,37 @@ function ai_analyze_topics(array $company, array $messageSamples, int $periodDay
         if (($block['type'] ?? '') === 'text') $text .= $block['text'];
     }
     $text = trim($text);
+    $stopReason = (string)($data['stop_reason'] ?? '');
     // Defensive: strip code fences if the model included them anyway.
     if (preg_match('/^```(?:json)?\s*(.+?)\s*```$/s', $text, $m)) {
         $text = trim($m[1]);
     }
     $parsed = json_decode($text, true);
+    // Fallback 1: model added preamble like "Here are the topics: {...}".
+    // Pull out the first {...} block and try again.
+    if (!is_array($parsed)) {
+        $start = strpos($text, '{');
+        $end   = strrpos($text, '}');
+        if ($start !== false && $end !== false && $end > $start) {
+            $candidate = substr($text, $start, $end - $start + 1);
+            $parsed = json_decode($candidate, true);
+        }
+    }
     if (!is_array($parsed) || !isset($parsed['topics']) || !is_array($parsed['topics'])) {
-        return ['ok' => false, 'error' => 'Model returned malformed JSON.', 'raw' => $text];
+        $err = 'Model returned malformed JSON.';
+        if ($stopReason === 'max_tokens') {
+            $err .= ' Response was truncated by max_tokens - try a shorter period.';
+        }
+        // Log truncated head of raw output to PHP error log so we can see what
+        // Claude actually produced when a workspace keeps hitting this.
+        error_log('[AiServe] topic analysis JSON parse failed (stop=' . $stopReason
+            . ', len=' . strlen($text) . '): ' . substr($text, 0, 500));
+        return [
+            'ok'          => false,
+            'error'       => $err,
+            'raw'         => $text,
+            'stop_reason' => $stopReason,
+        ];
     }
 
     return [

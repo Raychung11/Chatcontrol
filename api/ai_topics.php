@@ -101,8 +101,17 @@ $conversations = count($perConv);
 
 $result = ai_analyze_topics($company, $samples, $periodDays);
 if (!$result['ok']) {
+    // Include stop_reason + a head of the raw output so admins can see what
+    // Claude actually returned when "malformed JSON" keeps showing up.
+    $note = (string)$result['error'];
+    if (!empty($result['stop_reason'])) {
+        $note .= ' [stop=' . $result['stop_reason'] . ']';
+    }
+    if (!empty($result['raw'])) {
+        $note .= ' raw=' . substr((string)$result['raw'], 0, 300);
+    }
     log_activity($companyId, (int)$user['id'], 'ai_topics_failed', 'company', $companyId,
-        substr((string)$result['error'], 0, 200));
+        substr($note, 0, 500));
     json_response($result, 502);
 }
 

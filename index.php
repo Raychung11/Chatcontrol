@@ -28,7 +28,7 @@ $year = date('Y');
   <nav class="landing-nav-links">
     <a href="#features">Features</a>
     <a href="#how">How it works</a>
-    <a href="#plans">Plans</a>
+    <a href="/pricing.php">Pricing</a>
     <a class="btn btn-primary btn-sm" href="/login.php">Sign in</a>
   </nav>
 </header>
@@ -176,13 +176,18 @@ $year = date('Y');
 </section>
 
 <section id="plans" class="landing-section landing-alt">
-  <h2 class="landing-h2">Plans</h2>
-  <p class="landing-sub">All plans include AI suggestions and the knowledge base. Bring your own Anthropic API key — you pay for AI at cost.</p>
+  <h2 class="landing-h2">Simple pricing — save 50% with the team bundle</h2>
+  <p class="landing-sub">RM 12 per seat, or grab the 10-seat bundle for RM 60/month. Every plan includes AI suggestions and the knowledge base.</p>
   <div class="landing-grid plans">
     <div class="plan-card">
       <h3>Starter</h3>
+      <div class="plan-price">
+        <span class="plan-price-amount">RM 36</span>
+        <span class="plan-price-unit">/ month</span>
+      </div>
+      <p class="plan-price-sub muted small">3 seats · RM 12 per seat</p>
       <ul>
-        <li>3 agents</li>
+        <li>Up to 3 agents</li>
         <li>1 WhatsApp number</li>
         <li>AI suggestions &amp; knowledge base</li>
         <li>Shared inbox + notes + tags</li>
@@ -190,10 +195,15 @@ $year = date('Y');
       <p class="muted small">For small teams getting started.</p>
     </div>
     <div class="plan-card highlight">
-      <div class="plan-badge">Most popular</div>
+      <div class="plan-badge">Most popular · save 50%</div>
       <h3>Growth</h3>
+      <div class="plan-price">
+        <span class="plan-price-amount">RM 60</span>
+        <span class="plan-price-unit">/ month</span>
+      </div>
+      <p class="plan-price-sub muted small">10 seats · effectively RM 6 per seat</p>
       <ul>
-        <li>10 agents</li>
+        <li>Up to 10 agents</li>
         <li>1 WhatsApp number</li>
         <li>Everything in Starter</li>
         <li>Reports, routing rules, templates</li>
@@ -203,6 +213,11 @@ $year = date('Y');
     </div>
     <div class="plan-card">
       <h3>Enterprise</h3>
+      <div class="plan-price">
+        <span class="plan-price-amount">RM 60</span>
+        <span class="plan-price-unit">+ RM 12 / extra seat</span>
+      </div>
+      <p class="plan-price-sub muted small">10+ seats · scale seat by seat</p>
       <ul>
         <li>Unlimited agents</li>
         <li>Multiple numbers</li>
@@ -213,6 +228,9 @@ $year = date('Y');
       <p class="muted small">For multi-brand operators and resellers.</p>
     </div>
   </div>
+  <p style="text-align:center; margin-top: 18px;">
+    <a class="btn" href="/pricing.php">See full pricing &amp; FAQ →</a>
+  </p>
 </section>
 
 <section class="landing-cta-band">
@@ -231,7 +249,7 @@ $year = date('Y');
     <span class="dot">·</span>
     <a href="#features">Features</a>
     <span class="dot">·</span>
-    <a href="#plans">Plans</a>
+    <a href="/pricing.php">Pricing</a>
     <span class="dot">·</span>
     <a href="/terms.php">Terms</a>
     <span class="dot">·</span>

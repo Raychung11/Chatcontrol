@@ -9,12 +9,15 @@ if (current_user()) {
 }
 
 $err = '';
+// Allow ?plan=starter|growth|enterprise to preselect from the pricing page.
+$prePlan = (string)($_GET['plan'] ?? 'growth');
+if (!in_array($prePlan, ['starter','growth','enterprise'], true)) $prePlan = 'growth';
 $old = [
     'company' => '',
     'slug'    => '',
     'name'    => '',
     'email'   => '',
-    'plan'    => 'growth',
+    'plan'    => $prePlan,
 ];
 
 if (is_post()) {
@@ -143,7 +146,7 @@ if (is_post()) {
       <span class="brand-text">AiServe Inbox</span>
     </div>
     <h1>Create your workspace</h1>
-    <p class="muted">Free to start. Invite up to 10 teammates on the Growth plan.</p>
+    <p class="muted">Pick a plan, invite your team, start replying on WhatsApp. See <a href="/pricing.php" target="_blank">full pricing</a>.</p>
 
     <?php if ($err): ?>
       <div class="alert alert-error"><?= e($err) ?></div>
@@ -176,18 +179,27 @@ if (is_post()) {
       <input type="password" id="password_confirm" name="password_confirm" required minlength="8" autocomplete="new-password">
 
       <fieldset class="plan-pick">
-        <legend>Plan</legend>
+        <legend>Plan <small class="muted">(<a href="/pricing.php" target="_blank">full pricing details</a>)</small></legend>
         <label class="plan-radio">
           <input type="radio" name="plan" value="starter" <?= $old['plan'] === 'starter' ? 'checked' : '' ?>>
-          <span><strong>Starter</strong> — 3 seats</span>
+          <span>
+            <strong>Starter</strong> — 3 seats · <strong>RM 36 / month</strong>
+            <small class="muted">RM 12 per seat</small>
+          </span>
         </label>
         <label class="plan-radio">
           <input type="radio" name="plan" value="growth" <?= $old['plan'] === 'growth' ? 'checked' : '' ?>>
-          <span><strong>Growth</strong> — 10 seats</span>
+          <span>
+            <strong>Growth</strong> — 10 seats · <strong>RM 60 / month</strong>
+            <small class="muted">save 50% vs per-seat (RM 6 / seat)</small>
+          </span>
         </label>
         <label class="plan-radio">
           <input type="radio" name="plan" value="enterprise" <?= $old['plan'] === 'enterprise' ? 'checked' : '' ?>>
-          <span><strong>Enterprise</strong> — unlimited</span>
+          <span>
+            <strong>Enterprise</strong> — 10 seats + extras
+            <small class="muted">RM 60 base + RM 12 per extra seat</small>
+          </span>
         </label>
       </fieldset>
 

@@ -879,6 +879,11 @@ main { display: block; }   /* normalize older browsers */
   background: var(--c-primary); color: #fff; font-size: 11px; padding: 4px 10px;
   border-radius: 999px; letter-spacing: 0.04em; text-transform: uppercase;
 }
+.plan-price { display: flex; align-items: baseline; gap: 6px; margin: 4px 0 0 0; flex-wrap: wrap; }
+.plan-price-amount { font-size: 32px; font-weight: 700; color: var(--c-text); line-height: 1; }
+.plan-price-unit   { font-size: 14px; color: var(--c-muted); }
+.plan-price-sub    { margin: 0 0 8px 0; }
+.btn-block         { display: block; width: 100%; text-align: center; }
 
 .landing-cta-band {
   background: linear-gradient(135deg, var(--c-primary-d), var(--c-accent));

@@ -3,6 +3,10 @@ require_once __DIR__ . '/../inc/layout.php';
 require_once __DIR__ . '/../inc/channels.php';
 
 $current_user = require_role(['super_admin']);
+if (!is_platform_admin()) {
+    // Workspace owners can see the channel list but not the connection details.
+    redirect('/admin/channels.php');
+}
 $companyId    = (int)$current_user['company_id'];
 $db           = aiserve_db();
 

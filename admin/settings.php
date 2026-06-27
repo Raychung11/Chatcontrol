@@ -8,15 +8,11 @@ $db           = aiserve_db();
 $msg = '';
 $err = '';
 
+$isPlatform = is_platform_admin();
+
 if (is_post()) {
     csrf_check();
     $name              = trim((string)($_POST['name']                 ?? ''));
-    $whatsappNumber    = trim((string)($_POST['whatsapp_number']      ?? ''));
-    $phoneNumberId     = trim((string)($_POST['phone_number_id']      ?? ''));
-    $businessAccountId = trim((string)($_POST['business_account_id']  ?? ''));
-    $apiVersion        = trim((string)($_POST['api_version']          ?? 'v21.0'));
-    $accessToken       = trim((string)($_POST['access_token']         ?? ''));
-    $verifyToken       = trim((string)($_POST['webhook_verify_token'] ?? ''));
     $brandColor        = trim((string)($_POST['brand_color']          ?? '#25D366'));
     $timezone          = trim((string)($_POST['timezone']             ?? APP_TIMEZONE));
     $defaultDeptId     = $_POST['default_department_id'] ?? '';
@@ -26,35 +22,50 @@ if (is_post()) {
     $alertThreshold    = max(1, (int)($_POST['alert_failed_sends_threshold'] ?? 5));
     $alertEmail        = trim((string)($_POST['alert_email'] ?? ''));
 
-    $provider          = (string)($_POST['provider'] ?? 'cloud_api');
-    if (!in_array($provider, ['cloud_api', 'evolution', 'aiserve_chatbot'], true)) $provider = 'cloud_api';
-    $evoBaseUrl        = trim((string)($_POST['evolution_base_url'] ?? ''));
-    $evoApiKey         = trim((string)($_POST['evolution_api_key']  ?? ''));
-    $evoInstance       = trim((string)($_POST['evolution_instance'] ?? ''));
-    $chatbotUrl        = trim((string)($_POST['chatbot_base_url']     ?? ''));
-    $chatbotToken      = trim((string)($_POST['chatbot_bearer_token'] ?? ''));
+    // Load the current row up front so we can keep whatever the workspace owner
+    // is not allowed to edit (everything WhatsApp-connection related).
+    $existing = $db->prepare('SELECT * FROM companies WHERE id = ?');
+    $existing->execute([$companyId]);
+    $existing = $existing->fetch() ?: [];
+
+    if ($isPlatform) {
+        $whatsappNumber    = trim((string)($_POST['whatsapp_number']      ?? ''));
+        $phoneNumberId     = trim((string)($_POST['phone_number_id']      ?? ''));
+        $businessAccountId = trim((string)($_POST['business_account_id']  ?? ''));
+        $apiVersion        = trim((string)($_POST['api_version']          ?? 'v21.0')) ?: 'v21.0';
+        $accessToken       = trim((string)($_POST['access_token']         ?? ''));
+        $verifyToken       = trim((string)($_POST['webhook_verify_token'] ?? ''));
+        $provider          = (string)($_POST['provider'] ?? 'cloud_api');
+        if (!in_array($provider, ['cloud_api', 'evolution', 'aiserve_chatbot'], true)) $provider = 'cloud_api';
+        $evoBaseUrl        = trim((string)($_POST['evolution_base_url'] ?? ''));
+        $evoApiKey         = trim((string)($_POST['evolution_api_key']  ?? ''));
+        $evoInstance       = trim((string)($_POST['evolution_instance'] ?? ''));
+        $chatbotUrl        = trim((string)($_POST['chatbot_base_url']     ?? ''));
+        $chatbotToken      = trim((string)($_POST['chatbot_bearer_token'] ?? ''));
+        // Keep blanked secrets.
+        if ($accessToken === '')  $accessToken  = (string)($existing['access_token']        ?? '');
+        if ($evoApiKey === '')    $evoApiKey    = (string)($existing['evolution_api_key']   ?? '');
+        if ($chatbotToken === '') $chatbotToken = (string)($existing['chatbot_bearer_token'] ?? '');
+    } else {
+        // Workspace owner cannot change anything connection-related - reuse the
+        // existing values regardless of what the form posted.
+        $whatsappNumber    = (string)($existing['whatsapp_number']      ?? '');
+        $phoneNumberId     = (string)($existing['phone_number_id']      ?? '');
+        $businessAccountId = (string)($existing['business_account_id']  ?? '');
+        $apiVersion        = (string)($existing['api_version']          ?? 'v21.0') ?: 'v21.0';
+        $accessToken       = (string)($existing['access_token']         ?? '');
+        $verifyToken       = (string)($existing['webhook_verify_token'] ?? '');
+        $provider          = (string)($existing['provider']             ?? 'cloud_api');
+        $evoBaseUrl        = (string)($existing['evolution_base_url']   ?? '');
+        $evoApiKey         = (string)($existing['evolution_api_key']    ?? '');
+        $evoInstance       = (string)($existing['evolution_instance']   ?? '');
+        $chatbotUrl        = (string)($existing['chatbot_base_url']     ?? '');
+        $chatbotToken      = (string)($existing['chatbot_bearer_token'] ?? '');
+    }
 
     if ($name === '') {
         $err = 'Company name is required.';
     } else {
-        // If the access_token field is left blank, keep the existing one.
-        if ($accessToken === '') {
-            $stmt = $db->prepare('SELECT access_token FROM companies WHERE id = ?');
-            $stmt->execute([$companyId]);
-            $accessToken = (string)($stmt->fetchColumn() ?: '');
-        }
-        // Same for evolution_api_key — keep existing if blank
-        if ($evoApiKey === '') {
-            $stmt = $db->prepare('SELECT evolution_api_key FROM companies WHERE id = ?');
-            $stmt->execute([$companyId]);
-            $evoApiKey = (string)($stmt->fetchColumn() ?: '');
-        }
-        // Same for chatbot_bearer_token — keep existing if blank
-        if ($chatbotToken === '') {
-            $stmt = $db->prepare('SELECT chatbot_bearer_token FROM companies WHERE id = ?');
-            $stmt->execute([$companyId]);
-            $chatbotToken = (string)($stmt->fetchColumn() ?: '');
-        }
         if ($defaultDeptId !== null) {
             $check = $db->prepare('SELECT id FROM departments WHERE id = ? AND company_id = ? LIMIT 1');
             $check->execute([$defaultDeptId, $companyId]);
@@ -72,7 +83,7 @@ if (is_post()) {
         );
         $upd->execute([
             $name, $whatsappNumber, $phoneNumberId, $businessAccountId,
-            $apiVersion ?: 'v21.0', $accessToken, $verifyToken,
+            $apiVersion, $accessToken, $verifyToken,
             $brandColor ?: '#25D366', $timezone ?: APP_TIMEZONE,
             $defaultDeptId,
             $provider,
@@ -135,6 +146,15 @@ layout_start($current_user, 'Company & API Settings', 'settings', $company['bran
       <small class="muted">New customer messages land here when no <a href="/admin/routing.php">routing rule</a> matches.</small>
     </label>
 
+    <?php if (!$isPlatform): ?>
+    <div class="alert alert-info">
+      <strong>WhatsApp connection:</strong>
+      managed by your platform administrator. Need a new number or a connection
+      change? Contact support — your channels and message history stay intact.
+    </div>
+    <?php endif; ?>
+
+    <?php if ($isPlatform): ?>
     <h2>Messaging provider</h2>
     <?php $currentProvider = $company['provider'] ?? 'cloud_api'; ?>
     <div class="provider-picker">
@@ -273,6 +293,7 @@ layout_start($current_user, 'Company & API Settings', 'settings', $company['bran
       });
     })();
     </script>
+    <?php endif; // is_platform_admin - end of WhatsApp provider config block ?>
 
     <h2>Operational alerts</h2>
     <p class="muted small">

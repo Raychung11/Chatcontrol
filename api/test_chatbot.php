@@ -18,6 +18,9 @@ require_once __DIR__ . '/../inc/aiserve_chatbot_api.php';
 require_once __DIR__ . '/../inc/channels.php';
 
 $user = require_role(['super_admin']);
+if (!is_platform_admin()) {
+    json_response(['ok' => false, 'error' => 'Forbidden.'], 403);
+}
 
 if (!is_post()) {
     json_response(['ok' => false, 'error' => 'POST required.'], 405);

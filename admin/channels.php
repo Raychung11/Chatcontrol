@@ -5,10 +5,13 @@ require_once __DIR__ . '/../inc/channels.php';
 $current_user = require_role(['super_admin']);
 $companyId    = (int)$current_user['company_id'];
 $db           = aiserve_db();
+$isPlatform   = is_platform_admin();
 
 $msg = '';
 
-if (is_post()) {
+// All mutating actions (toggle, delete, make_default) and the edit/create
+// pages are platform-admin only - workspace owners get a read-only list.
+if ($isPlatform && is_post()) {
     csrf_check();
     $action = (string)($_POST['action'] ?? '');
     $id     = (int)($_POST['id'] ?? 0);
@@ -64,12 +67,18 @@ layout_start($current_user, 'Channels', 'channels');
 <div class="card">
   <div class="card-head">
     <h2>WhatsApp channels</h2>
-    <a class="btn btn-primary" href="/admin/channel_edit.php">+ New channel</a>
+    <?php if ($isPlatform): ?>
+      <a class="btn btn-primary" href="/admin/channel_edit.php">+ New channel</a>
+    <?php endif; ?>
   </div>
   <p class="muted small">
-    Each channel = one WhatsApp number. Add as many as your team handles. The
-    <strong>default channel</strong> is used when an incoming webhook arrives without
-    an explicit channel token (it's also what unassigned outbound replies use).
+    Each channel = one WhatsApp number your workspace is connected to.
+    <?php if ($isPlatform): ?>
+      The <strong>default channel</strong> is used when an incoming webhook arrives without
+      an explicit channel token (it's also what unassigned outbound replies use).
+    <?php else: ?>
+      To add a new number or change a connection, contact your platform administrator.
+    <?php endif; ?>
   </p>
 
   <?php if ($msg): ?><div class="alert alert-success"><?= e($msg) ?></div><?php endif; ?>
@@ -79,27 +88,37 @@ layout_start($current_user, 'Channels', 'channels');
       <tr>
         <th>Name</th>
         <th>Phone</th>
-        <th>Provider</th>
+        <?php if ($isPlatform): ?><th>Provider</th><?php endif; ?>
         <th>Conversations</th>
         <th>Messages</th>
         <th>Default</th>
         <th>Status</th>
-        <th></th>
+        <?php if ($isPlatform): ?><th></th><?php endif; ?>
       </tr>
     </thead>
     <tbody>
+      <?php $colSpan = $isPlatform ? 8 : 6; ?>
       <?php if (!$channels): ?>
-        <tr><td colspan="8" class="muted">No channels yet — click "+ New channel" to add one.</td></tr>
+        <tr><td colspan="<?= $colSpan ?>" class="muted">
+          <?= $isPlatform ? 'No channels yet — click "+ New channel" to add one.' : 'No channels yet. Contact your platform administrator to connect a WhatsApp number.' ?>
+        </td></tr>
       <?php endif; ?>
       <?php foreach ($channels as $c): ?>
         <tr>
-          <td><a href="/admin/channel_edit.php?id=<?= (int)$c['id'] ?>"><strong><?= e($c['name']) ?></strong></a></td>
+          <td>
+            <?php if ($isPlatform): ?>
+              <a href="/admin/channel_edit.php?id=<?= (int)$c['id'] ?>"><strong><?= e($c['name']) ?></strong></a>
+            <?php else: ?>
+              <strong><?= e($c['name']) ?></strong>
+            <?php endif; ?>
+          </td>
           <td><?= e($c['display_phone'] ?? '—') ?></td>
-          <td><?= e($c['provider']) ?></td>
+          <?php if ($isPlatform): ?><td><?= e($c['provider']) ?></td><?php endif; ?>
           <td><?= (int)$c['conversation_count'] ?></td>
           <td><?= (int)$c['message_count'] ?></td>
           <td><?= !empty($c['is_default']) ? '<span class="badge badge-open">Default</span>' : '' ?></td>
           <td><?= status_badge($c['status']) ?></td>
+          <?php if ($isPlatform): ?>
           <td class="actions">
             <a class="btn btn-sm" href="/admin/channel_edit.php?id=<?= (int)$c['id'] ?>">Edit</a>
             <?php if (empty($c['is_default']) && $c['status'] === 'active'): ?>
@@ -127,6 +146,7 @@ layout_start($current_user, 'Channels', 'channels');
               </form>
             <?php endif; ?>
           </td>
+          <?php endif; ?>
         </tr>
       <?php endforeach; ?>
     </tbody>

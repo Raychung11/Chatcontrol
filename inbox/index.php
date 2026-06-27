@@ -59,13 +59,14 @@ layout_start($current_user, 'Inbox', 'inbox');
     <ul class="inbox-quickfilters">
       <?php
       $links = [
-          'all'        => ['All',         'open_total'],
-          'mine'       => ['Mine',        'mine'],
-          'unassigned' => ['Unassigned',  'unassigned'],
-          'open'       => ['Open',        's_open'],
-          'pending'    => ['Pending',     's_pending'],
-          'escalated'  => ['Escalated',   's_escalated'],
-          'closed'     => ['Closed',      's_closed'],
+          'all'        => ['All',             'open_total'],
+          'awaiting'   => ['⏰ Awaiting reply', 'awaiting'],
+          'mine'       => ['Mine',            'mine'],
+          'unassigned' => ['Unassigned',      'unassigned'],
+          'open'       => ['Open',            's_open'],
+          'pending'    => ['Pending',         's_pending'],
+          'escalated'  => ['Escalated',       's_escalated'],
+          'closed'     => ['Closed',          's_closed'],
       ];
       foreach ($links as $key => [$label, $countKey]):
         $href = '?filter=' . urlencode($key)

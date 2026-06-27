@@ -23,6 +23,14 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
     $where  = ['c.company_id = ?'];
     $params = [$companyId];
 
+    // "Awaiting reply" = the most recent message in the conversation was from
+    // the customer (last_message_at <= last_customer_message_at, with NULLs
+    // treated as "still waiting"). Anything closed is excluded - a closed
+    // conversation does not need a reply even if the customer messaged last.
+    $awaitingExpr = '(c.last_customer_message_at IS NOT NULL
+                       AND (c.last_message_at IS NULL OR c.last_message_at <= c.last_customer_message_at)
+                       AND c.status <> "closed")';
+
     switch ($filter) {
         case 'unassigned':
             $where[] = 'c.assigned_user_id IS NULL';
@@ -31,6 +39,9 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
         case 'mine':
             $where[]  = 'c.assigned_user_id = ?';
             $params[] = (int)$user['id'];
+            break;
+        case 'awaiting':
+            $where[] = $awaitingExpr;
             break;
         case 'open':
             $where[] = 'c.status = "open"';
@@ -75,14 +86,17 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
 
     $sql = 'SELECT c.*, ct.display_name, ct.profile_name, ct.phone AS contact_phone, ct.wa_id,
                    u.name AS agent_name, d.name AS department_name,
-                   ch.name AS channel_name, ch.display_phone AS channel_phone
+                   ch.name AS channel_name, ch.display_phone AS channel_phone,
+                   ' . $awaitingExpr . ' AS awaiting_reply
             FROM conversations c
             INNER JOIN contacts ct ON ct.id = c.contact_id
             LEFT  JOIN users    u  ON u.id  = c.assigned_user_id
             LEFT  JOIN departments d ON d.id = c.department_id
             LEFT  JOIN channels  ch ON ch.id = c.channel_id
             WHERE ' . implode(' AND ', $where) . '
-            ORDER BY (c.status = "closed") ASC, COALESCE(c.last_message_at, c.created_at) DESC
+            ORDER BY (c.status = "closed") ASC,
+                     ' . $awaitingExpr . ' DESC,
+                     COALESCE(c.last_message_at, c.created_at) DESC
             LIMIT 200';
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
@@ -112,7 +126,10 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
            SUM(status = "open")                                 AS s_open,
            SUM(status = "pending")                              AS s_pending,
            SUM(status = "closed")                               AS s_closed,
-           SUM(status = "escalated")                            AS s_escalated
+           SUM(status = "escalated")                            AS s_escalated,
+           SUM(last_customer_message_at IS NOT NULL
+               AND (last_message_at IS NULL OR last_message_at <= last_customer_message_at)
+               AND status <> "closed")                          AS awaiting
          FROM conversations WHERE company_id = ?'
     );
     $cstmt->execute([(int)$user['id'], $companyId]);
@@ -136,7 +153,10 @@ function inbox_row_html(array $c, array $tags): string
     $preview = mb_strimwidth((string)$c['last_message_text'], 0, 70, '…');
     $time    = relative_time($c['last_message_at'] ?? $c['created_at']);
 
-    $html  = '<a class="inbox-row" data-conv-id="' . (int)$c['id'] . '" href="/inbox/chat.php?id=' . (int)$c['id'] . '">';
+    $awaiting = !empty($c['awaiting_reply']);
+    $html  = '<a class="inbox-row" data-conv-id="' . (int)$c['id']
+           . '" data-awaiting="' . ($awaiting ? '1' : '0')
+           . '" href="/inbox/chat.php?id=' . (int)$c['id'] . '">';
     $html .= '<div class="row-avatar">' . e($initial) . '</div>';
     $html .= '<div class="row-main">';
     $html .= '<div class="row-top"><span class="row-name">' . e($name) . '</span>'
@@ -147,6 +167,9 @@ function inbox_row_html(array $c, array $tags): string
     }
     $html .= '</div>';
     $html .= '<div class="row-bot">' . status_badge($c['status']);
+    if ($awaiting) {
+        $html .= '<span class="awaiting-badge" title="Customer is waiting for a reply">⏰ Awaiting reply</span>';
+    }
     $html .= '<span class="row-meta">' . e($c['agent_name'] ? 'Assigned: ' . $c['agent_name'] : 'Unassigned') . '</span>';
     if (!empty($c['department_name'])) {
         $html .= '<span class="row-meta">· ' . e($c['department_name']) . '</span>';

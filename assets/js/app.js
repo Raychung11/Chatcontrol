@@ -612,6 +612,15 @@
   // ---- Inbox live refresh -----------------------------------------
   const inboxShell = document.querySelector('.inbox-shell[data-poll-scope="inbox"]');
   let inboxPolling = false;
+  // Track awaiting count across polls so we can beep + flash the tab title
+  // the moment a new customer message lands without anyone replying yet.
+  let lastAwaitingCount = null;
+  const baseTitle = document.title;
+
+  function setAwaitingTitle(n) {
+    document.title = n > 0 ? '(' + n + ') ' + baseTitle : baseTitle;
+  }
+
   async function pollInboxOnce() {
     if (!inboxShell || inboxPolling || hidden()) return;
     inboxPolling = true;
@@ -640,8 +649,25 @@
         const k = el.getAttribute('data-count');
         if (data.counts && k in data.counts) el.textContent = data.counts[k];
       });
+
+      // Awaiting-reply notification: beep when the count climbs, update tab title.
+      const awaiting = (data.counts && data.counts.awaiting) || 0;
+      if (lastAwaitingCount !== null && awaiting > lastAwaitingCount) beep();
+      lastAwaitingCount = awaiting;
+      setAwaitingTitle(awaiting);
     } catch (_) { /* ignore */ }
     finally { inboxPolling = false; }
+  }
+
+  // Seed the title from server-rendered counts on first paint so the
+  // indicator is correct before the first poll completes.
+  if (inboxShell) {
+    const seed = document.querySelector('.inbox-quickfilters .count[data-count="awaiting"]');
+    if (seed) {
+      const n = parseInt(seed.textContent || '0', 10) || 0;
+      lastAwaitingCount = n;
+      setAwaitingTitle(n);
+    }
   }
 
   if (stream || inboxShell) {

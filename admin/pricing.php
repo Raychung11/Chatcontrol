@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../inc/layout.php';
+require_once __DIR__ . '/../inc/platform_settings_helper.php';
 
 $current_user = require_role(['super_admin']);
 if (!is_platform_admin()) {
@@ -11,8 +12,6 @@ $db  = aiserve_db();
 $msg = '';
 $err = '';
 
-// Editable keys + their human label + input type. Keep this list aligned with
-// the seeded rows in sql/migration_phase14.sql.
 $fields = [
     'pricing_currency' => [
         'label' => 'Currency symbol',
@@ -66,142 +65,21 @@ $fields = [
         'type'  => 'textarea',
         'hint'  => 'Shown in the public pricing FAQ under "Can I change plans later?".',
     ],
-    // ---- Operator legal details ----
-    'operator_legal_name' => [
-        'label' => 'Operator legal name',
-        'type'  => 'text',
-        'hint'  => 'Your registered company name. Appears in Terms, Privacy, Refund Policy, and footers. Leave blank to use the brand name only.',
-        'max'   => 190,
-        'optional' => true,
-    ],
-    'operator_registration_no' => [
-        'label' => 'Registration number',
-        'type'  => 'text',
-        'hint'  => 'SSM company number or similar. Shown after the legal name on the legal pages.',
-        'max'   => 64,
-        'optional' => true,
-    ],
-    'operator_address' => [
-        'label' => 'Business address',
-        'type'  => 'textarea',
-        'hint'  => 'Shown in Terms s.15 and Privacy s.12 contact blocks.',
-        'optional' => true,
-    ],
-    'operator_email' => [
-        'label' => 'Support email',
-        'type'  => 'text',
-        'hint'  => 'Used for refund requests and data-subject access requests on the legal pages.',
-        'max'   => 190,
-        'optional' => true,
-    ],
-    'operator_jurisdiction' => [
-        'label' => 'Governing-law jurisdiction',
-        'type'  => 'text',
-        'hint'  => 'e.g. "Malaysia". Shown in Terms s.13.',
-        'max'   => 64,
-    ],
-    'operator_courts' => [
-        'label' => 'Forum courts',
-        'type'  => 'text',
-        'hint'  => 'e.g. "the courts of Kuala Lumpur, Malaysia". Shown in Terms s.13.',
-        'max'   => 190,
-    ],
-    // ---- Editable legal-page dates ----
-    'legal_terms_updated' => [
-        'label' => 'Terms: Last updated date',
-        'type'  => 'text',
-        'hint'  => 'Free text date shown at the top of /terms.php. Bump when you edit the page so customers see the change.',
-        'max'   => 32,
-    ],
-    'legal_privacy_updated' => [
-        'label' => 'Privacy: Last updated date',
-        'type'  => 'text',
-        'hint'  => 'Free text date shown at the top of /privacy.php.',
-        'max'   => 32,
-    ],
-    'legal_disclaimer_updated' => [
-        'label' => 'Disclaimer: Last updated date',
-        'type'  => 'text',
-        'hint'  => 'Free text date shown at the top of /disclaimer.php.',
-        'max'   => 32,
-    ],
-    'legal_refund_updated' => [
-        'label' => 'Refund Policy: Last updated date',
-        'type'  => 'text',
-        'hint'  => 'Free text date shown at the top of /refund.php.',
-        'max'   => 32,
-    ],
-    // ---- Refund policy ----
-    'refund_window_days' => [
-        'label' => 'Refund cooling-off window (days)',
-        'type'  => 'number',
-        'hint'  => 'Number of days a customer can get a full refund on their first paid invoice if they have not connected a live WhatsApp number.',
-        'step'  => '1',
-    ],
-    'refund_policy_extra' => [
-        'label' => 'Refund policy: extra terms',
-        'type'  => 'textarea',
-        'hint'  => 'Optional extra paragraph rendered after section 7 on /refund.php. Leave blank to hide.',
-        'optional' => true,
-    ],
 ];
 
 if (is_post()) {
     csrf_check();
-    $values = [];
-    foreach ($fields as $key => $meta) {
-        $raw = trim((string)($_POST[$key] ?? ''));
-        // Numeric fields: keep as a string but validate it parses as a non-negative number.
-        if ($meta['type'] === 'number') {
-            if ($raw === '' || !is_numeric($raw) || (float)$raw < 0) {
-                $err = $meta['label'] . ' must be a non-negative number.';
-                break;
-            }
-            // Drop trailing zeros so "12.00" gets stored as "12".
-            $f = (float)$raw;
-            $raw = (abs($f - round($f)) < 0.005) ? (string)(int)round($f) : (string)$f;
-        }
-        if ($raw === '' && in_array($meta['type'], ['text','number'], true) && empty($meta['optional'])) {
-            $err = $meta['label'] . ' is required.';
-            break;
-        }
-        $values[$key] = $raw;
-    }
-
-    if (!$err) {
-        try {
-            $stmt = $db->prepare(
-                'INSERT INTO platform_settings (`key`, `value`) VALUES (?, ?)
-                 ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)'
-            );
-            $db->beginTransaction();
-            foreach ($values as $k => $v) {
-                $stmt->execute([$k, $v]);
-            }
-            $db->commit();
-            log_activity((int)$current_user['company_id'], (int)$current_user['id'],
-                'platform_pricing_updated', 'platform', 0, '');
-            $msg = 'Pricing saved. Public pricing page, signup, and landing page now reflect the new values.';
-        } catch (Throwable $e) {
-            if ($db->inTransaction()) $db->rollBack();
-            error_log('[AiServe] pricing save failed: ' . $e->getMessage());
-            $err = 'Could not save pricing — check the migration is in (sql/migration_phase14.sql).';
-        }
-    }
+    $r = platform_settings_save(
+        $db, $fields, 'platform_pricing_updated',
+        (int)$current_user['company_id'], (int)$current_user['id']
+    );
+    $msg = $r['msg'];
+    $err = $r['err'];
 }
 
-// Re-read after any save so the preview reflects the new values.
-$current = [];
-try {
-    $rows = $db->query('SELECT `key`, `value` FROM platform_settings')->fetchAll();
-    foreach ($rows as $r) $current[$r['key']] = (string)$r['value'];
-} catch (Throwable $e) {
-    $err = $err ?: 'platform_settings table not found — run sql/migration_phase14.sql first.';
-}
-
-// Force pricing_get() to recompute by busting its static cache via a fresh require.
-// In practice we just call it again - the static cache lives in the helper, so to
-// preview live we read from $current directly below.
+$loaded  = platform_settings_load($db);
+$current = $loaded['rows'];
+if ($loaded['err'] && !$err) $err = $loaded['err'];
 
 layout_start($current_user, 'Platform pricing', 'pricing');
 ?>
@@ -213,39 +91,22 @@ layout_start($current_user, 'Platform pricing', 'pricing');
     These values drive <a href="/pricing.php" target="_blank">/pricing.php</a>,
     the plan radios on <a href="/register.php" target="_blank">/register.php</a>,
     and the plans block on the landing page. Changes are live immediately —
-    no deploy needed.
+    no deploy needed. Looking for operator details, refund policy, or legal
+    page dates? They moved to <a href="/admin/legal.php">Legal &amp; operator</a>.
   </p>
 
   <form method="post" class="form-grid">
     <?= csrf_field() ?>
-
-    <?php foreach ($fields as $key => $meta):
-      $val = $current[$key] ?? '';
-    ?>
-      <?php $req = empty($meta['optional']) ? 'required' : ''; ?>
-      <label>
-        <?= e($meta['label']) ?>
-        <?php if (!empty($meta['optional'])): ?><small class="muted">(optional)</small><?php endif; ?>
-        <?php if ($meta['type'] === 'textarea'): ?>
-          <textarea name="<?= e($key) ?>" rows="3"><?= e($val) ?></textarea>
-        <?php elseif ($meta['type'] === 'number'): ?>
-          <input type="number" name="<?= e($key) ?>" value="<?= e($val) ?>"
-                 step="<?= e($meta['step'] ?? '1') ?>" min="0" <?= $req ?>>
-        <?php else: ?>
-          <input type="text" name="<?= e($key) ?>" value="<?= e($val) ?>"
-                 <?= isset($meta['max']) ? 'maxlength="' . (int)$meta['max'] . '"' : '' ?> <?= $req ?>>
-        <?php endif; ?>
-        <small class="muted"><?= e($meta['hint']) ?></small>
-      </label>
-    <?php endforeach; ?>
-
+    <?php foreach ($fields as $key => $meta) {
+        render_platform_setting_field($key, $meta, $current[$key] ?? '');
+    } ?>
     <button class="btn btn-primary" type="submit">Save pricing</button>
   </form>
 </div>
 
 <?php
-// Live preview using the currently-saved values (not the just-edited form
-// state - the preview reflects what customers see right now).
+// Live preview using the currently-saved values so you can confirm before
+// reloading the public page.
 $currency = $current['pricing_currency']         ?? 'RM';
 $period   = $current['pricing_period_label']     ?? '/ month';
 $perSeat  = (float)($current['pricing_per_seat']         ?? 12);
@@ -254,9 +115,9 @@ $bdSeats  = (int)  ($current['pricing_bundle_seats']     ?? 10);
 $bdPrice  = (float)($current['pricing_bundle_price']     ?? 60);
 $extra    = (float)($current['pricing_extra_seat_price'] ?? 12);
 
-$starterPrice  = $perSeat * $stSeats;
-$effPerSeatG   = $bdSeats > 0 ? $bdPrice / $bdSeats : 0;
-$badge         = ($perSeat > 0 && $bdPrice < ($perSeat * $bdSeats))
+$starterPrice = $perSeat * $stSeats;
+$effPerSeatG  = $bdSeats > 0 ? $bdPrice / $bdSeats : 0;
+$badge        = ($perSeat > 0 && $bdPrice < ($perSeat * $bdSeats))
                   ? 'save ' . (int)round((1 - ($bdPrice / max(0.01, $perSeat * $bdSeats))) * 100) . '%'
                   : '';
 

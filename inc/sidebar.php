@@ -41,6 +41,7 @@ $role   = $current_user['role'] ?? 'agent';
       <div class="sidebar-section">Platform</div>
       <a href="/admin/workspaces.php" class="<?= $active === 'workspaces' ? 'active' : '' ?>">Workspaces</a>
       <a href="/admin/pricing.php" class="<?= $active === 'pricing' ? 'active' : '' ?>">Pricing</a>
+      <a href="/admin/legal.php" class="<?= $active === 'legal' ? 'active' : '' ?>">Legal &amp; operator</a>
     <?php endif; ?>
   </nav>
 

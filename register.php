@@ -178,27 +178,41 @@ if (is_post()) {
       <label for="password_confirm">Confirm password</label>
       <input type="password" id="password_confirm" name="password_confirm" required minlength="8" autocomplete="new-password">
 
+      <?php
+        $rp = pricing_get();
+        $rpCur     = $rp['currency'];
+        $rpPer     = $rp['period_label'];
+        $rpStPrice = fmt_price($rp['starter_price'],            $rpCur);
+        $rpBdPrice = fmt_price($rp['bundle_price'],             $rpCur);
+        $rpPerSeat = fmt_price($rp['per_seat'],                 $rpCur);
+        $rpEffSeat = fmt_price($rp['effective_per_seat_growth'],$rpCur);
+        $rpExtra   = fmt_price($rp['extra_seat_price'],         $rpCur);
+        $rpSave    = ($rp['per_seat'] > 0 && $rp['bundle_price'] < ($rp['per_seat'] * $rp['bundle_seats']))
+                       ? (int)round((1 - ($rp['bundle_price'] / max(0.01, $rp['per_seat'] * $rp['bundle_seats']))) * 100) : 0;
+      ?>
       <fieldset class="plan-pick">
         <legend>Plan <small class="muted">(<a href="/pricing.php" target="_blank">full pricing details</a>)</small></legend>
         <label class="plan-radio">
           <input type="radio" name="plan" value="starter" <?= $old['plan'] === 'starter' ? 'checked' : '' ?>>
           <span>
-            <strong>Starter</strong> — 3 seats · <strong>RM 36 / month</strong>
-            <small class="muted">RM 12 per seat</small>
+            <strong>Starter</strong> — <?= (int)$rp['starter_seats'] ?> seats · <strong><?= e($rpStPrice) ?> <?= e($rpPer) ?></strong>
+            <small class="muted"><?= e($rpPerSeat) ?> per seat</small>
           </span>
         </label>
         <label class="plan-radio">
           <input type="radio" name="plan" value="growth" <?= $old['plan'] === 'growth' ? 'checked' : '' ?>>
           <span>
-            <strong>Growth</strong> — 10 seats · <strong>RM 60 / month</strong>
-            <small class="muted">save 50% vs per-seat (RM 6 / seat)</small>
+            <strong>Growth</strong> — <?= (int)$rp['bundle_seats'] ?> seats · <strong><?= e($rpBdPrice) ?> <?= e($rpPer) ?></strong>
+            <small class="muted">
+              <?= $rpSave > 0 ? 'save ' . (int)$rpSave . '% vs per-seat ' : '' ?>(<?= e($rpEffSeat) ?> / seat)
+            </small>
           </span>
         </label>
         <label class="plan-radio">
           <input type="radio" name="plan" value="enterprise" <?= $old['plan'] === 'enterprise' ? 'checked' : '' ?>>
           <span>
-            <strong>Enterprise</strong> — 10 seats + extras
-            <small class="muted">RM 60 base + RM 12 per extra seat</small>
+            <strong>Enterprise</strong> — <?= (int)$rp['bundle_seats'] ?> seats + extras
+            <small class="muted"><?= e($rpBdPrice) ?> base + <?= e($rpExtra) ?> per extra seat</small>
           </span>
         </label>
       </fieldset>

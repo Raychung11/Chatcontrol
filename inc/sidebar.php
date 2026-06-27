@@ -40,6 +40,7 @@ $role   = $current_user['role'] ?? 'agent';
     <?php if (is_platform_admin() && !is_impersonating()): ?>
       <div class="sidebar-section">Platform</div>
       <a href="/admin/workspaces.php" class="<?= $active === 'workspaces' ? 'active' : '' ?>">Workspaces</a>
+      <a href="/admin/pricing.php" class="<?= $active === 'pricing' ? 'active' : '' ?>">Pricing</a>
     <?php endif; ?>
   </nav>
 

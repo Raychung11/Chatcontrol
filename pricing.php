@@ -3,6 +3,25 @@ require_once __DIR__ . '/inc/auth.php';
 require_once __DIR__ . '/inc/cookie_notice.php';
 
 $year = date('Y');
+$p    = pricing_get();
+$cur  = $p['currency'];
+$per  = $p['period_label'];
+
+$starterPrice = fmt_price($p['starter_price'], $cur);
+$bundlePrice  = fmt_price($p['bundle_price'],  $cur);
+$perSeatF     = fmt_price($p['per_seat'],      $cur);
+$effPerSeatF  = fmt_price($p['effective_per_seat_growth'], $cur);
+$extraSeatF   = fmt_price($p['extra_seat_price'], $cur);
+$listPriceGrowth = fmt_price($p['per_seat'] * $p['bundle_seats'], $cur);
+
+$savePct = ($p['per_seat'] > 0 && $p['bundle_price'] < ($p['per_seat'] * $p['bundle_seats']))
+    ? (int)round((1 - ($p['bundle_price'] / max(0.01, $p['per_seat'] * $p['bundle_seats']))) * 100)
+    : 0;
+
+// Example for Enterprise card: bundle_seats + 5 extras.
+$exampleSeats  = $p['bundle_seats'] + 5;
+$exampleTotal  = $p['bundle_price'] + (5 * $p['extra_seat_price']);
+$exampleTotalF = fmt_price($exampleTotal, $cur);
 ?><!doctype html>
 <html lang="en">
 <head>
@@ -33,8 +52,8 @@ $year = date('Y');
     <span class="landing-eyebrow">Simple, transparent pricing</span>
     <h1>One bundle, three sizes.<br>No surprises.</h1>
     <p class="landing-lede">
-      Pay <strong>RM 12 per seat</strong>, or grab the <strong>10-seat bundle for RM 60/month</strong>
-      and save 50%. Need more than 10? Add seats at RM 12 each.
+      Pay <strong><?= e($perSeatF) ?> per seat</strong>, or grab the <strong><?= e((int)$p['bundle_seats']) ?>-seat bundle for <?= e($bundlePrice) ?><?= e($per) ?></strong>
+      <?= $savePct > 0 ? 'and save ' . (int)$savePct . '%' : '' ?>. Need more than <?= e((int)$p['bundle_seats']) ?>? Add seats at <?= e($extraSeatF) ?> each.
       <br>Every plan includes AI reply suggestions, the knowledge base, multi-channel inbox, and everything else in the product.
     </p>
   </div>
@@ -46,12 +65,12 @@ $year = date('Y');
     <div class="plan-card">
       <h3>Starter</h3>
       <div class="plan-price">
-        <span class="plan-price-amount">RM 36</span>
-        <span class="plan-price-unit">/ month</span>
+        <span class="plan-price-amount"><?= e($starterPrice) ?></span>
+        <span class="plan-price-unit"><?= e($per) ?></span>
       </div>
-      <p class="plan-price-sub muted small">3 seats · RM 12 per seat</p>
+      <p class="plan-price-sub muted small"><?= (int)$p['starter_seats'] ?> seats · <?= e($perSeatF) ?> per seat</p>
       <ul>
-        <li>Up to <strong>3 agents</strong></li>
+        <li>Up to <strong><?= (int)$p['starter_seats'] ?> agents</strong></li>
         <li>1 WhatsApp number</li>
         <li>AI reply suggestions</li>
         <li>Knowledge base (PDFs, Word, FAQs)</li>
@@ -59,22 +78,24 @@ $year = date('Y');
         <li>Topics analytics</li>
       </ul>
       <a class="btn btn-block" href="/register.php?plan=starter">Start with Starter</a>
-      <p class="muted small" style="margin-top:8px;">Best for solo founders and 2–3 person teams.</p>
+      <p class="muted small" style="margin-top:8px;">Best for solo founders and small teams.</p>
     </div>
 
     <div class="plan-card highlight">
-      <div class="plan-badge">Most popular · save 50%</div>
+      <div class="plan-badge"><?= $savePct > 0 ? 'Most popular · save ' . (int)$savePct . '%' : 'Most popular' ?></div>
       <h3>Growth</h3>
       <div class="plan-price">
-        <span class="plan-price-amount">RM 60</span>
-        <span class="plan-price-unit">/ month</span>
+        <span class="plan-price-amount"><?= e($bundlePrice) ?></span>
+        <span class="plan-price-unit"><?= e($per) ?></span>
       </div>
       <p class="plan-price-sub muted small">
-        10 seats bundle · effectively RM 6 per seat
-        <br><s>RM 120</s> at per-seat rate
+        <?= (int)$p['bundle_seats'] ?> seats bundle · effectively <?= e($effPerSeatF) ?> per seat
+        <?php if ($savePct > 0): ?>
+          <br><s><?= e($listPriceGrowth) ?></s> at per-seat rate
+        <?php endif; ?>
       </p>
       <ul>
-        <li>Up to <strong>10 agents</strong></li>
+        <li>Up to <strong><?= (int)$p['bundle_seats'] ?> agents</strong></li>
         <li>1 WhatsApp number</li>
         <li>Everything in Starter</li>
         <li>Routing rules + AI rule builder</li>
@@ -83,18 +104,18 @@ $year = date('Y');
         <li>Email alerts on failed sends</li>
       </ul>
       <a class="btn btn-primary btn-block" href="/register.php?plan=growth">Start with Growth</a>
-      <p class="muted small" style="margin-top:8px;">Built for typical 4–10 person customer-service teams.</p>
+      <p class="muted small" style="margin-top:8px;">Built for typical customer-service teams.</p>
     </div>
 
     <div class="plan-card">
       <h3>Enterprise</h3>
       <div class="plan-price">
-        <span class="plan-price-amount">RM 60</span>
-        <span class="plan-price-unit">+ RM 12 / extra seat</span>
+        <span class="plan-price-amount"><?= e($bundlePrice) ?></span>
+        <span class="plan-price-unit">+ <?= e($extraSeatF) ?> / extra seat</span>
       </div>
       <p class="plan-price-sub muted small">
-        Starts at 10 seats, scales seat-by-seat
-        <br>Example: 15 seats = RM 60 + (5 × RM 12) = RM 120 / month
+        Starts at <?= (int)$p['bundle_seats'] ?> seats, scales seat-by-seat
+        <br>Example: <?= (int)$exampleSeats ?> seats = <?= e($bundlePrice) ?> + (5 × <?= e($extraSeatF) ?>) = <?= e($exampleTotalF) ?><?= e($per) ?>
       </p>
       <ul>
         <li><strong>Unlimited agents</strong> (pay per seat)</li>
@@ -119,7 +140,7 @@ $year = date('Y');
     </div>
     <div class="feature-card">
       <h3>Can I change plans later?</h3>
-      <p>Yes. Move from Starter → Growth → Enterprise any time. We prorate the difference for the current month.</p>
+      <p>Yes. Move from Starter → Growth → Enterprise any time. <?= e($p['footer_note']) ?></p>
     </div>
     <div class="feature-card">
       <h3>What about the WhatsApp side?</h3>
@@ -135,7 +156,7 @@ $year = date('Y');
     </div>
     <div class="feature-card">
       <h3>How do I pay?</h3>
-      <p>Invoiced monthly. Bank transfer (Malaysia), DuitNow, or e-wallet. Talk to us if you need annual billing for a discount.</p>
+      <p><?= e($p['payment_methods']) ?></p>
     </div>
   </div>
 </section>

@@ -235,12 +235,95 @@ function status_badge(string $status): string
 // -------------------- Multi-tenant helpers --------------------
 function plan_seat_limit(string $plan): int
 {
+    $p = pricing_get();
     return match ($plan) {
-        'starter'    => 3,
-        'growth'     => 10,
+        'starter'    => (int)$p['starter_seats'],
+        'growth'     => (int)$p['bundle_seats'],
         'enterprise' => 9999,
-        default      => 3,
+        default      => (int)$p['starter_seats'],
     };
+}
+
+/**
+ * Per-process cache of /admin/pricing.php settings. All public pricing pages
+ * read through this so editing settings is reflected immediately on the next
+ * request. Falls back to the original RM 12 / RM 60 / RM 12-extra defaults
+ * if the platform_settings table is missing or rows are deleted.
+ *
+ * Computed fields:
+ *  starter_price = per_seat × starter_seats
+ *  growth_price  = bundle_price
+ *  effective_per_seat_growth = bundle_price / bundle_seats
+ *
+ * @return array{currency:string, period_label:string, per_seat:float,
+ *               starter_seats:int, starter_price:float,
+ *               bundle_seats:int, bundle_price:float,
+ *               extra_seat_price:float, payment_methods:string,
+ *               footer_note:string, effective_per_seat_growth:float}
+ */
+function pricing_get(): array
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+
+    $defaults = [
+        'pricing_currency'         => 'RM',
+        'pricing_period_label'     => '/ month',
+        'pricing_per_seat'         => '12',
+        'pricing_starter_seats'    => '3',
+        'pricing_bundle_seats'     => '10',
+        'pricing_bundle_price'     => '60',
+        'pricing_extra_seat_price' => '12',
+        'pricing_payment_methods'  => 'Bank transfer (Malaysia), DuitNow, or e-wallet. Talk to us if you need annual billing for a discount.',
+        'pricing_footer_note'      => 'You can change plans any time. We prorate the difference for the current month.',
+    ];
+
+    try {
+        $rows = aiserve_db()->query('SELECT `key`, `value` FROM platform_settings')->fetchAll();
+        foreach ($rows as $r) {
+            if (array_key_exists($r['key'], $defaults)) {
+                $defaults[$r['key']] = (string)$r['value'];
+            }
+        }
+    } catch (Throwable $e) {
+        // Table doesn't exist yet (migration not run) - silently use defaults.
+        error_log('[AiServe] pricing_get fell back to defaults: ' . $e->getMessage());
+    }
+
+    $perSeat       = max(0.0, (float)$defaults['pricing_per_seat']);
+    $starterSeats  = max(1,   (int)$defaults['pricing_starter_seats']);
+    $bundleSeats   = max(1,   (int)$defaults['pricing_bundle_seats']);
+    $bundlePrice   = max(0.0, (float)$defaults['pricing_bundle_price']);
+    $extraSeat     = max(0.0, (float)$defaults['pricing_extra_seat_price']);
+
+    $cache = [
+        'currency'                 => (string)$defaults['pricing_currency'],
+        'period_label'             => (string)$defaults['pricing_period_label'],
+        'per_seat'                 => $perSeat,
+        'starter_seats'            => $starterSeats,
+        'starter_price'            => $perSeat * $starterSeats,
+        'bundle_seats'             => $bundleSeats,
+        'bundle_price'             => $bundlePrice,
+        'extra_seat_price'         => $extraSeat,
+        'payment_methods'          => (string)$defaults['pricing_payment_methods'],
+        'footer_note'              => (string)$defaults['pricing_footer_note'],
+        'effective_per_seat_growth'=> $bundleSeats > 0 ? $bundlePrice / $bundleSeats : 0.0,
+    ];
+    return $cache;
+}
+
+/**
+ * Format an amount + currency for display. "12" -> "RM 12", "59.5" -> "RM 59.50".
+ */
+function fmt_price(float $amount, ?string $currency = null): string
+{
+    $currency = $currency ?? pricing_get()['currency'];
+    // Drop trailing .00 so whole numbers stay clean (RM 12, not RM 12.00).
+    $rounded = round($amount, 2);
+    if (abs($rounded - round($rounded)) < 0.005) {
+        return $currency . ' ' . number_format($rounded, 0);
+    }
+    return $currency . ' ' . number_format($rounded, 2);
 }
 
 function company_user_count(int $companyId): int

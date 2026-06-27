@@ -175,19 +175,38 @@ $year = date('Y');
   </div>
 </section>
 
+<?php
+  $lp        = pricing_get();
+  $lpCur     = $lp['currency'];
+  $lpPer     = $lp['period_label'];
+  $lpStPrice = fmt_price($lp['starter_price'],            $lpCur);
+  $lpBdPrice = fmt_price($lp['bundle_price'],             $lpCur);
+  $lpPerSeat = fmt_price($lp['per_seat'],                 $lpCur);
+  $lpEffSeat = fmt_price($lp['effective_per_seat_growth'],$lpCur);
+  $lpExtra   = fmt_price($lp['extra_seat_price'],         $lpCur);
+  $lpSave    = ($lp['per_seat'] > 0 && $lp['bundle_price'] < ($lp['per_seat'] * $lp['bundle_seats']))
+                 ? (int)round((1 - ($lp['bundle_price'] / max(0.01, $lp['per_seat'] * $lp['bundle_seats']))) * 100) : 0;
+?>
 <section id="plans" class="landing-section landing-alt">
-  <h2 class="landing-h2">Simple pricing — save 50% with the team bundle</h2>
-  <p class="landing-sub">RM 12 per seat, or grab the 10-seat bundle for RM 60/month. Every plan includes AI suggestions and the knowledge base.</p>
+  <h2 class="landing-h2">
+    <?= $lpSave > 0
+        ? 'Simple pricing — save ' . (int)$lpSave . '% with the team bundle'
+        : 'Simple pricing' ?>
+  </h2>
+  <p class="landing-sub">
+    <?= e($lpPerSeat) ?> per seat, or grab the <?= (int)$lp['bundle_seats'] ?>-seat bundle for <?= e($lpBdPrice) ?> <?= e($lpPer) ?>.
+    Every plan includes AI suggestions and the knowledge base.
+  </p>
   <div class="landing-grid plans">
     <div class="plan-card">
       <h3>Starter</h3>
       <div class="plan-price">
-        <span class="plan-price-amount">RM 36</span>
-        <span class="plan-price-unit">/ month</span>
+        <span class="plan-price-amount"><?= e($lpStPrice) ?></span>
+        <span class="plan-price-unit"><?= e($lpPer) ?></span>
       </div>
-      <p class="plan-price-sub muted small">3 seats · RM 12 per seat</p>
+      <p class="plan-price-sub muted small"><?= (int)$lp['starter_seats'] ?> seats · <?= e($lpPerSeat) ?> per seat</p>
       <ul>
-        <li>Up to 3 agents</li>
+        <li>Up to <?= (int)$lp['starter_seats'] ?> agents</li>
         <li>1 WhatsApp number</li>
         <li>AI suggestions &amp; knowledge base</li>
         <li>Shared inbox + notes + tags</li>
@@ -195,15 +214,15 @@ $year = date('Y');
       <p class="muted small">For small teams getting started.</p>
     </div>
     <div class="plan-card highlight">
-      <div class="plan-badge">Most popular · save 50%</div>
+      <div class="plan-badge"><?= $lpSave > 0 ? 'Most popular · save ' . (int)$lpSave . '%' : 'Most popular' ?></div>
       <h3>Growth</h3>
       <div class="plan-price">
-        <span class="plan-price-amount">RM 60</span>
-        <span class="plan-price-unit">/ month</span>
+        <span class="plan-price-amount"><?= e($lpBdPrice) ?></span>
+        <span class="plan-price-unit"><?= e($lpPer) ?></span>
       </div>
-      <p class="plan-price-sub muted small">10 seats · effectively RM 6 per seat</p>
+      <p class="plan-price-sub muted small"><?= (int)$lp['bundle_seats'] ?> seats · effectively <?= e($lpEffSeat) ?> per seat</p>
       <ul>
-        <li>Up to 10 agents</li>
+        <li>Up to <?= (int)$lp['bundle_seats'] ?> agents</li>
         <li>1 WhatsApp number</li>
         <li>Everything in Starter</li>
         <li>Reports, routing rules, templates</li>
@@ -214,10 +233,10 @@ $year = date('Y');
     <div class="plan-card">
       <h3>Enterprise</h3>
       <div class="plan-price">
-        <span class="plan-price-amount">RM 60</span>
-        <span class="plan-price-unit">+ RM 12 / extra seat</span>
+        <span class="plan-price-amount"><?= e($lpBdPrice) ?></span>
+        <span class="plan-price-unit">+ <?= e($lpExtra) ?> / extra seat</span>
       </div>
-      <p class="plan-price-sub muted small">10+ seats · scale seat by seat</p>
+      <p class="plan-price-sub muted small"><?= (int)$lp['bundle_seats'] ?>+ seats · scale seat by seat</p>
       <ul>
         <li>Unlimited agents</li>
         <li>Multiple numbers</li>

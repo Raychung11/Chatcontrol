@@ -50,7 +50,20 @@ if (is_post()) {
             $limit = plan_seat_limit($plan);
             $used  = company_user_count($companyId);
             if ($used >= $limit) {
-                $err = 'Seat limit reached (' . $used . ' / ' . $limit . ' on ' . ucfirst($plan) . ' plan). Deactivate someone first or upgrade the plan.';
+                $pp = pricing_get();
+                $wantedSeats = $used + 1;
+                if ($plan === 'starter' && $wantedSeats <= $pp['bundle_seats']) {
+                    $upgradeTo   = 'Growth';
+                    $upgradeCost = $pp['bundle_price'];
+                } else {
+                    $upgradeTo   = 'Enterprise';
+                    $extras      = max(0, $wantedSeats - $pp['bundle_seats']);
+                    $upgradeCost = $pp['bundle_price'] + ($extras * $pp['extra_seat_price']);
+                }
+                $err = 'Seat limit reached (' . $used . ' / ' . $limit . ' on ' . ucfirst($plan)
+                     . '). Deactivate someone, or upgrade to ' . $upgradeTo
+                     . ' for ' . fmt_price($upgradeCost, $pp['currency']) . ' ' . $pp['period_label']
+                     . ' (covers ' . $wantedSeats . ' seats).';
             }
         }
     }

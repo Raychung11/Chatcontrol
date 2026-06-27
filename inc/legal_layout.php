@@ -12,9 +12,12 @@
 require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/cookie_notice.php';
 
-function legal_page_start(string $title): void
+function legal_page_start(string $title, string $lastUpdated = ''): void
 {
-    $lastUpdated = date('F j, Y');
+    // Caller passes a stable date string like "27 June 2026" so the page can
+    // honestly show when its content was last edited. If callers omit it,
+    // fall back to a generic notice rather than lying with today's date.
+    if ($lastUpdated === '') $lastUpdated = 'See operator notice';
     ?><!doctype html>
 <html lang="en">
 <head>
@@ -33,7 +36,7 @@ function legal_page_start(string $title): void
   </a>
   <nav class="landing-nav-links">
     <a href="/#features">Features</a>
-    <a href="/#plans">Plans</a>
+    <a href="/pricing.php">Pricing</a>
     <a class="btn btn-primary btn-sm" href="/login.php">Sign in</a>
   </nav>
 </header>
@@ -46,18 +49,29 @@ function legal_page_start(string $title): void
 
 function legal_page_end(): void
 {
-    $year = date('Y');
+    $year   = date('Y');
+    $op     = function_exists('operator_legal_info') ? operator_legal_info() : [];
+    $entity = trim((string)($op['legal_name'] ?? ''));
 ?>
 </main>
 
 <footer class="landing-footer">
-  <div>&copy; <?= e((string)$year) ?> <?= e(APP_NAME) ?></div>
+  <div>
+    &copy; <?= e((string)$year) ?> <?= e($entity !== '' ? $entity : APP_NAME) ?>
+    <?php if ($entity !== '' && !empty($op['registration_no'])): ?>
+      <span class="muted small">· <?= e((string)$op['registration_no']) ?></span>
+    <?php endif; ?>
+  </div>
   <div>
     <a href="/terms.php">Terms</a>
     <span class="dot">·</span>
     <a href="/privacy.php">Privacy</a>
     <span class="dot">·</span>
     <a href="/disclaimer.php">Disclaimer</a>
+    <span class="dot">·</span>
+    <a href="/refund.php">Refunds</a>
+    <span class="dot">·</span>
+    <a href="/pricing.php">Pricing</a>
     <span class="dot">·</span>
     <a href="/login.php">Sign in</a>
   </div>

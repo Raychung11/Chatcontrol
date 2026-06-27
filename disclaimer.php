@@ -1,6 +1,6 @@
 <?php
 require_once __DIR__ . '/inc/legal_layout.php';
-legal_page_start('Disclaimer');
+legal_page_start('Disclaimer', platform_setting('legal_disclaimer_updated', '27 June 2026'));
 $app = e(APP_NAME);
 ?>
 <p>

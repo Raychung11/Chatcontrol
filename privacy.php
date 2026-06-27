@@ -1,13 +1,19 @@
 <?php
 require_once __DIR__ . '/inc/legal_layout.php';
-legal_page_start('Privacy Policy');
-$app = e(APP_NAME);
+legal_page_start('Privacy Policy', platform_setting('legal_privacy_updated', '27 June 2026'));
+$app   = e(APP_NAME);
+$op    = operator_legal_info();
+$opEnt = $op['legal_name'] !== '' ? e($op['legal_name']) : $app;
+$opReg = $op['registration_no'] !== '' ? ' (' . e($op['registration_no']) . ')' : '';
+$opAdd = $op['address'] !== '' ? e($op['address']) : '';
+$opMail= $op['email'] !== '' ? e($op['email']) : '';
 ?>
 <p>
-  This Privacy Policy describes how <?= $app ?> ("we", "us") collects, uses, and
-  shares personal data when you and your team use the Service. It is designed
-  to comply with the principles of the Malaysian Personal Data Protection Act
-  2010 (PDPA) and similar data-protection frameworks worldwide.
+  This Privacy Policy describes how <?= $opEnt ?><?= $opReg ?> ("we", "us")
+  collects, uses, and shares personal data when you and your team use <?= $app ?>
+  ("Service"). It is designed to comply with the principles of the Malaysian
+  Personal Data Protection Act 2010 (PDPA) and similar data-protection
+  frameworks worldwide.
 </p>
 
 <h2>1. Who is the data controller</h2>
@@ -146,8 +152,17 @@ $app = e(APP_NAME);
 <h2>12. Contact</h2>
 <p>
   Questions about this Policy or to exercise your rights, contact your
-  Workspace administrator. For Workspace-administrator-level inquiries, use
-  the support address listed in your Workspace settings.
+  Workspace administrator first. For Workspace-administrator-level inquiries
+  or data-subject access requests under PDPA s.30, contact us directly:
+</p>
+<ul>
+  <li><strong><?= $opEnt ?></strong><?= $opReg ?></li>
+  <?php if ($opAdd !== ''): ?><li><?= nl2br($opAdd) ?></li><?php endif; ?>
+  <?php if ($opMail !== ''): ?><li>Email: <a href="mailto:<?= $opMail ?>"><?= $opMail ?></a></li><?php endif; ?>
+</ul>
+<p>
+  We aim to respond to verified data-subject requests within 21 days, which is
+  the period set by PDPA s.30(3).
 </p>
 
 <?php legal_page_end();

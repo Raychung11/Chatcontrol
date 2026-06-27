@@ -313,6 +313,70 @@ function pricing_get(): array
 }
 
 /**
+ * Operator legal info (the entity behind this Service) for use in the legal
+ * page footers, the Terms governing-law clause, and the Privacy contact
+ * section. Editable via /admin/pricing.php.
+ *
+ * Returns empty strings when nothing is configured - callers should treat
+ * missing values as "fall back to APP_NAME / generic copy".
+ *
+ * @return array{legal_name:string, registration_no:string, address:string,
+ *               email:string, jurisdiction:string, courts:string}
+ */
+function operator_legal_info(): array
+{
+    static $cache = null;
+    if ($cache !== null) return $cache;
+
+    $defaults = [
+        'operator_legal_name'      => '',
+        'operator_registration_no' => '',
+        'operator_address'         => '',
+        'operator_email'           => '',
+        'operator_jurisdiction'    => 'Malaysia',
+        'operator_courts'          => 'the courts of Kuala Lumpur, Malaysia',
+    ];
+    try {
+        $rows = aiserve_db()->query('SELECT `key`, `value` FROM platform_settings')->fetchAll();
+        foreach ($rows as $r) {
+            if (array_key_exists($r['key'], $defaults)) {
+                $defaults[$r['key']] = (string)$r['value'];
+            }
+        }
+    } catch (Throwable $e) {
+        // Table missing - fine, use defaults.
+    }
+    $cache = [
+        'legal_name'      => $defaults['operator_legal_name'],
+        'registration_no' => $defaults['operator_registration_no'],
+        'address'         => $defaults['operator_address'],
+        'email'           => $defaults['operator_email'],
+        'jurisdiction'    => $defaults['operator_jurisdiction'] ?: 'Malaysia',
+        'courts'          => $defaults['operator_courts'] ?: 'the courts of Kuala Lumpur, Malaysia',
+    ];
+    return $cache;
+}
+
+/**
+ * Single platform_settings string by key, with a default. Used by the legal
+ * pages to look up dates and small editable copy fragments.
+ */
+function platform_setting(string $key, string $default = ''): string
+{
+    static $cache = null;
+    if ($cache === null) {
+        $cache = [];
+        try {
+            $rows = aiserve_db()->query('SELECT `key`, `value` FROM platform_settings')->fetchAll();
+            foreach ($rows as $r) $cache[$r['key']] = (string)$r['value'];
+        } catch (Throwable $e) {
+            // Table missing - leave the cache empty so every key falls back.
+        }
+    }
+    return $cache[$key] ?? $default;
+}
+
+/**
  * Format an amount + currency for display. "12" -> "RM 12", "59.5" -> "RM 59.50".
  */
 function fmt_price(float $amount, ?string $currency = null): string

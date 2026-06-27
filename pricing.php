@@ -182,6 +182,8 @@ $exampleTotalF = fmt_price($exampleTotal, $cur);
     <a href="/privacy.php">Privacy</a>
     <span class="dot">·</span>
     <a href="/disclaimer.php">Disclaimer</a>
+    <span class="dot">·</span>
+    <a href="/refund.php">Refunds</a>
   </div>
 </footer>
 

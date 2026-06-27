@@ -222,8 +222,9 @@ if (is_post()) {
         <span>
           I have read and agree to the
           <a href="/terms.php" target="_blank" rel="noopener">Terms of Service</a>,
-          <a href="/privacy.php" target="_blank" rel="noopener">Privacy Policy</a>, and
-          <a href="/disclaimer.php" target="_blank" rel="noopener">Disclaimer</a>.
+          <a href="/privacy.php" target="_blank" rel="noopener">Privacy Policy</a>,
+          <a href="/disclaimer.php" target="_blank" rel="noopener">Disclaimer</a>, and
+          <a href="/refund.php" target="_blank" rel="noopener">Refund &amp; Cancellation Policy</a>.
         </span>
       </label>
 
@@ -234,7 +235,8 @@ if (is_post()) {
     <p class="muted small" style="text-align:center; margin-top: 8px;">
       <a href="/terms.php">Terms</a> ·
       <a href="/privacy.php">Privacy</a> ·
-      <a href="/disclaimer.php">Disclaimer</a>
+      <a href="/disclaimer.php">Disclaimer</a> ·
+      <a href="/refund.php">Refunds</a>
     </p>
   </div>
 

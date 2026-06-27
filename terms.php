@@ -1,13 +1,20 @@
 <?php
 require_once __DIR__ . '/inc/legal_layout.php';
-legal_page_start('Terms of Service');
-$app = e(APP_NAME);
+legal_page_start('Terms of Service', platform_setting('legal_terms_updated', '27 June 2026'));
+$app   = e(APP_NAME);
+$op    = operator_legal_info();
+$opEnt = $op['legal_name'] !== '' ? e($op['legal_name']) : $app;
+$opReg = $op['registration_no'] !== '' ? ' (' . e($op['registration_no']) . ')' : '';
+$opAdd = $op['address'] !== '' ? e($op['address']) : '';
+$opMail= $op['email'] !== '' ? e($op['email']) : '';
+$refundDays = (int)platform_setting('refund_window_days', '7');
 ?>
 <p>
   These Terms of Service ("Terms") govern your access to and use of <?= $app ?>
-  ("Service", "we", "us"). By creating an account, accessing the portal, or
-  otherwise using the Service, you agree to be bound by these Terms. If you do not
-  agree, do not use the Service.
+  ("Service"), operated by <strong><?= $opEnt ?><?= $opReg ?></strong>
+  ("we", "us"). By creating an account, accessing the portal, or otherwise
+  using the Service, you agree to be bound by these Terms. If you do not agree,
+  do not use the Service.
 </p>
 
 <h2>1. Eligibility &amp; account</h2>
@@ -44,11 +51,17 @@ $app = e(APP_NAME);
 
 <h2>4. Plans, seats, and fees</h2>
 <p>
-  Each Workspace selects a plan that limits the number of active user seats and
-  available features. We may update plans and pricing on reasonable notice.
-  Where the Service is offered on a paid subscription, fees are charged in
-  advance for each billing cycle and are non-refundable except where required
-  by applicable law.
+  Each Workspace selects a plan that limits the number of active user seats
+  and available features. Current plans and prices are published at
+  <a href="/pricing.php">/pricing.php</a>. We may update plans and pricing on
+  reasonable notice. Fees are charged in advance for each billing cycle.
+</p>
+<p>
+  Refunds are governed by our <a href="/refund.php">Refund &amp; Cancellation
+  Policy</a>. In summary, you may request a full refund within
+  <strong><?= (int)$refundDays ?> days</strong> of the first paid invoice if
+  you have not connected a live WhatsApp number to the Service. After that
+  window, fees are non-refundable except where required by applicable law.
 </p>
 <p>
   You are responsible for fees charged by third parties you connect to your
@@ -130,10 +143,10 @@ $app = e(APP_NAME);
 
 <h2>13. Governing law</h2>
 <p>
-  These Terms are governed by the laws of Malaysia, without regard to its
-  conflict-of-laws principles. The courts of Kuala Lumpur, Malaysia have
-  exclusive jurisdiction over any dispute arising out of or relating to these
-  Terms or the Service.
+  These Terms are governed by the laws of <?= e($op['jurisdiction']) ?>,
+  without regard to its conflict-of-laws principles. <?= e(ucfirst($op['courts'])) ?>
+  have exclusive jurisdiction over any dispute arising out of or relating to
+  these Terms or the Service.
 </p>
 
 <h2>14. Changes</h2>
@@ -145,8 +158,14 @@ $app = e(APP_NAME);
 </p>
 
 <h2>15. Contact</h2>
-<p>Questions about these Terms can be sent to your Workspace administrator,
-or to the operator of the Service at the support address listed in your
-Workspace settings.</p>
+<p>
+  Questions about these Terms can be sent to your Workspace administrator,
+  or to the operator of the Service:
+</p>
+<ul>
+  <li><strong><?= $opEnt ?></strong><?= $opReg ?></li>
+  <?php if ($opAdd !== ''): ?><li><?= nl2br($opAdd) ?></li><?php endif; ?>
+  <?php if ($opMail !== ''): ?><li>Email: <a href="mailto:<?= $opMail ?>"><?= $opMail ?></a></li><?php endif; ?>
+</ul>
 
 <?php legal_page_end();

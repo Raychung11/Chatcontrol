@@ -66,6 +66,84 @@ $fields = [
         'type'  => 'textarea',
         'hint'  => 'Shown in the public pricing FAQ under "Can I change plans later?".',
     ],
+    // ---- Operator legal details ----
+    'operator_legal_name' => [
+        'label' => 'Operator legal name',
+        'type'  => 'text',
+        'hint'  => 'Your registered company name. Appears in Terms, Privacy, Refund Policy, and footers. Leave blank to use the brand name only.',
+        'max'   => 190,
+        'optional' => true,
+    ],
+    'operator_registration_no' => [
+        'label' => 'Registration number',
+        'type'  => 'text',
+        'hint'  => 'SSM company number or similar. Shown after the legal name on the legal pages.',
+        'max'   => 64,
+        'optional' => true,
+    ],
+    'operator_address' => [
+        'label' => 'Business address',
+        'type'  => 'textarea',
+        'hint'  => 'Shown in Terms s.15 and Privacy s.12 contact blocks.',
+        'optional' => true,
+    ],
+    'operator_email' => [
+        'label' => 'Support email',
+        'type'  => 'text',
+        'hint'  => 'Used for refund requests and data-subject access requests on the legal pages.',
+        'max'   => 190,
+        'optional' => true,
+    ],
+    'operator_jurisdiction' => [
+        'label' => 'Governing-law jurisdiction',
+        'type'  => 'text',
+        'hint'  => 'e.g. "Malaysia". Shown in Terms s.13.',
+        'max'   => 64,
+    ],
+    'operator_courts' => [
+        'label' => 'Forum courts',
+        'type'  => 'text',
+        'hint'  => 'e.g. "the courts of Kuala Lumpur, Malaysia". Shown in Terms s.13.',
+        'max'   => 190,
+    ],
+    // ---- Editable legal-page dates ----
+    'legal_terms_updated' => [
+        'label' => 'Terms: Last updated date',
+        'type'  => 'text',
+        'hint'  => 'Free text date shown at the top of /terms.php. Bump when you edit the page so customers see the change.',
+        'max'   => 32,
+    ],
+    'legal_privacy_updated' => [
+        'label' => 'Privacy: Last updated date',
+        'type'  => 'text',
+        'hint'  => 'Free text date shown at the top of /privacy.php.',
+        'max'   => 32,
+    ],
+    'legal_disclaimer_updated' => [
+        'label' => 'Disclaimer: Last updated date',
+        'type'  => 'text',
+        'hint'  => 'Free text date shown at the top of /disclaimer.php.',
+        'max'   => 32,
+    ],
+    'legal_refund_updated' => [
+        'label' => 'Refund Policy: Last updated date',
+        'type'  => 'text',
+        'hint'  => 'Free text date shown at the top of /refund.php.',
+        'max'   => 32,
+    ],
+    // ---- Refund policy ----
+    'refund_window_days' => [
+        'label' => 'Refund cooling-off window (days)',
+        'type'  => 'number',
+        'hint'  => 'Number of days a customer can get a full refund on their first paid invoice if they have not connected a live WhatsApp number.',
+        'step'  => '1',
+    ],
+    'refund_policy_extra' => [
+        'label' => 'Refund policy: extra terms',
+        'type'  => 'textarea',
+        'hint'  => 'Optional extra paragraph rendered after section 7 on /refund.php. Leave blank to hide.',
+        'optional' => true,
+    ],
 ];
 
 if (is_post()) {
@@ -83,7 +161,7 @@ if (is_post()) {
             $f = (float)$raw;
             $raw = (abs($f - round($f)) < 0.005) ? (string)(int)round($f) : (string)$f;
         }
-        if ($raw === '' && in_array($meta['type'], ['text','number'], true)) {
+        if ($raw === '' && in_array($meta['type'], ['text','number'], true) && empty($meta['optional'])) {
             $err = $meta['label'] . ' is required.';
             break;
         }
@@ -144,16 +222,18 @@ layout_start($current_user, 'Platform pricing', 'pricing');
     <?php foreach ($fields as $key => $meta):
       $val = $current[$key] ?? '';
     ?>
+      <?php $req = empty($meta['optional']) ? 'required' : ''; ?>
       <label>
         <?= e($meta['label']) ?>
+        <?php if (!empty($meta['optional'])): ?><small class="muted">(optional)</small><?php endif; ?>
         <?php if ($meta['type'] === 'textarea'): ?>
           <textarea name="<?= e($key) ?>" rows="3"><?= e($val) ?></textarea>
         <?php elseif ($meta['type'] === 'number'): ?>
           <input type="number" name="<?= e($key) ?>" value="<?= e($val) ?>"
-                 step="<?= e($meta['step'] ?? '1') ?>" min="0" required>
+                 step="<?= e($meta['step'] ?? '1') ?>" min="0" <?= $req ?>>
         <?php else: ?>
           <input type="text" name="<?= e($key) ?>" value="<?= e($val) ?>"
-                 <?= isset($meta['max']) ? 'maxlength="' . (int)$meta['max'] . '"' : '' ?> required>
+                 <?= isset($meta['max']) ? 'maxlength="' . (int)$meta['max'] . '"' : '' ?> <?= $req ?>>
         <?php endif; ?>
         <small class="muted"><?= e($meta['hint']) ?></small>
       </label>

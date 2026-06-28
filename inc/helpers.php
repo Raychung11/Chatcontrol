@@ -227,6 +227,14 @@ function status_badge(string $status): string
         'read'      => 'badge-sent',
         'received'  => 'badge-sent',
         'failed'    => 'badge-failed',
+        // Broadcast statuses
+        'draft'     => 'badge-default',
+        'running'   => 'badge-open',
+        'paused'    => 'badge-pending',
+        'done'      => 'badge-closed',
+        'cancelled' => 'badge-failed',
+        'queued'    => 'badge-pending',
+        'skipped'   => 'badge-default',
     ];
     $cls = $map[$status] ?? 'badge-default';
     return '<span class="badge ' . e($cls) . '">' . e(ucfirst($status)) . '</span>';

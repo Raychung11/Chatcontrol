@@ -18,6 +18,7 @@ $role   = $current_user['role'] ?? 'agent';
     <a href="/contacts.php" class="<?= $active === 'contacts' ? 'active' : '' ?>">Contacts</a>
     <a href="/admin/templates.php" class="<?= $active === 'templates' ? 'active' : '' ?>">Templates</a>
     <?php if (in_array($role, ['super_admin', 'manager'], true)): ?>
+      <a href="/admin/broadcasts.php" class="<?= $active === 'broadcasts' ? 'active' : '' ?>">Broadcasts</a>
       <a href="/admin/tags.php" class="<?= $active === 'tags' ? 'active' : '' ?>">Tags</a>
       <a href="/admin/reports.php" class="<?= $active === 'reports' ? 'active' : '' ?>">Reports</a>
       <a href="/admin/topics.php" class="<?= $active === 'topics' ? 'active' : '' ?>">Topics analytics</a>

@@ -1,0 +1,134 @@
+/**
+ * AiServe Inbox — Design tokens.
+ *
+ * Single source of truth for spacing, type, color, radius, shadow, and motion.
+ * Loaded BEFORE app.css so component rules can reference these names. Any
+ * component CSS that hard-codes a color or font-size should be migrated to
+ * a token — that is how we get a coherent visual system instead of dozens of
+ * ad-hoc declarations.
+ *
+ * Naming conventions:
+ *   --space-*   spacing scale (4 / 8 / 12 / 16 / 24 / 32 / 48 / 64)
+ *   --fs-*      font size scale (12 / 13 / 14 / 16 / 20 / 24 / 32)
+ *   --fw-*      font weight (regular / medium / semibold / bold)
+ *   --lh-*      line height (tight / snug / normal / relaxed)
+ *   --radius-*  border radius (sm / md / lg / pill)
+ *   --shadow-*  box shadow (sm / md / lg)
+ *   --color-*   semantic colors (text / bg / surface / brand / etc.)
+ *   --ease-*    easing curves for transitions
+ */
+
+:root {
+  /* ---- Spacing scale (4px base, geometric-ish) ---------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  /* ---- Type scale --------------------------------------------------- */
+  --font-sans: 'Inter', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont,
+               'Segoe UI', Roboto, Oxygen, Ubuntu, 'Helvetica Neue', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --fs-xs:  12px;
+  --fs-sm:  13px;
+  --fs-md:  14px;
+  --fs-lg:  16px;
+  --fs-xl:  20px;
+  --fs-2xl: 24px;
+  --fs-3xl: 32px;
+
+  --fw-regular:  400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+
+  --lh-tight:   1.2;
+  --lh-snug:    1.35;
+  --lh-normal:  1.5;
+  --lh-relaxed: 1.7;
+
+  /* ---- Radius ------------------------------------------------------- */
+  --radius-xs:   4px;
+  --radius-sm:   6px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-pill: 999px;
+
+  /* ---- Shadow ------------------------------------------------------- */
+  --shadow-xs: 0 1px 2px rgba(15, 23, 32, 0.04);
+  --shadow-sm: 0 2px 6px rgba(15, 23, 32, 0.06), 0 1px 2px rgba(15, 23, 32, 0.04);
+  --shadow-md: 0 6px 16px rgba(15, 23, 32, 0.08), 0 2px 4px rgba(15, 23, 32, 0.04);
+  --shadow-lg: 0 14px 40px rgba(15, 23, 32, 0.12);
+
+  /* ---- Semantic color palette --------------------------------------- */
+  /* Surfaces */
+  --color-bg:        #f6f8fa;
+  --color-surface:   #ffffff;
+  --color-surface-2: #fafbfc;   /* hover / striped row */
+  --color-surface-3: #f0f3f7;   /* deeper rest, used on inputs */
+
+  /* Text */
+  --color-text:        #0f1722;
+  --color-text-muted:  #5b6772;
+  --color-text-soft:   #94a0ad;
+  --color-text-invert: #ffffff;
+
+  /* Borders */
+  --color-border:        #e4e9ee;
+  --color-border-strong: #c9d2dc;
+
+  /* Brand (WhatsApp green) */
+  --color-brand:        #25D366;
+  --color-brand-dark:   #128C7E;
+  --color-brand-darker: #075E54;
+  --color-brand-tint:   #e7faee;
+
+  /* Semantic status */
+  --color-success:     #1f9d55;
+  --color-success-bg:  #e3f6eb;
+  --color-warning:     #d97706;
+  --color-warning-bg:  #fff4e0;
+  --color-danger:      #d9534f;
+  --color-danger-bg:   #fdecea;
+  --color-info:        #2563eb;
+  --color-info-bg:     #e6efff;
+  --color-neutral:     #4b5563;
+  --color-neutral-bg:  #eef1f4;
+
+  /* Awaiting reply (warm amber - intentionally distinct from generic warning) */
+  --color-awaiting:        #b45309;
+  --color-awaiting-bg:     #fff4e0;
+  --color-awaiting-border: #f0c896;
+  --color-awaiting-accent: #f0a000;
+
+  /* ---- Motion ------------------------------------------------------- */
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast:    120ms;
+  --dur-base:    180ms;
+  --dur-slow:    300ms;
+
+  /* ---- Legacy aliases ----------------------------------------------- */
+  /* Many existing rules still reference the old --c-* variables. Keep
+   * these aliases so the rest of app.css doesn't have to change in lockstep
+   * with the redesign - we can migrate component by component. */
+  --c-bg:        var(--color-bg);
+  --c-card:      var(--color-surface);
+  --c-text:      var(--color-text);
+  --c-muted:     var(--color-text-muted);
+  --c-border:    var(--color-border);
+  --c-primary:   var(--color-brand);
+  --c-primary-d: var(--color-brand-dark);
+  --c-accent:    var(--color-brand-darker);
+  --c-danger:    var(--color-danger);
+  --c-warn:      var(--color-warning);
+  --c-info:      var(--color-info);
+  --radius:      var(--radius-lg);
+  --shadow-sm:   var(--shadow-sm);
+}

@@ -143,43 +143,97 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
 }
 
 /**
- * Render a single inbox row's inner markup. Shared so the JS-driven live
- * list and the server-rendered list look identical.
+ * Render a single inbox row's inner markup.
+ *
+ * The row uses a WhatsApp-native three-line pattern:
+ *   ┌──────────┬──────────────────────────────────┐
+ *   │  avatar  │  name                        time│
+ *   │  (with   │  preview                  unread │
+ *   │  status  │  status · agent · dept · #tags   │
+ *   │   dot)   │                                  │
+ *   └──────────┴──────────────────────────────────┘
+ *
+ * Status badge only shown when conversation is NOT open (open = default state,
+ * adding a chip for it is noise). The avatar carries a status dot when the
+ * customer is waiting for a reply or the conversation is escalated, so the
+ * eye picks up urgency before reading any text.
+ *
+ * Shared between the server-rendered list and the JS-driven poll refresh.
  */
 function inbox_row_html(array $c, array $tags): string
 {
-    $name    = $c['display_name'] ?: $c['profile_name'] ?: $c['wa_id'];
-    $initial = strtoupper(substr($c['display_name'] ?: $c['profile_name'] ?: '?', 0, 1));
-    $preview = mb_strimwidth((string)$c['last_message_text'], 0, 70, '…');
-    $time    = relative_time($c['last_message_at'] ?? $c['created_at']);
+    $name      = $c['display_name'] ?: $c['profile_name'] ?: $c['wa_id'];
+    $initial   = strtoupper(mb_substr($c['display_name'] ?: $c['profile_name'] ?: '?', 0, 1));
+    $preview   = mb_strimwidth((string)$c['last_message_text'], 0, 80, '…');
+    $time      = relative_time($c['last_message_at'] ?? $c['created_at']);
+    $awaiting  = !empty($c['awaiting_reply']);
+    $status    = (string)($c['status'] ?? 'open');
+    $unread    = (int)($c['unread_count'] ?? 0);
+    $agent     = (string)($c['agent_name'] ?? '');
+    $dept      = (string)($c['department_name'] ?? '');
+    $channel   = (string)($c['channel_name'] ?? '');
 
-    $awaiting = !empty($c['awaiting_reply']);
-    $html  = '<a class="inbox-row" data-conv-id="' . (int)$c['id']
-           . '" data-awaiting="' . ($awaiting ? '1' : '0')
-           . '" href="/inbox/chat.php?id=' . (int)$c['id'] . '">';
-    $html .= '<div class="row-avatar">' . e($initial) . '</div>';
-    $html .= '<div class="row-main">';
-    $html .= '<div class="row-top"><span class="row-name">' . e($name) . '</span>'
-           . '<span class="row-time">' . e($time) . '</span></div>';
-    $html .= '<div class="row-mid"><span class="row-preview">' . e($preview) . '</span>';
-    if ((int)$c['unread_count'] > 0) {
-        $html .= '<span class="row-badge">' . (int)$c['unread_count'] . '</span>';
+    // Pick the dominant accent for the avatar - awaiting beats escalated beats
+    // pending so we don't double-up indicators.
+    $dot = $awaiting ? 'awaiting' : ($status === 'escalated' ? 'escalated' : ($status === 'pending' ? 'pending' : ''));
+
+    $html  = '<a class="ix-row" '
+           . 'data-conv-id="' . (int)$c['id'] . '" '
+           . 'data-awaiting="' . ($awaiting ? '1' : '0') . '" '
+           . 'data-status="' . e($status) . '" '
+           . 'data-unread="' . ($unread > 0 ? '1' : '0') . '" '
+           . 'href="/inbox/chat.php?id=' . (int)$c['id'] . '">';
+
+    $html .= '<div class="ix-avatar">';
+    $html .=   '<span class="ix-initial">' . e($initial) . '</span>';
+    if ($dot !== '') {
+        $html .= '<span class="ix-dot ix-dot-' . e($dot) . '" aria-hidden="true"></span>';
     }
     $html .= '</div>';
-    $html .= '<div class="row-bot">' . status_badge($c['status']);
+
+    $html .= '<div class="ix-body">';
+
+    // Line 1: name + time
+    $html .=   '<div class="ix-l1">';
+    $html .=     '<span class="ix-name">' . e($name) . '</span>';
+    $html .=     '<span class="ix-time">' . e($time) . '</span>';
+    $html .=   '</div>';
+
+    // Line 2: preview + unread counter (or awaiting clock if unread = 0 but still awaiting)
+    $html .=   '<div class="ix-l2">';
+    $html .=     '<span class="ix-preview">' . e($preview) . '</span>';
+    if ($unread > 0) {
+        $html .=   '<span class="ix-counter ix-counter-unread">' . (int)$unread . '</span>';
+    } elseif ($awaiting) {
+        $html .=   '<span class="ix-counter ix-counter-awaiting" title="Customer is waiting for a reply">⏰</span>';
+    }
+    $html .=   '</div>';
+
+    // Line 3: status (non-open only) + assignment + department + tags
+    $html .=   '<div class="ix-l3">';
+    if ($status !== 'open') {
+        $html .= '<span class="ix-pill ix-pill-status ix-pill-' . e($status) . '">' . e(ucfirst($status)) . '</span>';
+    }
     if ($awaiting) {
-        $html .= '<span class="awaiting-badge" title="Customer is waiting for a reply">⏰ Awaiting reply</span>';
+        $html .= '<span class="ix-pill ix-pill-awaiting" title="Customer is waiting for a reply">⏰ Awaiting</span>';
     }
-    $html .= '<span class="row-meta">' . e($c['agent_name'] ? 'Assigned: ' . $c['agent_name'] : 'Unassigned') . '</span>';
-    if (!empty($c['department_name'])) {
-        $html .= '<span class="row-meta">· ' . e($c['department_name']) . '</span>';
+    if ($agent !== '') {
+        $html .= '<span class="ix-meta ix-meta-agent">' . e($agent) . '</span>';
+    } else {
+        $html .= '<span class="ix-meta ix-meta-unassigned">Unassigned</span>';
     }
-    if (!empty($c['channel_name'])) {
-        $html .= '<span class="row-meta">📞 ' . e($c['channel_name']) . '</span>';
+    if ($dept !== '') {
+        $html .= '<span class="ix-meta">' . e($dept) . '</span>';
+    }
+    if ($channel !== '') {
+        $html .= '<span class="ix-meta ix-meta-channel" title="' . e($channel) . '">'
+              . e(mb_strimwidth($channel, 0, 14, '…')) . '</span>';
     }
     foreach ($tags as $tg) {
-        $html .= '<span class="tag-chip" style="background: ' . e($tg['color']) . '">' . e($tg['name']) . '</span>';
+        $html .= '<span class="ix-tag" style="--tag: ' . e($tg['color']) . '">' . e($tg['name']) . '</span>';
     }
-    $html .= '</div></div></a>';
+    $html .=   '</div>';
+
+    $html .= '</div></a>';
     return $html;
 }

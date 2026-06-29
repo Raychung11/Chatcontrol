@@ -1,34 +1,101 @@
 /* ==========================================================
    AiServe Shared WhatsApp Inbox - app.css
    Single-file stylesheet, no framework dependency.
+   Design tokens live in tokens.css (inlined below).
    ========================================================== */
 
+/* >>>>> BEGIN tokens (mirrors assets/css/tokens.css) >>>>>>>>>>>>>>>>> */
 :root {
-  --c-bg:        #f4f6f8;
-  --c-card:      #ffffff;
-  --c-text:      #1a2330;
-  --c-muted:     #6b7785;
-  --c-border:    #e2e6ec;
-  --c-primary:   #25D366;     /* WhatsApp green */
-  --c-primary-d: #128C7E;
-  --c-accent:    #075E54;
-  --c-danger:    #d9534f;
-  --c-warn:      #f0ad4e;
-  --c-info:      #4a90e2;
-  --shadow-sm:   0 1px 2px rgba(0,0,0,0.05);
-  --shadow-md:   0 4px 12px rgba(0,0,0,0.08);
-  --radius:      8px;
+  /* Spacing scale (4px base) */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px;
+
+  /* Type */
+  --font-sans: 'Inter', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont,
+               'Segoe UI', Roboto, Oxygen, Ubuntu, 'Helvetica Neue', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-xs:12px; --fs-sm:13px; --fs-md:14px; --fs-lg:16px;
+  --fs-xl:20px; --fs-2xl:24px; --fs-3xl:32px;
+  --fw-regular:400; --fw-medium:500; --fw-semibold:600; --fw-bold:700;
+  --lh-tight:1.2; --lh-snug:1.35; --lh-normal:1.5; --lh-relaxed:1.7;
+
+  /* Radius */
+  --radius-xs:4px; --radius-sm:6px; --radius-md:8px;
+  --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+
+  /* Shadow */
+  --shadow-xs: 0 1px 2px rgba(15, 23, 32, 0.04);
+  --shadow-md: 0 6px 16px rgba(15, 23, 32, 0.08), 0 2px 4px rgba(15, 23, 32, 0.04);
+  --shadow-lg: 0 14px 40px rgba(15, 23, 32, 0.12);
+
+  /* Surfaces */
+  --color-bg:        #f6f8fa;
+  --color-surface:   #ffffff;
+  --color-surface-2: #fafbfc;
+  --color-surface-3: #f0f3f7;
+
+  /* Text */
+  --color-text:        #0f1722;
+  --color-text-muted:  #5b6772;
+  --color-text-soft:   #94a0ad;
+  --color-text-invert: #ffffff;
+
+  /* Borders */
+  --color-border:        #e4e9ee;
+  --color-border-strong: #c9d2dc;
+
+  /* Brand */
+  --color-brand:        #25D366;
+  --color-brand-dark:   #128C7E;
+  --color-brand-darker: #075E54;
+  --color-brand-tint:   #e7faee;
+
+  /* Semantic */
+  --color-success:#1f9d55; --color-success-bg:#e3f6eb;
+  --color-warning:#d97706; --color-warning-bg:#fff4e0;
+  --color-danger:#d9534f;  --color-danger-bg:#fdecea;
+  --color-info:   #2563eb; --color-info-bg:   #e6efff;
+  --color-neutral:#4b5563; --color-neutral-bg:#eef1f4;
+
+  /* Awaiting reply */
+  --color-awaiting:        #b45309;
+  --color-awaiting-bg:     #fff4e0;
+  --color-awaiting-border: #f0c896;
+  --color-awaiting-accent: #f0a000;
+
+  /* Motion */
+  --ease-out:    cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast:120ms; --dur-base:180ms; --dur-slow:300ms;
+
+  /* ---- Legacy aliases (kept for components not yet migrated) ------- */
+  --c-bg:        var(--color-bg);
+  --c-card:      var(--color-surface);
+  --c-text:      var(--color-text);
+  --c-muted:     var(--color-text-muted);
+  --c-border:    var(--color-border);
+  --c-primary:   var(--color-brand);
+  --c-primary-d: var(--color-brand-dark);
+  --c-accent:    var(--color-brand-darker);
+  --c-danger:    var(--color-danger);
+  --c-warn:      var(--color-warning);
+  --c-info:      var(--color-info);
+  --shadow-sm:   0 2px 6px rgba(15, 23, 32, 0.06), 0 1px 2px rgba(15, 23, 32, 0.04);
+  --radius:      var(--radius-lg);
 }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
-               Cantarell, "Helvetica Neue", Arial, sans-serif;
-  font-size: 14px;
-  color: var(--c-text);
-  background: var(--c-bg);
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  line-height: var(--lh-normal);
+  color: var(--color-text);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 a { color: var(--c-primary-d); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -304,60 +371,258 @@ textarea { resize: vertical; }
   box-shadow: var(--shadow-sm); display: flex; flex-direction: column; gap: 12px;
   overflow-y: auto;
 }
-.inbox-search { display: flex; gap: 6px; flex-wrap: wrap; }
+.inbox-search { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .inbox-search input, .inbox-search select { flex: 1 1 100%; }
-.inbox-quickfilters { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
+.inbox-quickfilters {
+  list-style: none; padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: var(--space-1);
+}
 .inbox-quickfilters a {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 10px; border-radius: 6px; color: var(--c-text); font-size: 13px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  transition: background var(--dur-fast) var(--ease-out);
 }
-.inbox-quickfilters a:hover { background: #f0f2f5; text-decoration: none; }
-.inbox-quickfilters a.active { background: var(--c-primary); color: #fff; }
-.inbox-quickfilters .count { background: rgba(0,0,0,0.08); padding: 0 8px; border-radius: 999px; font-size: 11px; }
-.inbox-quickfilters a.active .count { background: rgba(255,255,255,0.25); color: #fff; }
+.inbox-quickfilters a:hover { background: var(--color-surface-2); text-decoration: none; }
+.inbox-quickfilters a.active {
+  background: var(--color-brand-tint);
+  color: var(--color-brand-dark);
+  font-weight: var(--fw-semibold);
+  box-shadow: inset 3px 0 0 0 var(--color-brand);
+  padding-left: calc(var(--space-3) - 3px);
+}
+.inbox-quickfilters .count {
+  background: var(--color-surface-3);
+  color: var(--color-text-muted);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  min-width: 22px; text-align: center;
+}
+.inbox-quickfilters a.active .count {
+  background: var(--color-brand);
+  color: var(--color-text-invert);
+}
 
 .inbox-list {
-  background: var(--c-card); border-radius: var(--radius); box-shadow: var(--shadow-sm);
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
   overflow-y: auto;
+  border: 1px solid var(--color-border);
 }
-.inbox-row {
-  display: flex; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--c-border);
-  color: var(--c-text);
+/* ==========================================================
+   Inbox row (.ix-row) - redesigned WhatsApp-native three-line
+   layout. Uses design tokens from the top of this file.
+   ========================================================== */
+.ix-row {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  column-gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+  transition: background var(--dur-fast) var(--ease-out);
+  position: relative;
 }
-.inbox-row:hover { background: #fafbfc; text-decoration: none; }
-.row-avatar {
-  width: 40px; height: 40px; border-radius: 50%; background: #e2e6ec;
-  display: flex; align-items: center; justify-content: center; font-weight: 600; color: var(--c-muted);
+.ix-row:hover    { background: var(--color-surface-2); text-decoration: none; }
+.ix-row:focus    { outline: none; background: var(--color-surface-2); }
+.ix-row:active   { background: var(--color-surface-3); }
+.ix-row + .ix-row { /* visual divider already on border-bottom */ }
+
+/* --- Avatar block ----------------------------------------- */
+.ix-avatar {
+  position: relative;
+  width: 48px; height: 48px;
+}
+.ix-initial {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; height: 100%; border-radius: var(--radius-pill);
+  background: linear-gradient(135deg, var(--color-surface-3) 0%, var(--color-border) 100%);
+  color: var(--color-text-muted);
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-lg);
+  letter-spacing: -0.01em;
+}
+.ix-dot {
+  position: absolute;
+  right: -2px; bottom: -2px;
+  width: 14px; height: 14px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--color-surface);
+  box-shadow: var(--shadow-xs);
+}
+.ix-dot-awaiting  {
+  background: var(--color-awaiting-accent);
+  animation: ix-pulse 2.4s var(--ease-in-out) infinite;
+}
+.ix-dot-escalated { background: var(--color-danger); }
+.ix-dot-pending   { background: var(--color-info); }
+@keyframes ix-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(240, 160, 0, 0.0); }
+  50%      { box-shadow: 0 0 0 6px rgba(240, 160, 0, 0.18); }
+}
+
+/* --- Body block (three lines stacked) -------------------- */
+.ix-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+
+.ix-l1 {
+  display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-2);
+}
+.ix-name {
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-md);
+  color: var(--color-text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  letter-spacing: -0.005em;
+}
+.ix-time {
+  font-size: var(--fs-xs);
+  color: var(--color-text-soft);
   flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
-.row-main { flex: 1; min-width: 0; }
-.row-top { display: flex; justify-content: space-between; align-items: baseline; }
-.row-name { font-weight: 600; font-size: 14px; }
-.row-time { font-size: 11.5px; color: var(--c-muted); }
-.row-mid { display: flex; justify-content: space-between; align-items: center; margin-top: 2px; }
-.row-preview { font-size: 13px; color: var(--c-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row-badge {
-  background: var(--c-primary); color: #fff; border-radius: 999px; font-size: 11px;
-  padding: 1px 8px; min-width: 20px; text-align: center;
-}
-.row-bot { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
-.row-meta { font-size: 11.5px; color: var(--c-muted); }
 
-.awaiting-badge {
-  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
-  background: #fff4e0; color: #b25c00; border: 1px solid #f0c896;
+.ix-l2 {
+  display: flex; justify-content: space-between; align-items: center; gap: var(--space-2);
+}
+.ix-preview {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  line-height: var(--lh-snug);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1; min-width: 0;
+}
+.ix-counter {
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  border-radius: var(--radius-pill);
+  min-width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 var(--space-2);
+  font-variant-numeric: tabular-nums;
+}
+.ix-counter-unread {
+  background: var(--color-brand);
+  color: var(--color-text-invert);
+}
+.ix-counter-awaiting {
+  background: var(--color-awaiting-bg);
+  color: var(--color-awaiting);
+  padding: 0;
+}
+
+.ix-l3 {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
+  margin-top: var(--space-1);
+  min-height: 18px;
+}
+
+/* Pills (status, awaiting) */
+.ix-pill {
+  font-size: 10.5px;
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
   white-space: nowrap;
+  line-height: 1.4;
 }
-.inbox-row[data-awaiting="1"] {
-  border-left: 3px solid #f0a000;
-  padding-left: 11px; /* compensate for the 3px border so content stays aligned */
-  background: linear-gradient(90deg, rgba(255,244,224,0.55) 0%, transparent 40%);
-}
-.inbox-row[data-awaiting="1"]:hover {
-  background: linear-gradient(90deg, rgba(255,244,224,0.85) 0%, #fafbfc 40%);
+.ix-pill-pending   { background: var(--color-info-bg);    color: var(--color-info);    border-color: rgba(37,99,235,0.18); }
+.ix-pill-closed    { background: var(--color-neutral-bg); color: var(--color-neutral); }
+.ix-pill-escalated { background: var(--color-danger-bg);  color: var(--color-danger);  border-color: rgba(217,83,79,0.22); }
+.ix-pill-awaiting  {
+  background: var(--color-awaiting-bg);
+  color: var(--color-awaiting);
+  border-color: var(--color-awaiting-border);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
 }
 
-.empty-state { padding: 40px; text-align: center; color: var(--c-muted); }
+/* Meta (assigned agent, dept, channel) */
+.ix-meta {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  display: inline-flex; align-items: center;
+}
+.ix-meta + .ix-meta::before {
+  content: "·";
+  margin-right: var(--space-2);
+  color: var(--color-text-soft);
+}
+.ix-meta-unassigned { color: var(--color-text-soft); font-style: italic; }
+.ix-meta-agent      { color: var(--color-text); font-weight: var(--fw-medium); }
+.ix-meta-channel    {
+  background: var(--color-surface-3);
+  border-radius: var(--radius-xs);
+  padding: 1px var(--space-2);
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+}
+.ix-meta-channel::before { content: none !important; }
+
+/* Tag chips */
+.ix-tag {
+  font-size: 10.5px;
+  font-weight: var(--fw-semibold);
+  background: var(--tag, var(--color-neutral-bg));
+  color: var(--color-text-invert);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  text-shadow: 0 1px 0 rgba(0,0,0,0.08);
+  line-height: 1.4;
+}
+
+/* Awaiting state: subtle amber background wash + left rail */
+.ix-row[data-awaiting="1"] {
+  background:
+    linear-gradient(90deg, var(--color-awaiting-bg) 0%, transparent 32%);
+  box-shadow: inset 3px 0 0 0 var(--color-awaiting-accent);
+}
+.ix-row[data-awaiting="1"]:hover {
+  background:
+    linear-gradient(90deg, var(--color-awaiting-bg) 0%, var(--color-surface-2) 40%);
+}
+
+/* Closed conversations: dim the whole row */
+.ix-row[data-status="closed"] {
+  opacity: 0.7;
+}
+.ix-row[data-status="closed"] .ix-name { font-weight: var(--fw-medium); }
+
+/* Unread: name slightly bolder so scanning is easier */
+.ix-row[data-unread="1"] .ix-name {
+  font-weight: var(--fw-bold);
+  color: var(--color-text);
+}
+.ix-row[data-unread="1"] .ix-preview {
+  color: var(--color-text);
+}
+
+.empty-state {
+  padding: var(--space-7) var(--space-5);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+/* ==========================================================
+   Compatibility shims for the OLD .inbox-row class so any
+   remaining markup (e.g. landing mock) still renders correctly.
+   Will be removed once everything is migrated.
+   ========================================================== */
+.inbox-row { display: flex; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--color-border); color: var(--color-text); }
+.inbox-row:hover { background: var(--color-surface-2); text-decoration: none; }
 
 /* -------- Chat detail -------- */
 .chat-shell {
@@ -558,21 +823,48 @@ textarea { resize: vertical; }
   .inbox-filters {
     position: sticky; top: 0; z-index: 5;
     border-radius: 0; box-shadow: none;
-    border-bottom: 1px solid var(--c-border);
-    padding: 8px 10px; gap: 6px;
+    border-bottom: 1px solid var(--color-border);
+    padding: var(--space-2) var(--space-3); gap: var(--space-2);
   }
   .inbox-search input, .inbox-search select { flex: 1 1 auto; min-width: 0; }
+
+  /* Filters become horizontally-scrolling pill row on mobile */
   .inbox-quickfilters {
     flex-direction: row; overflow-x: auto;
     padding-bottom: 2px; -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
   }
+  .inbox-quickfilters::-webkit-scrollbar { display: none; }
   .inbox-quickfilters li { flex-shrink: 0; }
-  .inbox-quickfilters a { padding: 6px 12px; font-size: 12.5px; border-radius: 999px; }
-  .inbox-list { border-radius: 0; box-shadow: none; }
-  .inbox-row { padding: 14px 14px; }
-  .row-avatar { width: 44px; height: 44px; font-size: 16px; }
-  .row-name { font-size: 15px; }
-  .row-time, .row-meta { font-size: 11.5px; }
+  .inbox-quickfilters a {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--fs-xs);
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-2);
+    box-shadow: none;
+  }
+  .inbox-quickfilters a.active {
+    background: var(--color-brand);
+    color: var(--color-text-invert);
+    box-shadow: none;
+    padding-left: var(--space-3);
+  }
+  .inbox-quickfilters a.active .count {
+    background: rgba(255,255,255,0.28);
+    color: var(--color-text-invert);
+  }
+  .inbox-list { border-radius: 0; box-shadow: none; border: none; }
+
+  /* Row: slightly taller for thumbs, larger touch targets */
+  .ix-row { padding: var(--space-3) var(--space-3); column-gap: var(--space-3); }
+  .ix-avatar { width: 44px; height: 44px; }
+  .ix-initial { font-size: var(--fs-md); }
+  .ix-name { font-size: var(--fs-md); }
+  .ix-l3 { row-gap: var(--space-1); }
+  /* On very narrow screens, drop the channel chip - it's the lowest-signal meta */
+  @media (max-width: 360px) {
+    .ix-meta-channel { display: none; }
+  }
 
   /* Chat: full screen, panel becomes drawer */
   .chat-shell { display: block; height: calc(100vh - 60px); }

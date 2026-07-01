@@ -95,8 +95,91 @@ if (is_post()) {
             $alertEnabled, $alertThreshold, $alertEmail ?: null,
             $companyId,
         ]);
-        log_activity($companyId, (int)$current_user['id'], 'settings_updated', 'company', $companyId, 'Company settings updated');
-        $msg = 'Settings saved.';
+
+        // Auto-mirror the connection config onto the DEFAULT channel row.
+        // The multi-channel refactor moved provider config to `channels`, but
+        // this Settings page still writes to `companies`. Without this mirror,
+        // new clients fill in Settings, click "Test connection", and get
+        // "channel is not configured" - because the send path reads the
+        // channel row. Mirror keeps the two in sync so the surface acts as
+        // one place to configure the primary number.
+        $defChan = $db->prepare(
+            'SELECT id FROM channels
+             WHERE company_id = ? AND is_default = 1
+             LIMIT 1'
+        );
+        $defChan->execute([$companyId]);
+        $defChannelId = (int)($defChan->fetchColumn() ?: 0);
+
+        // New client onboarding: no default channel yet -> create one so
+        // the mirror below has somewhere to write and the Test button works
+        // straight from Settings.
+        if ($defChannelId === 0) {
+            require_once __DIR__ . '/../inc/channels.php';
+            $anyChan = $db->prepare('SELECT id FROM channels WHERE company_id = ? LIMIT 1');
+            $anyChan->execute([$companyId]);
+            $isFirst = !$anyChan->fetchColumn();
+            $token   = channel_generate_webhook_token();
+            $db->prepare(
+                'INSERT INTO channels
+                    (company_id, name, provider, webhook_token, is_default, status)
+                 VALUES (?, ?, ?, ?, ?, "active")'
+            )->execute([
+                $companyId,
+                ($name ?: 'Main') . ' default',
+                $provider,
+                $token,
+                $isFirst ? 1 : 0,
+            ]);
+            $defChannelId = (int)$db->lastInsertId();
+            // If we created this as the (only) channel, promote to default.
+            if ($isFirst) {
+                $db->prepare('UPDATE channels SET is_default = 0 WHERE company_id = ? AND id <> ?')
+                   ->execute([$companyId, $defChannelId]);
+            } else {
+                // There are other channels but none marked default - claim it.
+                $db->prepare('UPDATE channels SET is_default = 0 WHERE company_id = ?')
+                   ->execute([$companyId]);
+                $db->prepare('UPDATE channels SET is_default = 1 WHERE id = ?')
+                   ->execute([$defChannelId]);
+            }
+        }
+        if ($defChannelId > 0) {
+            $db->prepare(
+                'UPDATE channels SET
+                    provider              = ?,
+                    display_phone         = COALESCE(NULLIF(?, ""), display_phone),
+                    phone_number_id       = ?,
+                    business_account_id   = ?,
+                    api_version           = ?,
+                    access_token          = ?,
+                    evolution_base_url    = ?,
+                    evolution_api_key     = ?,
+                    evolution_instance    = ?,
+                    chatbot_base_url      = ?,
+                    chatbot_bearer_token  = ?
+                 WHERE id = ?'
+            )->execute([
+                $provider,
+                $whatsappNumber,
+                $phoneNumberId    ?: null,
+                $businessAccountId ?: null,
+                $apiVersion,
+                $accessToken      ?: null,
+                $evoBaseUrl       ?: null,
+                $evoApiKey        ?: null,
+                $evoInstance      ?: null,
+                rtrim($chatbotUrl, '/') ?: null,
+                $chatbotToken     ?: null,
+                $defChannelId,
+            ]);
+        }
+
+        log_activity($companyId, (int)$current_user['id'], 'settings_updated', 'company', $companyId,
+            'Company settings updated' . ($defChannelId ? ' (default channel mirrored)' : ''));
+        $msg = $defChannelId
+            ? 'Settings saved. Default channel mirrored — test button will now work.'
+            : 'Settings saved. Warning: no default channel found. Go to Channels and create one, or the Test button will fail.';
     }
 }
 

@@ -52,8 +52,113 @@ function csrf_check(): void
     $token = $_POST['_csrf'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
     if (!is_string($token) || $token === '' || !hash_equals($_SESSION['_csrf'] ?? '', $token)) {
         http_response_code(403);
-        exit('Invalid CSRF token. Please refresh and try again.');
+        // API / fetch calls get a JSON body they can render inline. Full
+        // browser form submits get a proper styled error page instead of
+        // the ugly "Invalid CSRF token" plain-text line.
+        if (wants_json_response()) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['ok' => false, 'error' => 'Invalid CSRF token. Please refresh the page and try again.']);
+        } else {
+            render_error_page(
+                403,
+                'Session expired',
+                'Your login session timed out or the page was open too long. Sign in again or refresh the page — nothing was saved.',
+                ['label' => 'Refresh and try again', 'href' => (string)($_SERVER['HTTP_REFERER'] ?? '/')]
+            );
+        }
+        exit;
     }
+}
+
+/**
+ * True when the request is an API call (fetch/XHR) that expects JSON back.
+ * Browser form submits are treated as HTML page loads.
+ */
+function wants_json_response(): bool
+{
+    if (!empty($_SERVER['HTTP_X_CSRF_TOKEN']))       return true;   // our fetch() convention
+    if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']))   return true;   // classic XHR marker
+    $accept = (string)($_SERVER['HTTP_ACCEPT'] ?? '');
+    if (str_contains($accept, 'application/json'))   return true;
+    // /api/*.php scripts always speak JSON.
+    if (str_starts_with((string)($_SERVER['REQUEST_URI'] ?? ''), '/api/')) return true;
+    return false;
+}
+
+/**
+ * Render a full-page HTML error using the app's design tokens. Used by
+ * csrf_check() and by anything else that wants a graceful failure page
+ * instead of exit('...') plain text.
+ *
+ * @param array{label:string,href:string}|null $cta primary action
+ */
+function render_error_page(int $status, string $title, string $body, ?array $cta = null): void
+{
+    if (!headers_sent()) http_response_code($status);
+    $cssHref = function_exists('asset_url') ? asset_url('/assets/css/app.css') : '/assets/css/app.css';
+    $appName = defined('APP_NAME') ? APP_NAME : 'AiServe Inbox';
+    $refresh = 'window.location.reload()';
+    ?><!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><?= e($title) ?> · <?= e($appName) ?></title>
+  <link rel="stylesheet" href="<?= e($cssHref) ?>">
+</head>
+<body class="landing-body">
+<main class="err-page" role="main">
+  <div class="err-card">
+    <div class="err-code" aria-hidden="true"><?= (int)$status ?></div>
+    <h1 class="err-title"><?= e($title) ?></h1>
+    <p class="err-body"><?= e($body) ?></p>
+    <div class="err-actions">
+      <?php if ($cta): ?>
+        <a class="btn btn-primary" href="<?= e($cta['href']) ?>"><?= e($cta['label']) ?></a>
+      <?php endif; ?>
+      <button class="btn" type="button" onclick="<?= e($refresh) ?>">Refresh page</button>
+      <a class="btn" href="/">Go home</a>
+    </div>
+  </div>
+</main>
+<style>
+  .err-page {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: var(--space-5, 24px); background: var(--color-bg, #f6f8fa);
+  }
+  .err-card {
+    max-width: 460px; width: 100%;
+    background: var(--color-surface, #fff);
+    border: 1px solid var(--color-border, #e4e9ee);
+    border-radius: var(--radius-xl, 16px);
+    box-shadow: var(--shadow-md, 0 6px 16px rgba(15,23,32,0.08));
+    padding: var(--space-6, 32px);
+    text-align: center;
+  }
+  .err-code {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.1em;
+    color: var(--color-text-soft, #94a0ad);
+    text-transform: uppercase; margin-bottom: 12px;
+  }
+  .err-title {
+    margin: 0 0 8px;
+    font-size: var(--fs-xl, 20px);
+    font-weight: 600;
+    color: var(--color-text, #0f1722);
+    letter-spacing: -0.01em;
+  }
+  .err-body {
+    margin: 0 0 24px;
+    color: var(--color-text-muted, #5b6772);
+    font-size: var(--fs-md, 14px);
+    line-height: var(--lh-normal, 1.5);
+  }
+  .err-actions {
+    display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;
+  }
+</style>
+</body>
+</html><?php
 }
 
 // -------------------- Redirects --------------------

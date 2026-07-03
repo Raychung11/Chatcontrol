@@ -162,11 +162,18 @@ if (function_exists('fastcgi_finish_request')) {
     fastcgi_finish_request();
 }
 
-// First-touch auto-reply path. Guards inside ai_first_touch_handle()
-// short-circuit when the workspace has it disabled.
+// Post-response inbound automation.
+// Order matters:
+//   1. Keyword auto-reply (catalog send, canned answers) - deterministic,
+//      cheap, no LLM cost. If a rule matches we stop.
+//   2. AI first-touch / always-on - only if no keyword rule fired.
+require_once __DIR__ . '/../inc/auto_replies.php';
 require_once __DIR__ . '/../inc/ai_api.php';
 foreach (evolution_touched_conversation_ids() as $cid) {
-    inbound_automation_handle($company, $cid);
+    $fired = keyword_auto_reply_dispatch($company, $cid);
+    if (!$fired) {
+        inbound_automation_handle($company, $cid);
+    }
 }
 
 // =============================================================

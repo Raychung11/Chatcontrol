@@ -69,7 +69,31 @@ $statusCount  = 0;
 $errorText    = null;
 $httpStatus   = 200;
 
-if (!is_array($payload)) {
+// AiServe Chatbot Gateway added a `type` query parameter to distinguish
+// incoming customer messages (existing Evolution shape) from outgoing
+// AI-bot responses (new custom shape defined in their spec). We branch
+// on that here. Anything not "outgoing" falls through to the existing
+// Evolution flow - preserves backward compatibility for partners that
+// don't use the new type field.
+$hookType = strtolower(trim((string)($_GET['type'] ?? 'incoming')));
+
+if ($hookType === 'outgoing') {
+    if (!is_array($payload)) {
+        $httpStatus = 400;
+        $errorText  = 'Invalid JSON payload';
+        error_log('[AiServe evolution outgoing] ' . $errorText);
+    } else {
+        try {
+            if (handle_aiserve_outgoing_ai($company, $channel, $payload)) {
+                $messageCount = 1;
+            }
+        } catch (Throwable $e) {
+            $errorText  = mb_substr('Exception: ' . $e->getMessage(), 0, 500);
+            $httpStatus = 500;
+            error_log('[AiServe evolution outgoing] ' . $errorText);
+        }
+    }
+} elseif (!is_array($payload)) {
     $httpStatus = 400;
     $errorText  = 'Invalid JSON payload';
     error_log('[AiServe evolution] ' . $errorText);
@@ -165,6 +189,139 @@ function evolution_extract_messages(array $payload): array
     $data = $payload['data'] ?? null;
     if ($data === null) return [];
     return array_is_list($data) ? $data : [$data];
+}
+
+/**
+ * Handle AiServe Chatbot Gateway's OUTGOING AI-response webhook.
+ *
+ * Payload shape (per partner spec):
+ *   {
+ *     "ai_response": { "type": "text", "msg": "..." },
+ *     "chatbot_id":  8,
+ *     "contact":     "111944195432638@lid" | "60123456789@s.whatsapp.net",
+ *     "final_result": {
+ *       "msg":       "...",              // Prefer this - post-processed
+ *       "mediatype": "image" | null,
+ *       "mediaUrl":  "https://..." | null
+ *     }
+ *   }
+ *
+ * We persist the AI reply into the same messages / conversations tables
+ * an agent-sent message would land in, tagged sender_type = 'ai' so the
+ * chat UI can render it differently. Bumps last_message_at + first_
+ * response_at so the "Awaiting reply" chip clears the moment the AI
+ * answered.
+ *
+ * @return bool true if a row was persisted
+ */
+function handle_aiserve_outgoing_ai(array $company, array $channel, array $payload): bool
+{
+    // Prefer final_result (post-processing applied). Fall back to ai_response.
+    $final = $payload['final_result'] ?? [];
+    $text  = trim((string)($final['msg'] ?? ($payload['ai_response']['msg'] ?? '')));
+    $mediaType = (string)($final['mediatype'] ?? '');
+    $mediaUrl  = (string)($final['mediaUrl']  ?? '');
+
+    // Parse contact JID -> phone digits, following the same LID handling
+    // as the incoming path. AiServe currently sends contact as a raw JID
+    // like "111944195432638@lid" or "60123456789@s.whatsapp.net".
+    $contact = (string)($payload['contact'] ?? '');
+    if ($contact === '') {
+        error_log('[AiServe outgoing AI] missing contact');
+        return false;
+    }
+    $jid      = $contact;
+    $waId     = explode('@', $jid)[0];
+    $isLid    = str_ends_with($jid, '@lid');
+    if ($isLid || !ctype_digit($waId)) {
+        // LID means the sender's real phone is hidden. We still need a row
+        // so agents see the AI reply - but use a placeholder wa_id so it
+        // doesn't collide with a real number. Real phone will surface when
+        // the customer eventually replies through the incoming webhook.
+        $waId = 'lid_' . preg_replace('/[^A-Za-z0-9]/', '', $jid);
+    }
+
+    if ($text === '' && $mediaUrl === '') {
+        error_log('[AiServe outgoing AI] empty ai response for contact=' . $contact);
+        return false;
+    }
+
+    $companyId = (int)$company['id'];
+    $channelId = (int)$channel['id'];
+    $db = aiserve_db();
+
+    // Dedupe on content hash - the payload has no message id, so a partner
+    // retry would otherwise create a duplicate. Prefix marks these as
+    // AI-bot echoes so they don't clash with real WA IDs.
+    $waMsgId = 'aiserve-ai:' . (int)($payload['chatbot_id'] ?? 0) . ':'
+             . substr(hash('sha256', $waId . '|' . $text . '|' . $mediaUrl), 0, 32);
+
+    $check = $db->prepare('SELECT id FROM messages WHERE wa_message_id = ? LIMIT 1');
+    $check->execute([$waMsgId]);
+    if ($check->fetchColumn()) return false;
+
+    // Find or create contact
+    $stmt = $db->prepare('SELECT id FROM contacts WHERE company_id = ? AND wa_id = ? LIMIT 1');
+    $stmt->execute([$companyId, $waId]);
+    $contactId = (int)($stmt->fetchColumn() ?: 0);
+    if ($contactId === 0) {
+        $ins = $db->prepare(
+            'INSERT INTO contacts (company_id, wa_id, phone, display_name, last_message_at)
+             VALUES (?, ?, ?, ?, NOW())'
+        );
+        $ins->execute([$companyId, $waId, $waId, $waId]);
+        $contactId = (int)$db->lastInsertId();
+    }
+
+    // Find or create active conversation
+    $stmt = $db->prepare(
+        'SELECT id FROM conversations
+         WHERE company_id = ? AND contact_id = ? AND status IN ("open","pending","escalated")
+         ORDER BY id DESC LIMIT 1'
+    );
+    $stmt->execute([$companyId, $contactId]);
+    $conversationId = (int)($stmt->fetchColumn() ?: 0);
+    if ($conversationId === 0) {
+        $ins = $db->prepare(
+            'INSERT INTO conversations
+                (company_id, channel_id, contact_id, status,
+                 last_message_text, last_message_at, first_response_at, unread_count)
+             VALUES (?, ?, ?, "open", ?, NOW(), NOW(), 0)'
+        );
+        $ins->execute([$companyId, $channelId, $contactId, mb_substr($text ?: '(media)', 0, 500)]);
+        $conversationId = (int)$db->lastInsertId();
+    }
+
+    // Insert the outbound AI message
+    $messageType = $mediaUrl !== '' ? ($mediaType ?: 'document') : 'text';
+    $ins = $db->prepare(
+        'INSERT INTO messages
+            (company_id, channel_id, conversation_id, contact_id,
+             sender_type, sender_user_id, wa_message_id,
+             direction, message_type, message_text,
+             media_url, status, sent_at, raw_payload)
+         VALUES (?, ?, ?, ?, "ai", NULL, ?, "outgoing", ?, ?, ?, "sent", NOW(), ?)'
+    );
+    $ins->execute([
+        $companyId, $channelId, $conversationId, $contactId,
+        $waMsgId, $messageType, $text,
+        $mediaUrl ?: null,
+        json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+
+    // Bump conversation - this clears the "Awaiting reply" state because
+    // last_message_at is now >= last_customer_message_at.
+    $db->prepare(
+        'UPDATE conversations
+         SET last_message_text = ?,
+             last_message_at   = NOW(),
+             first_response_at = COALESCE(first_response_at, NOW())
+         WHERE id = ?'
+    )->execute([mb_substr($text ?: '(media)', 0, 500), $conversationId]);
+
+    log_activity($companyId, null, 'ai_reply_delivered', 'conversation', $conversationId,
+        'AiServe AI reply chatbot_id=' . (int)($payload['chatbot_id'] ?? 0));
+    return true;
 }
 
 /**

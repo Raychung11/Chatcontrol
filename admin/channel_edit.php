@@ -181,10 +181,20 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
 
     <?php if ($row): ?>
     <div class="alert alert-info">
-      <strong>Inbound webhook URL for this channel:</strong><br>
-      For Cloud API: <code><?= e($cloudHook) ?></code><br>
-      For Evolution / partner gateway: <code><?= e($webhookUrl) ?></code><br>
-      Give the relevant URL to your provider.
+      <strong>Webhook URLs for this channel:</strong><br>
+      <strong>Cloud API (Meta):</strong> <code><?= e($cloudHook) ?></code><br>
+      <strong>Evolution / customer messages (incoming):</strong>
+        <code><?= e($webhookUrl) ?><?= str_contains($webhookUrl, '?') ? '&' : '?' ?>type=incoming</code><br>
+      <strong>AiServe Chatbot Gateway — AI reply echo (outgoing):</strong>
+        <code><?= e($webhookUrl) ?><?= str_contains($webhookUrl, '?') ? '&' : '?' ?>type=outgoing</code><br>
+      <small class="muted">
+        Give both URLs to your partner. The <code>?type=</code> query
+        parameter is required — <em>incoming</em> receives customer
+        messages, <em>outgoing</em> receives echoes of AI-generated
+        replies the gateway sent on your behalf so agents see them in
+        the inbox. If <code>?type=</code> is omitted, the endpoint
+        defaults to <em>incoming</em> for backward compatibility.
+      </small>
     </div>
     <?php endif; ?>
 

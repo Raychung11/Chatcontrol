@@ -28,7 +28,17 @@ if (is_post()) {
     $existing->execute([$companyId]);
     $existing = $existing->fetch() ?: [];
 
-    if ($isPlatform) {
+    // Was the WhatsApp-connection block actually submitted this time?
+    // - Workspace admins: block is hidden -> never true
+    // - Platform admin: only when they filled + saved that section
+    // We key off the `provider` radio which lives inside the block. If it is
+    // present in $_POST we treat that as "yes, sync connection to channel"
+    // and pass fresh values through. Any other Settings save (brand color,
+    // alerts, default department) leaves connection alone AND does not
+    // mirror to Channels - so per-channel edits stay authoritative.
+    $connectionSubmitted = $isPlatform && isset($_POST['provider']);
+
+    if ($connectionSubmitted) {
         $whatsappNumber    = trim((string)($_POST['whatsapp_number']      ?? ''));
         $phoneNumberId     = trim((string)($_POST['phone_number_id']      ?? ''));
         $businessAccountId = trim((string)($_POST['business_account_id']  ?? ''));
@@ -96,13 +106,15 @@ if (is_post()) {
             $companyId,
         ]);
 
-        // Auto-mirror the connection config onto the DEFAULT channel row.
-        // The multi-channel refactor moved provider config to `channels`, but
-        // this Settings page still writes to `companies`. Without this mirror,
-        // new clients fill in Settings, click "Test connection", and get
-        // "channel is not configured" - because the send path reads the
-        // channel row. Mirror keeps the two in sync so the surface acts as
-        // one place to configure the primary number.
+        // Only mirror to Channels when the platform admin explicitly submitted
+        // the connection block on THIS save. Any other Settings save
+        // (brand color, alerts, department) is left alone so per-channel
+        // edits made in /admin/channels.php are not silently overwritten.
+        // This is the fix for the "Settings vs Channels conflict" reported
+        // in prod - saving Settings for unrelated reasons used to revert
+        // a real channel token back to whatever was on the companies row.
+        $mirroredToDefault = false;
+    if ($connectionSubmitted) {
         $defChan = $db->prepare(
             'SELECT id FROM channels
              WHERE company_id = ? AND is_default = 1
@@ -173,13 +185,19 @@ if (is_post()) {
                 $chatbotToken     ?: null,
                 $defChannelId,
             ]);
+            $mirroredToDefault = ($defChannelId > 0);
         }
+    } // end: if ($connectionSubmitted)
 
         log_activity($companyId, (int)$current_user['id'], 'settings_updated', 'company', $companyId,
-            'Company settings updated' . ($defChannelId ? ' (default channel mirrored)' : ''));
-        $msg = $defChannelId
-            ? 'Settings saved. Default channel mirrored — test button will now work.'
-            : 'Settings saved. Warning: no default channel found. Go to Channels and create one, or the Test button will fail.';
+            'Company settings updated' . ($mirroredToDefault ? ' (default channel mirrored)' : ''));
+        if ($connectionSubmitted && $mirroredToDefault) {
+            $msg = 'Settings saved. Default channel mirrored — test button will now work.';
+        } elseif ($connectionSubmitted) {
+            $msg = 'Settings saved. Warning: no default channel found. Go to Channels and create one, or the Test button will fail.';
+        } else {
+            $msg = 'Settings saved. Channel connection config was not touched — edit that at Admin → Channels.';
+        }
     }
 }
 
@@ -239,6 +257,13 @@ layout_start($current_user, 'Company & API Settings', 'settings', $company['bran
 
     <?php if ($isPlatform): ?>
     <h2>Messaging provider</h2>
+    <div class="alert alert-info" style="margin-bottom:8px;">
+      Saving this section mirrors the values into your <strong>default channel</strong>
+      at <a href="/admin/channels.php">Admin → Channels</a>. Additional
+      non-default channels are NOT touched — edit those directly on the
+      Channels page. If you want per-channel divergence, skip this section
+      and manage everything in Channels.
+    </div>
     <?php $currentProvider = $company['provider'] ?? 'cloud_api'; ?>
     <div class="provider-picker">
       <label class="provider-radio">

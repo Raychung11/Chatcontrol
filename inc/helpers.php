@@ -59,11 +59,23 @@ function csrf_check(): void
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode(['ok' => false, 'error' => 'Invalid CSRF token. Please refresh the page and try again.']);
         } else {
+            // Only honour the Referer if it points at THIS host - stops an
+            // attacker from crafting a form on evil.com whose CSRF failure
+            // renders a "Refresh and try again" link back to their page.
+            $referer = (string)($_SERVER['HTTP_REFERER'] ?? '');
+            $safeReferer = '/';
+            if ($referer !== '') {
+                $refHost = parse_url($referer, PHP_URL_HOST);
+                $ownHost = (string)($_SERVER['HTTP_HOST'] ?? '');
+                if ($refHost !== null && $ownHost !== '' && strcasecmp($refHost, $ownHost) === 0) {
+                    $safeReferer = $referer;
+                }
+            }
             render_error_page(
                 403,
                 'Session expired',
                 'Your login session timed out or the page was open too long. Sign in again or refresh the page — nothing was saved.',
-                ['label' => 'Refresh and try again', 'href' => (string)($_SERVER['HTTP_REFERER'] ?? '/')]
+                ['label' => 'Refresh and try again', 'href' => $safeReferer]
             );
         }
         exit;

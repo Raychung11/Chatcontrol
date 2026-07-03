@@ -110,7 +110,8 @@ layout_start($current_user, 'Connect WhatsApp (Evolution)', 'evolution_connect')
   </p>
   <?php if (empty($verifyTok)): ?>
     <div class="alert alert-error">
-      Set a <strong>Webhook verify token</strong> in <a href="/admin/settings.php">Settings</a> first —
+      Set a <strong>Webhook verify token</strong> on the channel at
+      <a href="/admin/channels.php">Admin → Channels</a> first —
       it secures the Evolution → portal webhook.
     </div>
   <?php endif; ?>

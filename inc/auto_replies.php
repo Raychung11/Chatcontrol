@@ -124,6 +124,13 @@ function keyword_auto_reply_handle(array $company, array $channel, int $conversa
     // take, so delivery ticks, error handling, and per-provider quirks
     // (DoH DNS pinning, media URL signing, template restrictions) are
     // all reused.
+    // Loud error when the DB says a media file exists but disk disagrees.
+    // Otherwise the rule just silently stops firing and the admin has no
+    // idea why - happens on host migration, chmod, accidental rm, etc.
+    if ($mediaKind !== 'none' && $mediaPath !== '' && !file_exists($mediaPath)) {
+        error_log('[AiServe auto_reply] rule=' . $ruleId
+            . ' media file missing on disk: ' . $mediaPath . ' - falling back to text-only');
+    }
     if ($mediaKind !== 'none' && $mediaPath !== '' && file_exists($mediaPath)) {
         // For non-Cloud-API providers, provider_upload_media returns the
         // local path as the reference. For Cloud API it uploads to Meta.
@@ -175,15 +182,20 @@ function keyword_auto_reply_handle(array $company, array $channel, int $conversa
     ]);
     $messageId = (int)$db->lastInsertId();
 
-    // Bump conversation so the awaiting-reply chip clears and the row
-    // floats to the top.
-    $db->prepare(
-        'UPDATE conversations
-         SET last_message_text = ?,
-             last_message_at   = NOW(),
-             first_response_at = COALESCE(first_response_at, NOW())
-         WHERE id = ?'
-    )->execute([mb_substr($replyText ?: '(auto-reply media)', 0, 500), $conversationId]);
+    // Only bump the conversation timestamps if the send actually succeeded.
+    // If we clear last_message_at on a failed send, the awaiting-reply
+    // chip disappears from the inbox even though the customer never got
+    // their reply -> urgent messages silently hidden from the queue during
+    // a Meta / AiServe outage. Failed sends should stay "awaiting".
+    if ($result['ok']) {
+        $db->prepare(
+            'UPDATE conversations
+             SET last_message_text = ?,
+                 last_message_at   = NOW(),
+                 first_response_at = COALESCE(first_response_at, NOW())
+             WHERE id = ?'
+        )->execute([mb_substr($replyText ?: '(auto-reply media)', 0, 500), $conversationId]);
+    }
 
     // Fire log for cooldown + audit.
     $db->prepare(

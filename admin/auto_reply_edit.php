@@ -67,6 +67,25 @@ if (is_post()) {
         $mediaKind = 'none'; $mediaPath = ''; $mediaName = ''; $mediaMime = '';
     }
 
+    // Explicitly surface PHP-level upload rejections (INI or form size cap)
+    // - without this the form silently saves with no media when the client
+    // uploads more than upload_max_filesize.
+    if (!$err && !empty($_FILES['media']['name'])
+        && ($_FILES['media']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK
+        && $_FILES['media']['error'] !== UPLOAD_ERR_NO_FILE) {
+        $sizeCap = ini_get('upload_max_filesize') ?: 'the server cap';
+        switch ($_FILES['media']['error']) {
+            case UPLOAD_ERR_INI_SIZE:
+            case UPLOAD_ERR_FORM_SIZE:
+                $err = 'Upload too large — server limit is ' . $sizeCap . '.';
+                break;
+            case UPLOAD_ERR_PARTIAL:
+                $err = 'Upload was interrupted. Try again.';
+                break;
+            default:
+                $err = 'Upload failed (code ' . (int)$_FILES['media']['error'] . ').';
+        }
+    }
     if (!$err && !empty($_FILES['media']['tmp_name']) && $_FILES['media']['error'] === UPLOAD_ERR_OK) {
         $tmp    = $_FILES['media']['tmp_name'];
         $origNm = (string)($_FILES['media']['name'] ?? 'upload');

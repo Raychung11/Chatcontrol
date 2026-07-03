@@ -237,16 +237,9 @@ function handle_aiserve_outgoing_ai(array $company, array $channel, array $paylo
         error_log('[AiServe outgoing AI] missing contact');
         return false;
     }
-    $jid      = $contact;
-    $waId     = explode('@', $jid)[0];
-    $isLid    = str_ends_with($jid, '@lid');
-    if ($isLid || !ctype_digit($waId)) {
-        // LID means the sender's real phone is hidden. We still need a row
-        // so agents see the AI reply - but use a placeholder wa_id so it
-        // doesn't collide with a real number. Real phone will surface when
-        // the customer eventually replies through the incoming webhook.
-        $waId = 'lid_' . preg_replace('/[^A-Za-z0-9]/', '', $jid);
-    }
+    $jid   = $contact;
+    $waId  = explode('@', $jid)[0];
+    $isLid = str_ends_with($jid, '@lid') || !ctype_digit($waId);
 
     if ($text === '' && $mediaUrl === '') {
         error_log('[AiServe outgoing AI] empty ai response for contact=' . $contact);
@@ -257,11 +250,32 @@ function handle_aiserve_outgoing_ai(array $company, array $channel, array $paylo
     $channelId = (int)$channel['id'];
     $db = aiserve_db();
 
+    // LID-only outgoing echo: the partner's payload only gave us a Linked
+    // ID, not a real phone. We CANNOT map this reliably to a customer -
+    // creating a `lid_...` placeholder contact + conversation would result
+    // in a phantom contact that never merges with the real customer when
+    // they eventually reply through the incoming webhook (which surfaces
+    // remoteJidAlt = the real @s.whatsapp.net phone). Log to
+    // activity_logs so the AI action is not invisible, but skip the
+    // contact/conversation/messages inserts.
+    if ($isLid) {
+        log_activity($companyId, null, 'ai_reply_delivered_lid_only', 'company', $companyId,
+            'chatbot_id=' . (int)($payload['chatbot_id'] ?? 0)
+            . ' contact=' . mb_substr($contact, 0, 100)
+            . ' text=' . mb_substr($text, 0, 200));
+        return true;
+    }
+
     // Dedupe on content hash - the payload has no message id, so a partner
-    // retry would otherwise create a duplicate. Prefix marks these as
-    // AI-bot echoes so they don't clash with real WA IDs.
+    // retry within a small window would otherwise create a duplicate.
+    // Bucket by SECOND so retries (arrive milliseconds later) collide but
+    // legit repeats of the same short text ("OK", "Thanks", greetings)
+    // sent minutes apart do NOT collide - a fixed hash of just wa_id+text
+    // would silently drop them. Prefix marks these as AI-bot echoes so
+    // they don't clash with real WA IDs.
+    $bucket  = (int)floor(microtime(true));
     $waMsgId = 'aiserve-ai:' . (int)($payload['chatbot_id'] ?? 0) . ':'
-             . substr(hash('sha256', $waId . '|' . $text . '|' . $mediaUrl), 0, 32);
+             . substr(hash('sha256', $waId . '|' . $text . '|' . $mediaUrl . '|' . $bucket), 0, 32);
 
     $check = $db->prepare('SELECT id FROM messages WHERE wa_message_id = ? LIMIT 1');
     $check->execute([$waMsgId]);
@@ -289,13 +303,23 @@ function handle_aiserve_outgoing_ai(array $company, array $channel, array $paylo
     $stmt->execute([$companyId, $contactId]);
     $conversationId = (int)($stmt->fetchColumn() ?: 0);
     if ($conversationId === 0) {
+        // Same routing rules the inbound path uses, so an AI-first-touch
+        // conversation lands in the right department instead of drifting
+        // to "Unassigned". apply_routing_rules() is a no-op if the
+        // workspace has none configured.
+        $route = apply_routing_rules($companyId, $text);
         $ins = $db->prepare(
             'INSERT INTO conversations
-                (company_id, channel_id, contact_id, status,
+                (company_id, channel_id, contact_id, department_id, assigned_user_id, status,
                  last_message_text, last_message_at, first_response_at, unread_count)
-             VALUES (?, ?, ?, "open", ?, NOW(), NOW(), 0)'
+             VALUES (?, ?, ?, ?, ?, "open", ?, NOW(), NOW(), 0)'
         );
-        $ins->execute([$companyId, $channelId, $contactId, mb_substr($text ?: '(media)', 0, 500)]);
+        $ins->execute([
+            $companyId, $channelId, $contactId,
+            $route['department_id']   ?? null,
+            $route['assigned_user_id'] ?? null,
+            mb_substr($text ?: '(media)', 0, 500),
+        ]);
         $conversationId = (int)$db->lastInsertId();
     }
 

@@ -32,6 +32,13 @@ function broadcast_normalize_wa(string $raw): string
  */
 function broadcast_parse_numbers(string $blob): array
 {
+    // Guard against a paste that would OOM the worker before we even get
+    // to the 5000-recipient cap. Hostinger's default post_max_size is
+    // 64 MB and preg_split on that materialises a many-million-entry
+    // array. 200 KB is enough for ~13k numbers with typical whitespace -
+    // well above the 5000 cap enforced downstream.
+    if (strlen($blob) > 200_000) return [];
+
     $parts = preg_split('/[\s,;]+/', $blob) ?: [];
     $out   = [];
     $seen  = [];
@@ -41,6 +48,9 @@ function broadcast_parse_numbers(string $blob): array
         if (isset($seen[$wa])) continue;
         $seen[$wa] = true;
         $out[] = $wa;
+        // Belt-and-braces: even if the split blows up someday, we can't
+        // exceed the downstream cap by more than a few.
+        if (count($out) > 6000) break;
     }
     return $out;
 }

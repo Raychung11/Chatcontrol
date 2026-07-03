@@ -85,6 +85,9 @@ function start_impersonation(int $targetCompanyId): bool
     }
     aiserve_start_session();
     $_SESSION['_impersonate_company_id'] = $targetCompanyId;
+    // Rotate the SID whenever effective privileges change - matches the
+    // behaviour of login_user() and stops SID fixation across a role swap.
+    session_regenerate_id(true);
     log_activity($targetCompanyId, (int)$u['id'], 'impersonation_start', 'company', $targetCompanyId,
         'Platform admin ' . $u['email'] . ' impersonating workspace ' . $targetCompanyId);
     return true;
@@ -100,6 +103,8 @@ function stop_impersonation(): void
             'Platform admin ended impersonation');
     }
     unset($_SESSION['_impersonate_company_id']);
+    // Same rotation on the way back to the real identity.
+    session_regenerate_id(true);
 }
 
 function require_login(): array

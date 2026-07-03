@@ -618,8 +618,13 @@ function handle_evolution_status(array $company, array $msg): void
     if (!isset($map[$status])) return;
     [$enum, $col] = $map[$status];
 
-    $sql = 'UPDATE messages SET status = ?, ' . $col . ' = NOW() WHERE wa_message_id = ?';
-    aiserve_db()->prepare($sql)->execute([$enum, $waMsgId]);
+    // Belt-and-braces workspace scope. uk_messages_wa_id is UNIQUE globally
+    // so at most one row matches, but if two workspaces on separate
+    // Evolution instances ever collided on a Baileys-generated id this
+    // stops a status update leaking into the wrong tenant.
+    $sql = 'UPDATE messages SET status = ?, ' . $col . ' = NOW()
+            WHERE wa_message_id = ? AND company_id = ?';
+    aiserve_db()->prepare($sql)->execute([$enum, $waMsgId, (int)$company['id']]);
 }
 
 function handle_evolution_connection(array $company, array $payload): void

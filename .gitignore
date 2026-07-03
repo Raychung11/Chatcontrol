@@ -4,9 +4,10 @@ config/db_config.local.php
 .env.*
 !.env.evolution.example
 
-# uploads (keep folder, ignore contents)
+# uploads (keep folder + security htaccess, ignore contents)
 uploads/*
 !uploads/.gitkeep
+!uploads/.htaccess
 
 # PWA icon cache (regenerated on demand)
 assets/img/cache/

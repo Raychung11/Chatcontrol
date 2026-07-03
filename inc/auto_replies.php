@@ -57,8 +57,20 @@ function auto_reply_match(array $rules, string $text): ?array
                 break;
             case 'regex':
                 // PCRE - value is written without delimiters; add /iu.
+                // A workspace admin could save a catastrophically-backtracking
+                // pattern like /(a+)+b/ that runs for tens of seconds on
+                // adversarial input, holding the PHP-FPM worker and
+                // starving other tenants sharing this host. Clamp
+                // backtrack + recursion limits around this call - PCRE
+                // returns false and preg_last_error() surfaces the reason.
                 $pattern = '/' . str_replace('/', '\\/', $r['match_value']) . '/iu';
+                $oldBt = ini_get('pcre.backtrack_limit');
+                $oldRc = ini_get('pcre.recursion_limit');
+                ini_set('pcre.backtrack_limit', '100000');
+                ini_set('pcre.recursion_limit', '100000');
                 $hit = @preg_match($pattern, $text) === 1;
+                ini_set('pcre.backtrack_limit', (string)$oldBt);
+                ini_set('pcre.recursion_limit', (string)$oldRc);
                 break;
             case 'contains':
             default:
@@ -68,24 +80,6 @@ function auto_reply_match(array $rules, string $text): ?array
         if ($hit) return $r;
     }
     return null;
-}
-
-/**
- * Was this rule fired for this conversation inside its cooldown window?
- * The cooldown is stored on the rule itself (default 60 min) so
- * different rules can be more or less aggressive.
- */
-function auto_reply_in_cooldown(int $ruleId, int $conversationId, int $cooldownMin): bool
-{
-    if ($cooldownMin <= 0) return false;
-    $stmt = aiserve_db()->prepare(
-        'SELECT id FROM auto_reply_fires
-         WHERE auto_reply_id = ? AND conversation_id = ?
-           AND fired_at > NOW() - INTERVAL ? MINUTE
-         ORDER BY id DESC LIMIT 1'
-    );
-    $stmt->execute([$ruleId, $conversationId, $cooldownMin]);
-    return (bool)$stmt->fetchColumn();
 }
 
 /**
@@ -110,8 +104,33 @@ function keyword_auto_reply_handle(array $company, array $channel, int $conversa
 
     $ruleId       = (int)$matched['id'];
     $cooldownMin  = (int)($matched['cooldown_min'] ?? 60);
-    if (auto_reply_in_cooldown($ruleId, $conversationId, $cooldownMin)) {
-        return false;
+
+    // Atomic cooldown claim, replaces the previous read-then-write pattern
+    // that could double-fire under a concurrent-webhook race.
+    // The cooldown bucket is floor(unix_ts / cooldown_seconds) so two
+    // events within the same cooldown window collapse to the same bucket
+    // number; the UNIQUE key on (rule, conversation, bucket) then makes
+    // the INSERT reject one of them at the DB layer. cooldown_min=0 means
+    // "no cooldown" - we still use a bucket-per-second so simultaneous
+    // events dedupe but consecutive ones fire.
+    $bucketSize = max(1, $cooldownMin * 60);
+    $bucket     = (int)floor(time() / $bucketSize);
+    $db         = aiserve_db();
+    $matchedTxt = mb_substr($messageText, 0, 500);
+
+    try {
+        $claim = $db->prepare(
+            'INSERT INTO auto_reply_fires
+                (auto_reply_id, conversation_id, matched_text, cooldown_bucket)
+             VALUES (?, ?, ?, ?)'
+        );
+        $claim->execute([$ruleId, $conversationId, $matchedTxt, $bucket]);
+        $fireId = (int)$db->lastInsertId();
+    } catch (PDOException $e) {
+        // Errno 1062 = ER_DUP_ENTRY - another worker just fired in this
+        // cooldown bucket. Bail out cleanly.
+        if (($e->errorInfo[1] ?? 0) === 1062) return false;
+        throw $e;
     }
 
     $replyText = trim((string)($matched['reply_text'] ?? ''));
@@ -155,8 +174,6 @@ function keyword_auto_reply_handle(array $company, array $channel, int $conversa
         $recordedMedia = null;
     }
 
-    $db = aiserve_db();
-
     // Record the outbound message so it shows up in the agent's chat view.
     $ins = $db->prepare(
         'INSERT INTO messages
@@ -197,11 +214,10 @@ function keyword_auto_reply_handle(array $company, array $channel, int $conversa
         )->execute([mb_substr($replyText ?: '(auto-reply media)', 0, 500), $conversationId]);
     }
 
-    // Fire log for cooldown + audit.
-    $db->prepare(
-        'INSERT INTO auto_reply_fires (auto_reply_id, conversation_id, message_id, matched_text)
-         VALUES (?, ?, ?, ?)'
-    )->execute([$ruleId, $conversationId, $messageId, mb_substr($messageText, 0, 500)]);
+    // Stamp the fire row we already claimed with the message_id so admins
+    // can jump from the audit list to the sent bubble.
+    $db->prepare('UPDATE auto_reply_fires SET message_id = ? WHERE id = ?')
+       ->execute([$messageId, $fireId]);
 
     // Bump rule stats.
     $db->prepare(

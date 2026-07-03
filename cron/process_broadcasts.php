@@ -47,9 +47,31 @@ foreach ($broadcasts as $b) {
         continue;
     }
 
-    // Claim the next batch. We update the recipient rows to 'sending' first so
-    // a second cron tick that fires before this one finishes does not double-send.
-    // The unique key (broadcast_id, wa_id) also prevents re-queueing the same number.
+    // ATOMIC CLAIM: stamp last_batch_at up front so an overlapping cron
+    // tick (Hostinger routinely overlaps runs when a batch takes 30+ s)
+    // is fenced out of this broadcast until the next interval opens.
+    // If UPDATE affects 0 rows another worker beat us to it - skip.
+    // Previously last_batch_at was stamped AFTER the send loop, which let
+    // two ticks both claim the same queued recipients and double-send.
+    $claim = $db->prepare(
+        'UPDATE broadcasts
+         SET last_batch_at = NOW(),
+             started_at    = COALESCE(started_at, NOW())
+         WHERE id = ?
+           AND status = "running"
+           AND (last_batch_at IS NULL
+                OR last_batch_at <= NOW() - INTERVAL batch_interval_min MINUTE)'
+    );
+    $claim->execute([$bid]);
+    if ($claim->rowCount() === 0) {
+        echo "  bcast=$bid  another cron worker holds this turn, skipping\n";
+        continue;
+    }
+
+    // Now safe to pick the batch - the broadcast-level lock above means
+    // no other worker can be processing this broadcast at the same time.
+    // The unique key (broadcast_id, wa_id) is a second belt in case of a
+    // manual retry.
     $batchStmt = $db->prepare(
         'SELECT id, wa_id, display_name, contact_id, conversation_id
          FROM broadcast_recipients
@@ -118,13 +140,12 @@ foreach ($broadcasts as $b) {
         }
     }
 
-    // Stamp the broadcast progress + last_batch_at so we wait the full interval
-    // before the next batch.
+    // Only bump the per-run counters here - last_batch_at was already
+    // stamped by the atomic claim above, so overlapping ticks don't need
+    // us to touch it again.
     $db->prepare(
         'UPDATE broadcasts
-         SET sent_count = sent_count + ?, failed_count = failed_count + ?,
-             last_batch_at = NOW(),
-             started_at = COALESCE(started_at, NOW())
+         SET sent_count = sent_count + ?, failed_count = failed_count + ?
          WHERE id = ?'
     )->execute([$okCount, $errCount, $bid]);
 

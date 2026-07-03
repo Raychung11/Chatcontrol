@@ -260,8 +260,17 @@ function apply_routing_rules(int $companyId, ?string $messageBody): array
             case 'equals':      $hit = ($lcBody === $needle); break;
             case 'starts_with': $hit = str_starts_with($lcBody, $needle); break;
             case 'regex':
+                // ReDoS guard: cap backtrack + recursion so a
+                // pathological workspace-authored pattern cannot pin
+                // the PHP-FPM worker on adversarial input.
                 $pattern = '/' . str_replace('/', '\\/', (string)$rule['match_value']) . '/iu';
+                $oldBt = ini_get('pcre.backtrack_limit');
+                $oldRc = ini_get('pcre.recursion_limit');
+                ini_set('pcre.backtrack_limit', '100000');
+                ini_set('pcre.recursion_limit', '100000');
                 $hit = @preg_match($pattern, $body) === 1;
+                ini_set('pcre.backtrack_limit', (string)$oldBt);
+                ini_set('pcre.recursion_limit', (string)$oldRc);
                 break;
             case 'contains':
             default:

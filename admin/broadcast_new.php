@@ -61,15 +61,19 @@ if (is_post()) {
             if ($saved['tag_id'] <= 0) {
                 $err = 'Pick a tag.';
             } else {
+                // Belt-and-braces workspace scope: filter conversations
+                // AND contacts by company_id (in addition to the tag's
+                // company_id) so a future stray cross-workspace tag_map
+                // row can't leak foreign contacts into the recipient list.
                 $r = $db->prepare(
                     'SELECT DISTINCT ct.wa_id, ct.display_name
                      FROM conversation_tag_map m
-                     JOIN conversations c ON c.id = m.conversation_id
-                     JOIN contacts ct     ON ct.id = c.contact_id
+                     JOIN conversations c ON c.id = m.conversation_id AND c.company_id = ?
+                     JOIN contacts ct     ON ct.id = c.contact_id     AND ct.company_id = ?
                      JOIN conversation_tags t ON t.id = m.tag_id
                      WHERE m.tag_id = ? AND t.company_id = ?'
                 );
-                $r->execute([$saved['tag_id'], $companyId]);
+                $r->execute([$companyId, $companyId, $saved['tag_id'], $companyId]);
                 foreach ($r->fetchAll() as $row) {
                     $wa = broadcast_normalize_wa((string)$row['wa_id']);
                     if (strlen($wa) >= 8) $waIds[$wa] = $row['display_name'] ?: $wa;
@@ -170,7 +174,7 @@ layout_start($current_user, 'New broadcast', 'broadcasts');
     </div>
 
     <label data-source="paste">Numbers
-      <textarea name="numbers" rows="6"
+      <textarea name="numbers" rows="6" maxlength="200000"
                 placeholder="60123456789&#10;60198765432, 60112223333"><?= e($saved['numbers']) ?></textarea>
       <small class="muted">Digits only, with country code (e.g. 60 for Malaysia). Duplicates are removed automatically.</small>
     </label>

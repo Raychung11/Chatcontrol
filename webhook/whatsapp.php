@@ -380,21 +380,32 @@ function handle_status_update(array $company, array $status): void
         default     => null,
     };
 
-    $db = aiserve_db();
+    // Belt-and-braces workspace scope on all status UPDATEs. The
+    // uk_messages_wa_id UNIQUE key means only one row can match a given
+    // wa_message_id, but if a partner ever misrouted a status update to
+    // another tenant's webhook URL, the extra AND company_id = ? stops
+    // it landing on the wrong row.
+    $db  = aiserve_db();
+    $cid = (int)$company['id'];
     if ($statusName === 'failed') {
         $err = $status['errors'][0]['title']
             ?? $status['errors'][0]['message']
             ?? 'Failed';
-        $stmt = $db->prepare('UPDATE messages SET status = "failed", error_message = ? WHERE wa_message_id = ?');
-        $stmt->execute([$err, $waId]);
+        $stmt = $db->prepare(
+            'UPDATE messages SET status = "failed", error_message = ?
+             WHERE wa_message_id = ? AND company_id = ?'
+        );
+        $stmt->execute([$err, $waId, $cid]);
         return;
     }
 
     if ($col) {
-        $sql = 'UPDATE messages SET status = ?, ' . $col . ' = NOW() WHERE wa_message_id = ?';
+        $sql = 'UPDATE messages SET status = ?, ' . $col . ' = NOW()
+                WHERE wa_message_id = ? AND company_id = ?';
     } else {
-        $sql = 'UPDATE messages SET status = ? WHERE wa_message_id = ?';
+        $sql = 'UPDATE messages SET status = ?
+                WHERE wa_message_id = ? AND company_id = ?';
     }
     $stmt = $db->prepare($sql);
-    $stmt->execute([$map[$statusName], $waId]);
+    $stmt->execute([$map[$statusName], $waId, $cid]);
 }

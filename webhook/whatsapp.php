@@ -334,15 +334,29 @@ function handle_incoming_message(array $company, array $channel, array $value, a
     }
 
     // Best-effort inbound media download (synchronous; small files, short timeout).
-    if ($mediaId && in_array($msgType, ['image', 'video', 'audio', 'document', 'sticker'], true)) {
+    // Skip stickers by default so a busy customer's endless emoji spam does
+    // not fill the disk. Governed by companies.skip_stickers (see phase 18).
+    $skipStickers = (int)($company['skip_stickers'] ?? 1) === 1;
+    if ($mediaId && $msgType === 'sticker' && $skipStickers) {
+        // Row already inserted with body='[sticker]' - skip the download.
+    } elseif ($mediaId && in_array($msgType, ['image', 'video', 'audio', 'document', 'sticker'], true)) {
         try {
             $destDir = __DIR__ . '/../uploads/' . $companyId . '/inbound';
             $dl = whatsapp_download_media($company, (string)$mediaId, $destDir);
             if ($dl['ok']) {
-                $u = $db->prepare(
-                    'UPDATE messages SET media_local_path = ?, media_mime_type = COALESCE(?, media_mime_type) WHERE id = ?'
-                );
-                $u->execute([$dl['local_path'], $dl['mime_type'] ?? null, $msgRowId]);
+                // Enforce media_max_kb on the downloaded file. Meta's own
+                // limits are looser than what a Hostinger plan can afford.
+                $maxKb = max(64, (int)($company['media_max_kb'] ?? 10240));
+                if (file_exists($dl['local_path']) && filesize($dl['local_path']) > $maxKb * 1024) {
+                    error_log('[AiServe webhook] dropping oversized media ('
+                        . filesize($dl['local_path']) . ' bytes > ' . ($maxKb * 1024) . ') for msg ' . $msgRowId);
+                    @unlink($dl['local_path']);
+                } else {
+                    $u = $db->prepare(
+                        'UPDATE messages SET media_local_path = ?, media_mime_type = COALESCE(?, media_mime_type) WHERE id = ?'
+                    );
+                    $u->execute([$dl['local_path'], $dl['mime_type'] ?? null, $msgRowId]);
+                }
             } else {
                 error_log('[AiServe webhook] media download failed: ' . ($dl['error'] ?? 'unknown'));
             }

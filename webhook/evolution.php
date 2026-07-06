@@ -545,19 +545,43 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
     }
 
     // ---- Inbound media: persist base64 to disk if present ----
+    // Disk-saving guards driven by companies.skip_stickers,
+    // companies.media_max_kb, and later swept by cron/cleanup_media.php.
+    // See sql/migration_phase18.sql.
     $mediaLocalPath = null;
+    $skipStickers   = (int)($company['skip_stickers']    ?? 1) === 1;
+    $maxKb          = max(64, (int)($company['media_max_kb'] ?? 10240));
+    $maxBytes       = $maxKb * 1024;
+
+    if ($mediaBase64 && $kind === 'sticker' && $skipStickers) {
+        // Every customer sticker was previously written as a .webp file.
+        // A busy workspace could accumulate gigabytes of low-value
+        // stickers this way. We still keep the message row with
+        // body='[sticker]' so agents see it happened - we just do not
+        // save the pixels.
+        $mediaBase64 = null;
+    }
     if ($mediaBase64) {
         try {
-            $destDir = __DIR__ . '/../uploads/' . $companyId . '/inbound';
-            if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
-            $ext = $mediaName
-                ? '.' . pathinfo($mediaName, PATHINFO_EXTENSION)
-                : evolution_extension_for_mime((string)$mediaMime);
-            $fname  = $waMsgId . '_' . bin2hex(random_bytes(4)) . $ext;
-            $target = $destDir . '/' . $fname;
-            file_put_contents($target, base64_decode($mediaBase64));
-            @chmod($target, 0640);
-            $mediaLocalPath = $target;
+            // Approximate decoded size from base64 length (base64 grows
+            // the source by 4/3). Bail early on oversized media without
+            // ever allocating the decoded string in memory.
+            $approxBytes = (int)(strlen($mediaBase64) * 3 / 4);
+            if ($approxBytes > $maxBytes) {
+                error_log('[AiServe evolution] dropping oversized media '
+                    . '(' . $approxBytes . ' bytes > ' . $maxBytes . ') for ' . $waMsgId);
+            } else {
+                $destDir = __DIR__ . '/../uploads/' . $companyId . '/inbound';
+                if (!is_dir($destDir)) @mkdir($destDir, 0775, true);
+                $ext = $mediaName
+                    ? '.' . pathinfo($mediaName, PATHINFO_EXTENSION)
+                    : evolution_extension_for_mime((string)$mediaMime);
+                $fname  = $waMsgId . '_' . bin2hex(random_bytes(4)) . $ext;
+                $target = $destDir . '/' . $fname;
+                file_put_contents($target, base64_decode($mediaBase64));
+                @chmod($target, 0640);
+                $mediaLocalPath = $target;
+            }
         } catch (Throwable $e) {
             error_log('[AiServe evolution] media write failed: ' . $e->getMessage());
         }

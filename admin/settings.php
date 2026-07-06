@@ -27,6 +27,11 @@ if (is_post()) {
     $alertThreshold = max(1, (int)($_POST['alert_failed_sends_threshold'] ?? 5));
     $alertEmail     = trim((string)($_POST['alert_email'] ?? ''));
 
+    // Storage / retention. Skipping stickers is the biggest single win.
+    $skipStickers   = !empty($_POST['skip_stickers']) ? 1 : 0;
+    $mediaRetention = max(7, min(3650, (int)($_POST['media_retention_days'] ?? 90)));
+    $mediaMaxKb     = max(64, min(102400, (int)($_POST['media_max_kb'] ?? 10240)));
+
     if ($name === '') {
         $err = 'Company name is required.';
     } else {
@@ -38,7 +43,8 @@ if (is_post()) {
         $db->prepare(
             'UPDATE companies SET
                 name = ?, brand_color = ?, timezone = ?, default_department_id = ?,
-                alert_failed_sends_enabled = ?, alert_failed_sends_threshold = ?, alert_email = ?
+                alert_failed_sends_enabled = ?, alert_failed_sends_threshold = ?, alert_email = ?,
+                skip_stickers = ?, media_retention_days = ?, media_max_kb = ?
              WHERE id = ?'
         )->execute([
             $name,
@@ -46,6 +52,7 @@ if (is_post()) {
             $timezone   ?: APP_TIMEZONE,
             $defaultDeptId,
             $alertEnabled, $alertThreshold, $alertEmail ?: null,
+            $skipStickers, $mediaRetention, $mediaMaxKb,
             $companyId,
         ]);
         log_activity($companyId, (int)$current_user['id'], 'settings_updated', 'company', $companyId, 'Workspace settings updated');
@@ -130,6 +137,59 @@ layout_start($current_user, 'Workspace settings', 'settings', $company['brand_co
       See <a href="/docs/CRON.md" target="_blank">CRON setup</a> if you
       haven't installed the cron job yet.
     </div>
+
+    <h2>Storage &amp; media retention</h2>
+    <p class="muted small">
+      Photos, videos, PDFs and stickers customers send are downloaded to your
+      server so agents can view them without hitting WhatsApp every time. This
+      controls how long we keep them.
+    </p>
+
+    <?php
+      // Live-computed usage - reports just this workspace's inbound folder.
+      $inboundDir = __DIR__ . '/../uploads/' . $companyId . '/inbound';
+      $usedBytes  = 0;
+      $usedFiles  = 0;
+      if (is_dir($inboundDir)) {
+          try {
+              $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($inboundDir, FilesystemIterator::SKIP_DOTS));
+              foreach ($it as $f) {
+                  if ($f->isFile()) { $usedBytes += $f->getSize(); $usedFiles++; }
+              }
+          } catch (Throwable $e) { /* ignore */ }
+      }
+      $usedMb = $usedBytes / 1024 / 1024;
+    ?>
+
+    <div class="alert alert-info">
+      <strong>Current storage:</strong>
+      <?= number_format($usedFiles) ?> file<?= $usedFiles === 1 ? '' : 's' ?>
+      · <?= $usedMb < 1 ? number_format($usedBytes / 1024, 1) . ' KB' : number_format($usedMb, 2) . ' MB' ?>
+      of inbound customer media on disk right now.
+      <?php if ($usedFiles > 0): ?>
+        <br>Next cron sweep will delete anything older than the retention window below.
+      <?php endif; ?>
+    </div>
+
+    <label class="check-row">
+      <input type="checkbox" name="skip_stickers" value="1"
+             <?= (int)($company['skip_stickers'] ?? 1) === 1 ? 'checked' : '' ?>>
+      <span><strong>Don't save WhatsApp stickers</strong>
+        <small class="muted">— stickers are visible in the chat as "[sticker]" but the .webp file is dropped, not stored. Biggest single space saver.</small>
+      </span>
+    </label>
+
+    <label>Media retention (days)
+      <input type="number" name="media_retention_days" min="7" max="3650"
+             value="<?= (int)($company['media_retention_days'] ?? 90) ?>">
+      <small class="muted">Files older than this get swept nightly by <code>cron/cleanup_media.php</code>. Minimum 7 days. The chat view shows "media expired" once a file is cleaned.</small>
+    </label>
+
+    <label>Max inbound media size (KB)
+      <input type="number" name="media_max_kb" min="64" max="102400"
+             value="<?= (int)($company['media_max_kb'] ?? 10240) ?>">
+      <small class="muted">Any single incoming file larger than this is dropped without being saved (10240 = 10 MB, 51200 = 50 MB).</small>
+    </label>
 
     <button class="btn btn-primary" type="submit">Save settings</button>
   </form>

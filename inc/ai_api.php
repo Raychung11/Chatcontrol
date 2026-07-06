@@ -1179,3 +1179,152 @@ function inbound_automation_handle(array $company, int $conversationId): void
     }
 }
 
+/**
+ * Draft a Meta-compliant message template from a plain-English brief.
+ * Follows the same "review-before-save" pattern as ai_suggest_routing_rule -
+ * the admin always sees the suggestion in the edit form and clicks Save
+ * before it lands in the DB.
+ *
+ * @return array{ok:bool, suggestion?:array, error?:string, model?:string, usage?:array}
+ */
+function ai_suggest_template(array $company, string $description, ?string $language = null): array
+{
+    if (!ai_is_configured($company)) {
+        return ['ok' => false, 'error' => 'AI is not enabled for this workspace.'];
+    }
+    $apiKey = ai_api_key($company);
+    if ($apiKey === '') {
+        return ['ok' => false, 'error' => 'No Anthropic API key configured.'];
+    }
+    $description = trim($description);
+    if ($description === '') {
+        return ['ok' => false, 'error' => 'Please describe what the template is for.'];
+    }
+
+    $model = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
+    $brand = $company['name'] ?? 'this business';
+    $lang  = trim((string)($language ?? 'en'));
+    if ($lang === '') $lang = 'en';
+
+    $systemPrompt =
+        "You draft WhatsApp Business message templates for {$brand}. These templates get "
+      . "submitted to Meta for approval before use, so they must follow Meta's rules:\n\n"
+      . "- No promotional or misleading language.\n"
+      . "- No requests for sensitive info (passwords, card numbers, etc.).\n"
+      . "- Variables use {{1}}, {{2}}, {{3}} format - never named placeholders in the body.\n"
+      . "- Do NOT put a variable at the very start or very end of the body (Meta rejects those).\n"
+      . "- Keep the body under 1024 chars.\n"
+      . "- Category MUST be one of: MARKETING, UTILITY, AUTHENTICATION.\n"
+      . "  * MARKETING = promotions, offers, catalogs, review requests.\n"
+      . "  * UTILITY   = order/payment/booking/shipping updates, account notices, general info.\n"
+      . "  * AUTHENTICATION = OTP / login codes only.\n"
+      . "- template_name uses lowercase letters, numbers, underscores only. 3-120 chars.\n"
+      . "- Language code = 2-letter ISO (en, ms, zh, ta, etc.). Match the requested language.\n\n"
+      . "Return a single JSON object with this exact structure:\n"
+      . "{\n"
+      . "  \"template_name\": \"short_lowercase_name\",\n"
+      . "  \"category\": \"UTILITY\" | \"MARKETING\" | \"AUTHENTICATION\",\n"
+      . "  \"language\": \"en\" | \"ms\" | ...,\n"
+      . "  \"body_text\": \"Hi {{1}}, ... \",\n"
+      . "  \"variables_json\": \"{\\\"1\\\":\\\"customer_name\\\",\\\"2\\\":\\\"order_id\\\"}\",\n"
+      . "  \"explanation\": \"one sentence why this template fits\"\n"
+      . "}\n\n"
+      . "variables_json is the string form of a JSON object mapping variable number to a "
+      . "friendly slot name (customer_name, order_id, amount, date, etc.). If the body has no "
+      . "variables, return \"{}\".\n"
+      . "Output ONLY the JSON object. No markdown fences, no preamble.";
+
+    $userPrompt = "Language: " . $lang . "\n\nOperator's brief:\n" . $description;
+
+    $payload = [
+        'model'      => $model,
+        'max_tokens' => 700,
+        'system'     => [
+            ['type' => 'text', 'text' => $systemPrompt,
+             'cache_control' => ['type' => 'ephemeral']],
+        ],
+        'messages'   => [
+            ['role' => 'user', 'content' => $userPrompt],
+        ],
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_HTTPHEADER     => [
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: ' . AI_API_VERSION,
+            'content-type: application/json',
+        ],
+        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($resp === false) {
+        return ['ok' => false, 'error' => 'Network error: ' . $err];
+    }
+    $data = json_decode((string)$resp, true);
+    if ($code !== 200) {
+        return ['ok' => false, 'error' => (string)($data['error']['message'] ?? ('HTTP ' . $code))];
+    }
+
+    $text = '';
+    foreach (($data['content'] ?? []) as $block) {
+        if (($block['type'] ?? '') === 'text') $text .= $block['text'];
+    }
+    $text = trim($text);
+    if (preg_match('/^```(?:json)?\s*(.+?)\s*```$/s', $text, $m)) $text = trim($m[1]);
+    $parsed = json_decode($text, true);
+    if (!is_array($parsed)) {
+        $s = strpos($text, '{'); $eIdx = strrpos($text, '}');
+        if ($s !== false && $eIdx !== false && $eIdx > $s) {
+            $parsed = json_decode(substr($text, $s, $eIdx - $s + 1), true);
+        }
+    }
+    if (!is_array($parsed)) {
+        return ['ok' => false, 'error' => 'Model returned malformed JSON.', 'raw' => $text];
+    }
+
+    // Normalize + validate against portal / Meta rules.
+    $name = strtolower(preg_replace('/[^a-z0-9_]+/', '_',
+        trim((string)($parsed['template_name'] ?? ''))));
+    if (!preg_match('/^[a-z0-9_]{3,120}$/', $name)) {
+        $name = 'template_' . substr(bin2hex(random_bytes(3)), 0, 6);
+    }
+    $category = strtoupper(trim((string)($parsed['category'] ?? 'UTILITY')));
+    if (!in_array($category, ['MARKETING','UTILITY','AUTHENTICATION'], true)) $category = 'UTILITY';
+    $bodyText = trim((string)($parsed['body_text'] ?? ''));
+    if ($bodyText === '') {
+        return ['ok' => false, 'error' => 'Model did not produce a body.', 'raw' => $text];
+    }
+    if (mb_strlen($bodyText) > 1024) {
+        $bodyText = mb_substr($bodyText, 0, 1024);
+    }
+    $outLang = strtolower(trim((string)($parsed['language'] ?? $lang)));
+    if (!preg_match('/^[a-z]{2}(_[a-z]{2})?$/', $outLang)) $outLang = 'en';
+
+    $varsRaw = $parsed['variables_json'] ?? '{}';
+    if (is_array($varsRaw)) $varsRaw = json_encode($varsRaw, JSON_UNESCAPED_UNICODE);
+    // Sanity check that variables_json parses.
+    $varsCheck = json_decode((string)$varsRaw, true);
+    if (!is_array($varsCheck)) $varsRaw = '{}';
+
+    return [
+        'ok'         => true,
+        'suggestion' => [
+            'template_name'  => $name,
+            'category'       => $category,
+            'language'       => $outLang,
+            'body_text'      => $bodyText,
+            'variables_json' => (string)$varsRaw,
+            'explanation'    => trim((string)($parsed['explanation'] ?? '')),
+        ],
+        'model' => $model,
+        'usage' => $data['usage'] ?? null,
+    ];
+}

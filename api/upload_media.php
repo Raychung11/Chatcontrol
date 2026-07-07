@@ -75,7 +75,13 @@ $dest     = $baseDir . '/' . $filename;
 if (!move_uploaded_file($tmp, $dest)) {
     json_response(['ok' => false, 'error' => 'Could not save uploaded file.'], 500);
 }
-@chmod($dest, 0640);
+// 0644 (world-readable) not 0640 - the AiServe Chatbot Gateway fetches
+// these files via /api/media_public.php over HTTP, and on shared hosts
+// Apache sometimes runs under a different user than PHP-FPM, which made
+// the file unreadable via is_readable() and caused silent "photo sent
+// but customer only saw text" bugs. Access is still gated by HMAC
+// signature at the URL layer.
+@chmod($dest, 0644);
 
 // 2. Upload to provider (no-op for Evolution; Meta requires it)
 $result = provider_upload_media($channel, $dest, $mime);

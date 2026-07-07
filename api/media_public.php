@@ -18,11 +18,44 @@ $companyIdLegacy = (int)($_GET['c'] ?? 0);
 $rel = (string)($_GET['p'] ?? '');
 $sig = (string)($_GET['sig'] ?? '');
 
+// Debug logging: capture EVERY hit so operators can see whether the
+// gateway actually fetched a signed URL after they hit send. Solves the
+// "sent in portal but customer got no photo" mystery - if there's no log
+// entry the gateway never even tried; if there IS an entry with 200 the
+// gateway got the bytes and the miss is on their side; anything else
+// tells us exactly which check failed.
+function _media_log(string $status, int $companyId, int $channelId, string $rel, string $note = ''): void
+{
+    try {
+        aiserve_db()->prepare(
+            'INSERT INTO activity_logs
+                (company_id, user_id, action_type, entity_type, entity_id, description)
+             VALUES (?, NULL, ?, ?, ?, ?)'
+        )->execute([
+            $companyId ?: null,
+            'media_public_fetch',
+            'channel',
+            $channelId ?: null,
+            mb_substr(
+                $status . ' ip=' . ($_SERVER['REMOTE_ADDR'] ?? '?')
+                . ' ua=' . mb_substr((string)($_SERVER['HTTP_USER_AGENT'] ?? '?'), 0, 60)
+                . ' p=' . mb_substr($rel, 0, 200)
+                . ($note !== '' ? ' ' . $note : ''),
+                0, 500
+            ),
+        ]);
+    } catch (Throwable $e) {
+        error_log('[AiServe media_public_log] ' . $e->getMessage());
+    }
+}
+
 if (($channelId <= 0 && $companyIdLegacy <= 0) || $rel === '' || strlen($sig) !== 64) {
+    _media_log('400_bad_request', $companyIdLegacy, $channelId, $rel, 'missing params');
     http_response_code(400);
     exit('Bad request.');
 }
 if (str_contains($rel, '..') || str_contains($rel, '\\')) {
+    _media_log('400_bad_path', $companyIdLegacy, $channelId, $rel);
     http_response_code(400);
     exit('Bad path.');
 }
@@ -49,10 +82,13 @@ if ($channelId > 0) {
 }
 
 if ($secret === '' || $companyId <= 0) {
+    _media_log('403_no_secret', $companyId, $channelId, $rel);
     http_response_code(403);
     exit('Forbidden.');
 }
 if (!hash_equals($expected, $sig)) {
+    _media_log('403_bad_signature', $companyId, $channelId, $rel,
+        'expected=' . substr($expected, 0, 8) . ' got=' . substr($sig, 0, 8));
     http_response_code(403);
     exit('Bad signature.');
 }
@@ -60,6 +96,9 @@ if (!hash_equals($expected, $sig)) {
 $uploadsDir = realpath(__DIR__ . '/../uploads');
 $abs        = realpath($uploadsDir . '/' . $companyId . '/' . $rel);
 if (!$uploadsDir || !$abs || !str_starts_with($abs, $uploadsDir . '/' . $companyId . '/') || !is_readable($abs)) {
+    _media_log('404_not_found', $companyId, $channelId, $rel,
+        'exists=' . ($abs && file_exists($abs) ? '1' : '0')
+        . ' readable=' . ($abs && is_readable($abs) ? '1' : '0'));
     http_response_code(404);
     exit('Not found.');
 }
@@ -70,6 +109,8 @@ if (function_exists('finfo_open')) {
     $mime = (string)finfo_file($fi, $abs);
     finfo_close($fi);
 }
+
+_media_log('200_ok', $companyId, $channelId, $rel, 'mime=' . $mime . ' bytes=' . filesize($abs));
 
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . filesize($abs));

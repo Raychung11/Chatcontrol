@@ -680,4 +680,100 @@
       if (!hidden()) { pollChatOnce(); pollInboxOnce(); }
     });
   }
+
+  // ============================================================
+  // IMAGE LIGHTBOX (chat view)
+  // ============================================================
+  // Replaces the old <a target="_blank"> approach on chat images.
+  // On installed PWAs (iOS/Android Add-to-Home-Screen) the raw
+  // new-tab open had no close button and no back gesture, hanging
+  // the whole app until the user force-quit and relaunched.
+  //
+  // Now: tap the image -> full-screen overlay opens over the chat.
+  // Close cleanly via the X button, tapping the dark backdrop,
+  // Escape key, or the browser back button.
+  (function () {
+    let overlay = null;
+    let currentSrc = null;
+
+    function ensureOverlay() {
+      if (overlay) return overlay;
+      overlay = document.createElement('div');
+      overlay.className = 'img-lightbox';
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+      overlay.innerHTML =
+        '<button type="button" class="img-lightbox-close" aria-label="Close">✕</button>' +
+        '<a class="img-lightbox-download" aria-label="Download" download>⬇︎</a>' +
+        '<img class="img-lightbox-img" alt="">';
+      document.body.appendChild(overlay);
+
+      const imgEl = overlay.querySelector('.img-lightbox-img');
+      const closeBtn = overlay.querySelector('.img-lightbox-close');
+      const dlBtn = overlay.querySelector('.img-lightbox-download');
+
+      closeBtn.addEventListener('click', close);
+      // Tap on the backdrop (but NOT on the image itself) closes.
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close();
+      });
+      imgEl.addEventListener('click', (e) => e.stopPropagation());
+      dlBtn.addEventListener('click', (e) => e.stopPropagation());
+      return overlay;
+    }
+
+    function open(src) {
+      const ov = ensureOverlay();
+      const imgEl = ov.querySelector('.img-lightbox-img');
+      const dlBtn = ov.querySelector('.img-lightbox-download');
+      imgEl.src = src;
+      dlBtn.href = src;
+      currentSrc = src;
+      ov.classList.add('open');
+      document.body.classList.add('img-lightbox-locked');
+      // Push a history entry so the browser / PWA back gesture closes
+      // the lightbox instead of navigating away from the chat.
+      try { history.pushState({ lightbox: true }, ''); } catch (_) {}
+    }
+
+    function close() {
+      if (!overlay) return;
+      overlay.classList.remove('open');
+      document.body.classList.remove('img-lightbox-locked');
+      // If we pushed a history entry, pop it so the URL bar is clean.
+      if (history.state && history.state.lightbox) {
+        try { history.back(); } catch (_) {}
+      }
+      const imgEl = overlay.querySelector('.img-lightbox-img');
+      imgEl.src = '';
+      currentSrc = null;
+    }
+
+    // Delegate: any image button anywhere on the page opens the lightbox.
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.msg-image-btn');
+      if (!btn) return;
+      e.preventDefault();
+      const src = btn.getAttribute('data-media-src');
+      if (src) open(src);
+    });
+
+    // Escape closes.
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && overlay && overlay.classList.contains('open')) close();
+    });
+
+    // Browser back / PWA back gesture closes.
+    window.addEventListener('popstate', () => {
+      if (overlay && overlay.classList.contains('open')) {
+        // We're already back one step - just hide the overlay without a
+        // second history manipulation.
+        overlay.classList.remove('open');
+        document.body.classList.remove('img-lightbox-locked');
+        const imgEl = overlay.querySelector('.img-lightbox-img');
+        imgEl.src = '';
+        currentSrc = null;
+      }
+    });
+  })();
 })();

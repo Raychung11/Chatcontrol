@@ -42,12 +42,23 @@ function message_bubble_html(array $m): string
     $isImage = $mediaSrc && str_starts_with((string)($m['media_mime_type'] ?? ''), 'image/');
 
     if ($mediaSrc && $isImage) {
-        $html .= '<div class="msg-media"><a href="' . e($mediaSrc) . '" target="_blank">'
-               . '<img src="' . e($mediaSrc) . '" alt="image"></a></div>';
+        // Button (not <a target="_blank">) - the raw new-tab approach hangs
+        // installed PWAs on iOS/Android because standalone mode has no way
+        // to close the new tab. The JS lightbox opens over the chat and
+        // closes cleanly on tap-outside / X / Escape.
+        $html .= '<div class="msg-media"><button type="button" class="msg-image-btn" '
+               . 'data-media-src="' . e($mediaSrc) . '" '
+               . 'aria-label="Open image">'
+               . '<img src="' . e($mediaSrc) . '" alt="image" loading="lazy">'
+               . '</button></div>';
     } elseif ($mediaSrc) {
+        // Non-images (PDF, doc, video, audio) - use the standard download
+        // link. On PWAs iOS handles the download via the Files app, which
+        // does NOT keep the browser in a stuck standalone tab.
         $label = $m['media_filename'] ?: ucfirst((string)$m['message_type']);
-        $html .= '<div class="msg-media"><a href="' . e($mediaSrc) . '" target="_blank">Download '
-               . e($label) . '</a></div>';
+        $html .= '<div class="msg-media"><a href="' . e($mediaSrc) . '" '
+               . 'download="' . e((string)($m['media_filename'] ?? 'file')) . '">'
+               . '⬇︎ ' . e($label) . '</a></div>';
     }
 
     $html .= '<div class="msg-body">' . nl2br(e((string)$m['message_text'])) . '</div>';

@@ -726,6 +726,58 @@ textarea { resize: vertical; }
 .media-preview button { margin-left: auto; }
 .msg-media img { max-width: 280px; max-height: 220px; border-radius: 6px; display: block; }
 .msg-media a { color: var(--c-primary-d); font-size: 12.5px; }
+.msg-image-btn {
+  background: none; border: none; padding: 0; margin: 0; cursor: zoom-in;
+  display: block;
+}
+.msg-image-btn img { max-width: 280px; max-height: 220px; border-radius: 6px; display: block; }
+.msg-image-btn:focus-visible { outline: 2px solid var(--color-brand, #25D366); outline-offset: 2px; border-radius: 6px; }
+
+/* ============ Image lightbox (chat view) =============== */
+.img-lightbox {
+  position: fixed; inset: 0;
+  background: rgba(10, 15, 22, 0.92);
+  display: none; align-items: center; justify-content: center;
+  z-index: 9999;
+  padding: 24px;
+  /* Safe-area padding so the close button on iPhone notch devices does
+     not sit under the status-bar cutout in PWA standalone mode. */
+  padding-top: max(24px, env(safe-area-inset-top, 24px));
+  padding-bottom: max(24px, env(safe-area-inset-bottom, 24px));
+}
+.img-lightbox.open { display: flex; }
+.img-lightbox-img {
+  max-width: 100%; max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+.img-lightbox-close,
+.img-lightbox-download {
+  position: fixed; top: max(16px, env(safe-area-inset-top, 16px));
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: none;
+  font-size: 20px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  text-decoration: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: background 0.15s ease;
+}
+.img-lightbox-close   { right: 16px; }
+.img-lightbox-download { right: 68px; }
+.img-lightbox-close:hover,
+.img-lightbox-download:hover { background: rgba(255, 255, 255, 0.28); color: #fff; }
+.img-lightbox-close:active,
+.img-lightbox-download:active { background: rgba(255, 255, 255, 0.35); }
+
+/* Prevent body scroll behind the overlay while it is open */
+body.img-lightbox-locked { overflow: hidden; touch-action: none; }
 
 /* -------- Chat side panel -------- */
 .chat-side {

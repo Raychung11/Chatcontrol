@@ -179,20 +179,70 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
       <?php endif; ?>
     </label>
 
-    <?php if ($row): ?>
-    <div class="alert alert-info">
-      <strong>Webhook URLs for this channel:</strong><br>
-      <strong>Cloud API (Meta):</strong> <code><?= e($cloudHook) ?></code><br>
-      <strong>Evolution / AiServe Chatbot Gateway:</strong>
-        <code><?= e($webhookUrl) ?></code><br>
-      <small class="muted">
-        Paste ONE URL into your partner dashboard — do <strong>not</strong>
-        append <code>?type=incoming</code> or <code>?type=outgoing</code>.
-        Our webhook auto-detects whether the payload is a customer
-        message or an AI-reply echo from the JSON shape itself. Older
-        <code>?type=</code> URLs still work for back-compat.
+    <?php if ($row):
+        // Only show the URL for THIS channel's provider. Showing both
+        // (Cloud API and Evolution) caused a real bug in prod where an
+        // operator copy-pasted the whatsapp.php URL into an aiserve_chatbot
+        // partner dashboard and inbound was silently dropped.
+        $channelProvider = (string)($row['provider'] ?? 'cloud_api');
+        $providerLabel = match ($channelProvider) {
+            'cloud_api'       => 'Meta WhatsApp Cloud API',
+            'evolution'       => 'Evolution API',
+            'aiserve_chatbot' => 'AiServe Chatbot Gateway',
+            default           => 'Provider',
+        };
+        $chosenUrl = $channelProvider === 'cloud_api' ? $cloudHook : $webhookUrl;
+    ?>
+    <div class="alert alert-info webhook-copy-block">
+      <strong>Webhook URL for this channel</strong>
+      <span class="muted small">— paste this into your <?= e($providerLabel) ?> dashboard for the number this channel handles.</span>
+      <div class="webhook-url-box">
+        <input type="text" readonly value="<?= e($chosenUrl) ?>" id="webhook-url-input"
+               onclick="this.select()"
+               style="flex:1; min-width:0; font-family: var(--font-mono, monospace); font-size:12.5px; padding:8px 10px; border:1px solid var(--color-border,#e4e9ee); border-radius:6px; background:#fff;">
+        <button type="button" class="btn" id="webhook-copy-btn" style="flex-shrink:0;">
+          <span id="webhook-copy-label">📋 Copy</span>
+        </button>
+      </div>
+      <small class="muted" style="display:block; margin-top:6px;">
+        Do <strong>not</strong> append <code>?type=incoming</code> or
+        <code>?type=outgoing</code> — our webhook auto-detects the payload
+        shape. Each channel has its own URL with a unique token; if you
+        have more than one WhatsApp number, each one needs its own URL
+        pasted into the partner dashboard for that number.
       </small>
     </div>
+    <style>
+      .webhook-url-box { display: flex; gap: 8px; margin-top: 8px; align-items: stretch; }
+      #webhook-copy-btn.copied { background: var(--color-brand, #25D366); color: #fff; border-color: var(--color-brand, #25D366); }
+    </style>
+    <script>
+      (function () {
+        const btn   = document.getElementById('webhook-copy-btn');
+        const label = document.getElementById('webhook-copy-label');
+        const input = document.getElementById('webhook-url-input');
+        if (!btn || !input) return;
+        btn.addEventListener('click', async () => {
+          const url = input.value;
+          try {
+            // Preferred: async Clipboard API (all modern browsers over HTTPS).
+            await navigator.clipboard.writeText(url);
+          } catch (_) {
+            // Fallback for older browsers / non-HTTPS: select + execCommand.
+            input.focus(); input.select();
+            try { document.execCommand('copy'); }
+            catch (_) { alert('Press Ctrl+C / Cmd+C to copy.'); return; }
+          }
+          const original = label.textContent;
+          label.textContent = '✓ Copied';
+          btn.classList.add('copied');
+          setTimeout(() => {
+            label.textContent = original;
+            btn.classList.remove('copied');
+          }, 1600);
+        });
+      })();
+    </script>
     <?php endif; ?>
 
     <div>

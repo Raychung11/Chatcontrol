@@ -40,8 +40,16 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
             $where[]  = 'c.assigned_user_id = ?';
             $params[] = (int)$user['id'];
             break;
-        case 'awaiting':
+        case 'awaiting':    // legacy filter name - kept for URL back-compat
+        case 'unread':      // new WhatsApp-style label
             $where[] = $awaitingExpr;
+            break;
+        case 'replied':
+            // Everything NOT waiting for us and NOT closed - i.e. our team
+            // (or the AI bot) has already responded to the customer's most
+            // recent message. Mirrors WhatsApp's tab-style "you're caught up".
+            $where[] = 'NOT ' . $awaitingExpr;
+            $where[] = 'c.status <> "closed"';
             break;
         case 'open':
             $where[] = 'c.status = "open"';
@@ -84,6 +92,13 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
         $params[] = $tagFilter;
     }
 
+    // Pure time-based sort - matches WhatsApp's native chronological order.
+    // Closed conversations still sink to the bottom because they are done,
+    // but within the active bucket every row goes newest-message-first
+    // regardless of who sent it last. Previously we floated "awaiting reply"
+    // rows to the top which surprised users switching from WhatsApp -
+    // the amber pill / dot still marks them so urgency stays visible without
+    // reshuffling the list.
     $sql = 'SELECT c.*, ct.display_name, ct.profile_name, ct.phone AS contact_phone, ct.wa_id,
                    u.name AS agent_name, d.name AS department_name,
                    ch.name AS channel_name, ch.display_phone AS channel_phone,
@@ -95,7 +110,6 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
             LEFT  JOIN channels  ch ON ch.id = c.channel_id
             WHERE ' . implode(' AND ', $where) . '
             ORDER BY (c.status = "closed") ASC,
-                     ' . $awaitingExpr . ' DESC,
                      COALESCE(c.last_message_at, c.created_at) DESC
             LIMIT 200';
     $stmt = $db->prepare($sql);
@@ -129,7 +143,10 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
            SUM(status = "escalated")                            AS s_escalated,
            SUM(last_customer_message_at IS NOT NULL
                AND (last_message_at IS NULL OR last_message_at <= last_customer_message_at)
-               AND status <> "closed")                          AS awaiting
+               AND status <> "closed")                          AS awaiting,
+           SUM(NOT (last_customer_message_at IS NOT NULL
+                    AND (last_message_at IS NULL OR last_message_at <= last_customer_message_at))
+               AND status <> "closed")                          AS replied
          FROM conversations WHERE company_id = ?'
     );
     $cstmt->execute([(int)$user['id'], $companyId]);

@@ -17,10 +17,10 @@ require_once __DIR__ . '/../inc/auth.php';
 require_once __DIR__ . '/../inc/aiserve_chatbot_api.php';
 require_once __DIR__ . '/../inc/channels.php';
 
+// super_admin (workspace owner) may test their OWN channels. Platform-
+// admin restriction was overly strict - it stopped customers from
+// self-verifying a new channel and forced them to open a support ticket.
 $user = require_role(['super_admin']);
-if (!is_platform_admin()) {
-    json_response(['ok' => false, 'error' => 'Forbidden.'], 403);
-}
 
 if (!is_post()) {
     json_response(['ok' => false, 'error' => 'POST required.'], 405);

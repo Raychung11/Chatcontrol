@@ -183,17 +183,14 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
     <div class="alert alert-info">
       <strong>Webhook URLs for this channel:</strong><br>
       <strong>Cloud API (Meta):</strong> <code><?= e($cloudHook) ?></code><br>
-      <strong>Evolution / customer messages (incoming):</strong>
-        <code><?= e($webhookUrl) ?><?= str_contains($webhookUrl, '?') ? '&' : '?' ?>type=incoming</code><br>
-      <strong>AiServe Chatbot Gateway — AI reply echo (outgoing):</strong>
-        <code><?= e($webhookUrl) ?><?= str_contains($webhookUrl, '?') ? '&' : '?' ?>type=outgoing</code><br>
+      <strong>Evolution / AiServe Chatbot Gateway:</strong>
+        <code><?= e($webhookUrl) ?></code><br>
       <small class="muted">
-        Give both URLs to your partner. The <code>?type=</code> query
-        parameter is required — <em>incoming</em> receives customer
-        messages, <em>outgoing</em> receives echoes of AI-generated
-        replies the gateway sent on your behalf so agents see them in
-        the inbox. If <code>?type=</code> is omitted, the endpoint
-        defaults to <em>incoming</em> for backward compatibility.
+        Paste ONE URL into your partner dashboard — do <strong>not</strong>
+        append <code>?type=incoming</code> or <code>?type=outgoing</code>.
+        Our webhook auto-detects whether the payload is a customer
+        message or an AI-reply echo from the JSON shape itself. Older
+        <code>?type=</code> URLs still work for back-compat.
       </small>
     </div>
     <?php endif; ?>

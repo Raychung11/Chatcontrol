@@ -362,6 +362,70 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
   <?php endif; ?>
 </div>
 
+<!-- ============================================================
+     MEDIA FETCH LOG - diagnoses "photo sent but customer got only
+     text" cases. Every hit to /api/media_public.php by the partner
+     gateway lands here with the outcome (200 / 403 / 404 etc).
+     ============================================================ -->
+<?php
+  $mediaFetches = $db->prepare(
+    'SELECT id, description, created_at
+     FROM activity_logs
+     WHERE company_id = ? AND action_type = "media_public_fetch"
+     ORDER BY id DESC
+     LIMIT 20'
+  );
+  $mediaFetches->execute([$companyId]);
+  $mediaFetches = $mediaFetches->fetchAll();
+
+  function media_fetch_row_status(string $desc): array {
+      // Description starts with the outcome tag we log from
+      // /api/media_public.php - e.g. "200_ok ip=..." or "404_not_found ...".
+      if (str_starts_with($desc, '200_ok'))        return ['200 OK',        'badge-open'];
+      if (str_starts_with($desc, '404_not_found')) return ['404 Not Found', 'badge-failed'];
+      if (str_starts_with($desc, '403_bad_signature')) return ['403 Bad sig', 'badge-failed'];
+      if (str_starts_with($desc, '403_no_secret')) return ['403 No secret', 'badge-failed'];
+      if (str_starts_with($desc, '400_bad_request')) return ['400 Bad req',  'badge-failed'];
+      if (str_starts_with($desc, '400_bad_path'))    return ['400 Bad path', 'badge-failed'];
+      return [substr($desc, 0, 20), 'badge-pending'];
+  }
+?>
+<div class="card">
+  <h2>Media fetches — outbound photo/PDF delivery</h2>
+  <p class="muted small">
+    Every time you send a photo, PDF, or other media, the partner gateway
+    fetches the file from us via a signed URL. If the customer got only
+    the caption text but not the photo, the row here tells you exactly
+    what went wrong.
+  </p>
+  <ul class="muted small" style="margin: 6px 0 12px 20px;">
+    <li><strong>200 OK</strong> — gateway got the bytes. Miss is downstream (WhatsApp side).</li>
+    <li><strong>404 Not Found</strong> — file gone from disk or permissions wrong. Run <code>chmod 644</code> on outbound uploads.</li>
+    <li><strong>403 Bad sig</strong> — channel webhook_token was rotated after the URL was generated. Retry the send.</li>
+    <li><strong>No entries at all</strong> for a send you know happened — partner gateway never even tried to fetch. Their problem.</li>
+  </ul>
+
+  <?php if (!$mediaFetches): ?>
+    <p class="muted small"><em>No media fetch attempts recorded yet. If you've been sending photos and this is empty, the partner gateway is dropping our media URL silently — contact them.</em></p>
+  <?php else: ?>
+    <table class="data-table">
+      <thead><tr><th>When</th><th>Result</th><th>Details</th></tr></thead>
+      <tbody>
+        <?php foreach ($mediaFetches as $mf):
+          [$statusLabel, $statusClass] = media_fetch_row_status((string)$mf['description']);
+          $details = preg_replace('/^\S+\s+/', '', (string)$mf['description']); // strip the status token
+        ?>
+          <tr>
+            <td><?= e(fmt_dt($mf['created_at'])) ?></td>
+            <td><span class="badge <?= e($statusClass) ?>"><?= e($statusLabel) ?></span></td>
+            <td class="muted small" style="word-break:break-all;"><?= e($details) ?></td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+  <?php endif; ?>
+</div>
+
 <script>
 (function () {
   const csrf = document.querySelector('meta[name="csrf-token"]').getAttribute('content');

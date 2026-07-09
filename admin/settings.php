@@ -180,10 +180,36 @@ layout_start($current_user, 'Workspace settings', 'settings', $company['brand_co
     </label>
 
     <label>Media retention (days)
-      <input type="number" name="media_retention_days" min="7" max="3650"
+      <input type="number" name="media_retention_days" id="f-media-retention"
+             min="7" max="3650"
+             data-current="<?= (int)($company['media_retention_days'] ?? 90) ?>"
              value="<?= (int)($company['media_retention_days'] ?? 90) ?>">
-      <small class="muted">Files older than this get swept nightly by <code>cron/cleanup_media.php</code>. Minimum 7 days. The chat view shows "media expired" once a file is cleaned.</small>
+      <small class="muted">Files older than this get swept nightly by <code>cron/cleanup_media.php</code>. Minimum 7 days. The chat view shows "media expired" once a file is cleaned. <strong>Decreasing this value permanently deletes older files on the next nightly sweep.</strong></small>
     </label>
+    <script>
+      // Warn the operator if they decrease the retention window - the
+      // orphan sweep will PERMANENTLY delete anything older than the new
+      // value on the next cron run. Nothing else in the form is
+      // destructive so we only guard this input.
+      (function () {
+        const inp = document.getElementById('f-media-retention');
+        if (!inp) return;
+        const form = inp.closest('form');
+        if (!form) return;
+        form.addEventListener('submit', (e) => {
+          const now  = parseInt(inp.getAttribute('data-current'), 10) || 0;
+          const next = parseInt(inp.value, 10) || 0;
+          if (next < now) {
+            const ok = confirm(
+              'Media retention decreased from ' + now + ' to ' + next + ' days.\n\n' +
+              'Any inbound media older than ' + next + ' days will be PERMANENTLY deleted on the next nightly cleanup run.\n\n' +
+              'Continue?'
+            );
+            if (!ok) { e.preventDefault(); return; }
+          }
+        });
+      })();
+    </script>
 
     <label>Max inbound media size (KB)
       <input type="number" name="media_max_kb" min="64" max="102400"

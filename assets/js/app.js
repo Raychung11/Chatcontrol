@@ -726,14 +726,18 @@
       const ov = ensureOverlay();
       const imgEl = ov.querySelector('.img-lightbox-img');
       const dlBtn = ov.querySelector('.img-lightbox-download');
+      // Only push a new history entry if the lightbox wasn't already
+      // open - rapid taps used to stack N entries and required N back
+      // presses to actually leave the chat page.
+      const wasOpen = ov.classList.contains('open');
       imgEl.src = src;
       dlBtn.href = src;
       currentSrc = src;
       ov.classList.add('open');
       document.body.classList.add('img-lightbox-locked');
-      // Push a history entry so the browser / PWA back gesture closes
-      // the lightbox instead of navigating away from the chat.
-      try { history.pushState({ lightbox: true }, ''); } catch (_) {}
+      if (!wasOpen) {
+        try { history.pushState({ lightbox: true }, ''); } catch (_) {}
+      }
     }
 
     function close() {

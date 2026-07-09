@@ -46,7 +46,7 @@ if (is_post() && ($_POST['action'] ?? '') === 'seed') {
          "Hi {{1}}, we've received your order #{{2}}. Total: {{3}}. We'll notify you when it's ready — thanks for shopping with us!",
          '{"1":"customer_name","2":"order_id","3":"total_amount"}'],
         ['delivery_ready', 'UTILITY', 'en',
-         "Good news {{1}}! Your order #{{2}} is on the way. Expected delivery: {{3}}. Track here: {{4}}",
+         "Good news {{1}}! Your order #{{2}} is on the way. Expected delivery: {{3}}. Track it here: {{4}} — thanks for your patience!",
          '{"1":"customer_name","2":"order_id","3":"eta","4":"tracking_url"}'],
         ['booking_confirmed', 'UTILITY', 'en',
          "Hi {{1}}, your booking on {{2}} at {{3}} is confirmed ✅ Reply here if you need to change anything.",
@@ -55,7 +55,7 @@ if (is_post() && ($_POST['action'] ?? '') === 'seed') {
          "Hi {{1}}, a friendly reminder that invoice {{2}} for {{3}} is due on {{4}}. Reply here for payment options.",
          '{"1":"customer_name","2":"invoice_id","3":"amount","4":"due_date"}'],
         ['thanks_review', 'MARKETING', 'en',
-         "Thanks for choosing {{1}}, {{2}}! If you had a great experience, a quick Google review helps us a lot ⭐ {{3}}",
+         "Thanks for choosing {{1}}, {{2}}! If you had a great experience, a quick Google review helps us a lot ⭐ Leave one here: {{3}} — we appreciate it!",
          '{"1":"business_name","2":"customer_name","3":"review_url"}'],
     ];
 

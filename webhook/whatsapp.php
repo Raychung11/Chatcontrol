@@ -352,10 +352,16 @@ function handle_incoming_message(array $company, array $channel, array $value, a
                         . filesize($dl['local_path']) . ' bytes > ' . ($maxKb * 1024) . ') for msg ' . $msgRowId);
                     @unlink($dl['local_path']);
                 } else {
+                    // Normalize the path we store in the DB so the cleanup
+                    // cron's orphan sweep (comparing realpath'd
+                    // DirectoryIterator paths) matches this row and does
+                    // not delete a live file. Matches the fix in
+                    // webhook/evolution.php.
+                    $storedPath = realpath($dl['local_path']) ?: $dl['local_path'];
                     $u = $db->prepare(
                         'UPDATE messages SET media_local_path = ?, media_mime_type = COALESCE(?, media_mime_type) WHERE id = ?'
                     );
-                    $u->execute([$dl['local_path'], $dl['mime_type'] ?? null, $msgRowId]);
+                    $u->execute([$storedPath, $dl['mime_type'] ?? null, $msgRowId]);
                 }
             } else {
                 error_log('[AiServe webhook] media download failed: ' . ($dl['error'] ?? 'unknown'));

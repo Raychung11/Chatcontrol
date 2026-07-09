@@ -399,14 +399,15 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
     what went wrong.
   </p>
   <ul class="muted small" style="margin: 6px 0 12px 20px;">
-    <li><strong>200 OK</strong> — gateway got the bytes. Miss is downstream (WhatsApp side).</li>
-    <li><strong>404 Not Found</strong> — file gone from disk or permissions wrong. Run <code>chmod 644</code> on outbound uploads.</li>
-    <li><strong>403 Bad sig</strong> — channel webhook_token was rotated after the URL was generated. Retry the send.</li>
-    <li><strong>No entries at all</strong> for a send you know happened — partner gateway never even tried to fetch. Their problem.</li>
+    <li><strong>200 OK row present</strong> at the send timestamp — gateway got the bytes. Miss is downstream (WhatsApp side).</li>
+    <li><strong>No 200 OK row</strong> for a send you know happened — the gateway either couldn't fetch our URL (check server error log for the specific reason — 404 permission, 403 signature, etc.) or never tried at all (contact partner).</li>
   </ul>
+  <p class="muted small" style="margin: 0 0 12px 0;">
+    Only successful fetches are shown below. Failed hits go to the server error log (Hostinger → hPanel → Error Log) — deliberate, so a bot spamming bad signatures can't bloat this table.
+  </p>
 
   <?php if (!$mediaFetches): ?>
-    <p class="muted small"><em>No media fetch attempts recorded yet. If you've been sending photos and this is empty, the partner gateway is dropping our media URL silently — contact them.</em></p>
+    <p class="muted small"><em>No successful media fetches recorded yet. If you've been sending photos and this is empty, either the partner gateway isn't fetching our URLs OR every attempt is failing — check Hostinger's Error Log for <code>[AiServe media_public]</code> lines.</em></p>
   <?php else: ?>
     <table class="data-table">
       <thead><tr><th>When</th><th>Result</th><th>Details</th></tr></thead>

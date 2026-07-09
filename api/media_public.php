@@ -18,14 +18,26 @@ $companyIdLegacy = (int)($_GET['c'] ?? 0);
 $rel = (string)($_GET['p'] ?? '');
 $sig = (string)($_GET['sig'] ?? '');
 
-// Debug logging: capture EVERY hit so operators can see whether the
-// gateway actually fetched a signed URL after they hit send. Solves the
-// "sent in portal but customer got no photo" mystery - if there's no log
-// entry the gateway never even tried; if there IS an entry with 200 the
-// gateway got the bytes and the miss is on their side; anything else
-// tells us exactly which check failed.
+// Log successful fetches to activity_logs (visible in the admin panel).
+// Log FAILURES only to error_log - the endpoint is unauthenticated by
+// design, so writing every 400/403/404 to activity_logs is a trivial DoS
+// vector (a bot spamming bad URLs would balloon the table).
 function _media_log(string $status, int $companyId, int $channelId, string $rel, string $note = ''): void
 {
+    $line = $status . ' ip=' . ($_SERVER['REMOTE_ADDR'] ?? '?')
+          . ' ua=' . mb_substr((string)($_SERVER['HTTP_USER_AGENT'] ?? '?'), 0, 60)
+          . ' p=' . mb_substr($rel, 0, 200)
+          . ($note !== '' ? ' ' . $note : '');
+
+    if ($status !== '200_ok') {
+        // Every failure branch stays out of the DB. error_log still gives
+        // operators a signal (Hostinger surfaces it in hPanel), and legit
+        // 200 hits still land in activity_logs so the "did the gateway
+        // fetch my photo?" question is still answerable from the UI.
+        error_log('[AiServe media_public] ' . $line);
+        return;
+    }
+
     try {
         aiserve_db()->prepare(
             'INSERT INTO activity_logs
@@ -36,13 +48,7 @@ function _media_log(string $status, int $companyId, int $channelId, string $rel,
             'media_public_fetch',
             'channel',
             $channelId ?: null,
-            mb_substr(
-                $status . ' ip=' . ($_SERVER['REMOTE_ADDR'] ?? '?')
-                . ' ua=' . mb_substr((string)($_SERVER['HTTP_USER_AGENT'] ?? '?'), 0, 60)
-                . ' p=' . mb_substr($rel, 0, 200)
-                . ($note !== '' ? ' ' . $note : ''),
-                0, 500
-            ),
+            mb_substr($line, 0, 500),
         ]);
     } catch (Throwable $e) {
         error_log('[AiServe media_public_log] ' . $e->getMessage());

@@ -27,6 +27,24 @@ if (!is_post()) {
 }
 csrf_check();
 
+// Rate limit: max 10 test sends per user per hour. Test messages are a
+// diagnostic tool, not a bulk sender - without this cap a compromised or
+// misbehaving super_admin could script arbitrary numbers and burn through
+// the workspace's partner-gateway spend or trigger anti-spam blocks
+// downstream.
+$db = aiserve_db();
+$rate = $db->prepare(
+    'SELECT COUNT(*) FROM activity_logs
+     WHERE company_id = ? AND user_id = ?
+       AND action_type = "chatbot_test_send"
+       AND created_at > NOW() - INTERVAL 1 HOUR'
+);
+$rate->execute([(int)$user['company_id'], (int)$user['id']]);
+if ((int)$rate->fetchColumn() >= 10) {
+    json_response(['ok' => false,
+        'error' => 'Test-send limit reached (10 per hour). Wait a bit or use a real conversation to verify.'], 429);
+}
+
 $to = trim((string)($_POST['to'] ?? ''));
 $to = preg_replace('/[^0-9]/', '', $to) ?: '';
 

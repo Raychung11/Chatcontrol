@@ -12,11 +12,22 @@ if (is_impersonating()) {
 
 $db = aiserve_db();
 
+// Provider comes from the DEFAULT CHANNEL, not the companies.provider
+// column (which is now dead weight since the multi-channel refactor
+// moved provider config to channels). Reading c.provider showed stale
+// data on this list whenever the operator changed a channel's provider
+// without touching the workspace's Settings page - the workspaces list
+// stayed at whatever companies.provider was seeded to on register.
+// Fallback if no channel exists yet: show "(no channel)".
 $stmt = $db->query(
-    'SELECT c.id, c.name, c.slug, c.plan, c.provider, c.created_at,
+    'SELECT c.id, c.name, c.slug, c.plan, c.created_at,
+            (SELECT provider FROM channels
+              WHERE company_id = c.id AND is_default = 1 LIMIT 1)
+              AS provider,
             (SELECT COUNT(*) FROM users WHERE company_id = c.id AND status = "active") AS active_users,
             (SELECT COUNT(*) FROM conversations WHERE company_id = c.id) AS conversations,
-            (SELECT MAX(created_at) FROM messages WHERE company_id = c.id) AS last_message_at
+            (SELECT MAX(created_at) FROM messages WHERE company_id = c.id) AS last_message_at,
+            (SELECT COUNT(*) FROM channels WHERE company_id = c.id) AS channel_count
      FROM companies c
      WHERE c.status = "active"
      ORDER BY c.created_at DESC'
@@ -56,7 +67,16 @@ layout_start($current_user, 'Workspaces', 'workspaces');
           <td><strong><?= e((string)$r['name']) ?></strong></td>
           <td><code><?= e((string)$r['slug']) ?></code></td>
           <td><?= e(ucfirst((string)$r['plan'])) ?></td>
-          <td><?= e((string)$r['provider']) ?></td>
+          <td>
+            <?php if (!empty($r['provider'])): ?>
+              <?= e((string)$r['provider']) ?>
+              <?php if ((int)$r['channel_count'] > 1): ?>
+                <small class="muted">· +<?= (int)$r['channel_count'] - 1 ?> more</small>
+              <?php endif; ?>
+            <?php else: ?>
+              <span class="muted small">(no channel)</span>
+            <?php endif; ?>
+          </td>
           <td><?= (int)$r['active_users'] ?> / <?= (int)plan_seat_limit((string)$r['plan']) ?></td>
           <td><?= (int)$r['conversations'] ?></td>
           <td class="muted small"><?= e(fmt_dt($r['last_message_at']) ?: '—') ?></td>

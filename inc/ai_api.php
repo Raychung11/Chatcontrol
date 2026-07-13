@@ -1638,3 +1638,116 @@ function ai_suggest_auto_reply(array $company, string $description, string $lang
         'usage' => $data['usage'] ?? null,
     ];
 }
+
+/**
+ * Distill an array of historical customer-question / agent-reply pairs
+ * into a structured markdown knowledge document. The result is saved
+ * as an auto-generated knowledge_base article by cron/learn_from_history
+ * and read at draft-time by ai_suggest_reply via the KB.
+ *
+ * @param array<int, array{q:string, a:string}> $qaPairs
+ * @return array{ok:bool, content?:string, error?:string, model?:string, usage?:array}
+ */
+function ai_distill_conversation_history(array $company, array $qaPairs): array
+{
+    if (!ai_is_configured($company)) {
+        return ['ok' => false, 'error' => 'AI is not enabled for this workspace.'];
+    }
+    $apiKey = ai_api_key($company);
+    if ($apiKey === '') {
+        return ['ok' => false, 'error' => 'No Anthropic API key configured.'];
+    }
+    if (!$qaPairs) {
+        return ['ok' => false, 'error' => 'No historical Q&A pairs to distill.'];
+    }
+
+    $model = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
+    $brand = $company['name'] ?? 'this business';
+
+    // Cap the input so a busy workspace doesn't blow the context window.
+    // ~180K chars stays comfortably under Haiku's context.
+    $combined = '';
+    $used = 0;
+    foreach ($qaPairs as $i => $qa) {
+        $q = mb_substr(trim((string)($qa['q'] ?? '')), 0, 400);
+        $a = mb_substr(trim((string)($qa['a'] ?? '')), 0, 400);
+        if ($q === '' || $a === '') continue;
+        $line = "Q" . ($i + 1) . ": " . $q . "\nA" . ($i + 1) . ": " . $a . "\n\n";
+        if ($used + mb_strlen($line) > 180000) break;
+        $combined .= $line;
+        $used += mb_strlen($line);
+    }
+    if ($combined === '') {
+        return ['ok' => false, 'error' => 'All Q&A pairs were empty after trimming.'];
+    }
+
+    $systemPrompt =
+        "You are compiling a knowledge document for {$brand}'s WhatsApp "
+      . "customer-service team. Below are real (customer question, team reply) "
+      . "pairs from the last few weeks.\n\n"
+      . "Produce a well-organized markdown document that captures HOW THIS TEAM "
+      . "ACTUALLY ANSWERS customers. This will be given to Claude as a knowledge "
+      . "source when it drafts future replies, so it must be:\n\n"
+      . "- Grouped by topic (Pricing, Bookings, Delivery, Hours, Refunds, etc.)\n"
+      . "- Written in the team's own voice (match tone, formality, common phrases)\n"
+      . "- Concrete: include specific answers, numbers, names, URLs the team used\n"
+      . "- Deduplicated: don't repeat variants of the same question\n"
+      . "- Honest: if the team often says 'I'll check and get back to you' for a "
+      . "  topic, note it as 'defer to human' - don't paper over uncertainty\n\n"
+      . "Format:\n"
+      . "# " . $brand . " — team response guide\n"
+      . "_(auto-generated from recent conversations)_\n\n"
+      . "## Topic\n"
+      . "- **Q**: <the customer question shape>\n"
+      . "  **A**: <how the team answers>\n\n"
+      . "Keep the whole document under 4000 words. Skip topics that appeared "
+      . "fewer than 2 times. Output ONLY the markdown - no preamble.";
+
+    $payload = [
+        'model'      => $model,
+        'max_tokens' => 6000,
+        'system'     => [
+            ['type' => 'text', 'text' => $systemPrompt,
+             'cache_control' => ['type' => 'ephemeral']],
+        ],
+        'messages'   => [
+            ['role' => 'user', 'content' => "Real conversation history:\n\n" . $combined],
+        ],
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_TIMEOUT        => 120,
+        CURLOPT_HTTPHEADER     => [
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: ' . AI_API_VERSION,
+            'content-type: application/json',
+        ],
+        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($resp === false) return ['ok' => false, 'error' => 'Network error: ' . $err];
+    $data = json_decode((string)$resp, true);
+    if ($code !== 200) {
+        return ['ok' => false, 'error' => (string)($data['error']['message'] ?? ('HTTP ' . $code))];
+    }
+    $content = '';
+    foreach (($data['content'] ?? []) as $block) {
+        if (($block['type'] ?? '') === 'text') $content .= $block['text'];
+    }
+    $content = trim($content);
+    if ($content === '') return ['ok' => false, 'error' => 'Model returned empty document.'];
+
+    return [
+        'ok'      => true,
+        'content' => $content,
+        'model'   => $model,
+        'usage'   => $data['usage'] ?? null,
+    ];
+}

@@ -490,7 +490,14 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
 
     // ---- Contact ----
     $companyId   = (int)$company['id'];
-    $profileName = $msg['pushName'] ?? null;
+    // pushName is the SENDER's WhatsApp profile name. For fromMe=true
+    // events (business replied to the customer via WhatsApp Web / mobile /
+    // AI echo), pushName is OUR OWN business name - NOT the customer's.
+    // Applying it to the customer's contact row leaked business names
+    // like "One Lap Studio" / "EE Life Design" into the inbox as if they
+    // were customers. Only trust pushName when it actually came from the
+    // customer, i.e. fromMe=false.
+    $profileName = $fromMe ? null : ($msg['pushName'] ?? null);
 
     $stmt = $db->prepare('SELECT * FROM contacts WHERE company_id = ? AND wa_id = ? LIMIT 1');
     $stmt->execute([$companyId, $waId]);

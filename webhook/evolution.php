@@ -37,18 +37,37 @@ if (!$company) {
     exit('Unknown company.');
 }
 
-// Auth - either matching apikey header or matching ?token query
-$incomingApiKey = $_SERVER['HTTP_APIKEY'] ?? $_SERVER['HTTP_X_API_KEY'] ?? '';
-$incomingToken  = $_GET['token']           ?? '';
-$expectedToken  = (string)($company['webhook_verify_token'] ?? '');
-$expectedKey    = (string)($company['evolution_api_key']    ?? '');
+// Auth
+//
+// Case 1 (modern, multi-channel): the request URL contained ?ch=<TOKEN>
+// which resolve_channel_for_webhook() already matched against
+// channels.webhook_token via a SELECT ... WHERE webhook_token = ?. That
+// token is 48 random hex chars (192 bits) - cryptographic auth on its
+// own. No additional secret is required.
+//
+// Case 2 (legacy, pre-multi-channel): the request used ?company=<slug>
+// which is just an identifier, not a secret. We fall back to requiring
+// either ?token=<webhook_verify_token> or an apikey header - matches
+// what the pre-multi-channel setup did.
+//
+// The bug we fixed: even when Case 1 already authenticated the request,
+// the code STILL required the Case 2 secrets. For AiServe Chatbot
+// Gateway channels (which never send apikey / ?token=), every partner
+// POST returned 401 and disappeared - inbound stayed silently broken
+// on every newly-registered workspace.
+$authOk = !empty($_GET['ch']); // Case 1 - channel token was matched upstream.
 
-$authOk = false;
-if ($expectedToken !== '' && hash_equals($expectedToken, (string)$incomingToken)) {
-    $authOk = true;
-}
-if (!$authOk && $expectedKey !== '' && hash_equals($expectedKey, (string)$incomingApiKey)) {
-    $authOk = true;
+if (!$authOk) {
+    $incomingApiKey = $_SERVER['HTTP_APIKEY'] ?? $_SERVER['HTTP_X_API_KEY'] ?? '';
+    $incomingToken  = $_GET['token']           ?? '';
+    $expectedToken  = (string)($company['webhook_verify_token'] ?? '');
+    $expectedKey    = (string)($company['evolution_api_key']    ?? '');
+    if ($expectedToken !== '' && hash_equals($expectedToken, (string)$incomingToken)) {
+        $authOk = true;
+    }
+    if (!$authOk && $expectedKey !== '' && hash_equals($expectedKey, (string)$incomingApiKey)) {
+        $authOk = true;
+    }
 }
 if (!$authOk) {
     http_response_code(401);

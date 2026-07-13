@@ -1328,3 +1328,176 @@ function ai_suggest_template(array $company, string $description, ?string $langu
         'usage' => $data['usage'] ?? null,
     ];
 }
+
+/**
+ * Generate a full "starter pack" of message templates + keyword auto-reply
+ * rules from a one-sentence business description. Used by the Quick Setup
+ * Wizard so operators who don't know how to write templates from scratch
+ * can bootstrap a working WhatsApp CS workflow in one click.
+ *
+ * Returns a suggestion object with both lists; the admin page inserts them
+ * as drafts on Apply so the operator retains review-before-save.
+ *
+ * @return array{ok:bool, suggestion?:array, error?:string, model?:string, usage?:array}
+ */
+function ai_generate_setup_pack(array $company, string $businessDescription, string $language = 'en'): array
+{
+    if (!ai_is_configured($company)) {
+        return ['ok' => false, 'error' => 'AI is not enabled for this workspace.'];
+    }
+    $apiKey = ai_api_key($company);
+    if ($apiKey === '') {
+        return ['ok' => false, 'error' => 'No Anthropic API key configured.'];
+    }
+    $businessDescription = trim($businessDescription);
+    if ($businessDescription === '') {
+        return ['ok' => false, 'error' => 'Please describe the business in one sentence.'];
+    }
+
+    $model = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
+    $brand = $company['name'] ?? 'this business';
+    $lang  = $language !== '' ? $language : 'en';
+
+    $systemPrompt =
+        "You are onboarding {$brand} onto a shared WhatsApp customer-service inbox. "
+      . "Given a one-sentence business description, produce a starter pack:\n\n"
+      . "1) 5 message TEMPLATES the business will submit to Meta for approval. Each must:\n"
+      . "   - use lowercase_snake_case template_name (3-120 chars)\n"
+      . "   - pick category: MARKETING / UTILITY / AUTHENTICATION\n"
+      . "   - use {{1}}, {{2}} etc. for variables (NOT at start or end of body)\n"
+      . "   - body_text under 1024 chars\n"
+      . "   - variables_json mapping the number to a friendly slot name\n\n"
+      . "2) 5 keyword AUTO-REPLY rules the business can turn on immediately. Each must:\n"
+      . "   - use a short name in Title Case\n"
+      . "   - pick a match_type: contains / starts_with / equals / regex\n"
+      . "   - pick 1-3 keywords the average customer would type\n"
+      . "   - write a reply_text that answers instantly (mention the business by name)\n"
+      . "   - suggest a media_hint: 'menu.pdf', 'price_list.pdf', 'location_map.jpg', or 'none'\n"
+      . "   - assign priority 10-100 (lower runs first)\n\n"
+      . "Return ONE JSON object exactly:\n"
+      . "{\n"
+      . "  \"templates\": [\n"
+      . "    { \"template_name\": \"...\", \"category\": \"UTILITY\", \"language\": \"" . $lang . "\",\n"
+      . "      \"body_text\": \"...\", \"variables_json\": \"{\\\"1\\\":\\\"...\\\"}\" }, ...\n"
+      . "  ],\n"
+      . "  \"auto_replies\": [\n"
+      . "    { \"name\": \"...\", \"match_type\": \"contains\", \"match_value\": \"menu\",\n"
+      . "      \"reply_text\": \"...\", \"media_hint\": \"menu.pdf\", \"priority\": 10 }, ...\n"
+      . "  ],\n"
+      . "  \"summary\": \"one-sentence recap of what was generated\"\n"
+      . "}\n\n"
+      . "Language: use \"" . $lang . "\" ISO code for template language, and write reply_text "
+      . "and body_text in that language. Output ONLY the JSON object, no markdown fences.";
+
+    $userPrompt = "Business description:\n" . $businessDescription;
+
+    $payload = [
+        'model'      => $model,
+        'max_tokens' => 4000,
+        'system'     => [
+            ['type' => 'text', 'text' => $systemPrompt,
+             'cache_control' => ['type' => 'ephemeral']],
+        ],
+        'messages'   => [
+            ['role' => 'user', 'content' => $userPrompt],
+        ],
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_TIMEOUT        => 60,
+        CURLOPT_HTTPHEADER     => [
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: ' . AI_API_VERSION,
+            'content-type: application/json',
+        ],
+        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($resp === false) return ['ok' => false, 'error' => 'Network error: ' . $err];
+    $data = json_decode((string)$resp, true);
+    if ($code !== 200) {
+        return ['ok' => false, 'error' => (string)($data['error']['message'] ?? ('HTTP ' . $code))];
+    }
+
+    $text = '';
+    foreach (($data['content'] ?? []) as $block) {
+        if (($block['type'] ?? '') === 'text') $text .= $block['text'];
+    }
+    $text = trim($text);
+    if (preg_match('/^```(?:json)?\s*(.+?)\s*```$/s', $text, $m)) $text = trim($m[1]);
+    $parsed = json_decode($text, true);
+    if (!is_array($parsed)) {
+        $s = strpos($text, '{'); $eIdx = strrpos($text, '}');
+        if ($s !== false && $eIdx !== false && $eIdx > $s) {
+            $parsed = json_decode(substr($text, $s, $eIdx - $s + 1), true);
+        }
+    }
+    if (!is_array($parsed) || !isset($parsed['templates']) || !isset($parsed['auto_replies'])) {
+        return ['ok' => false, 'error' => 'Model returned malformed JSON.', 'raw' => $text];
+    }
+
+    // Normalize templates the same way ai_suggest_template does.
+    $templates = [];
+    foreach ((array)$parsed['templates'] as $t) {
+        $n = strtolower(preg_replace('/[^a-z0-9_]+/', '_', trim((string)($t['template_name'] ?? ''))));
+        if (!preg_match('/^[a-z0-9_]{3,120}$/', $n)) $n = 'template_' . substr(bin2hex(random_bytes(3)), 0, 6);
+        $cat = strtoupper(trim((string)($t['category'] ?? 'UTILITY')));
+        if (!in_array($cat, ['MARKETING','UTILITY','AUTHENTICATION'], true)) $cat = 'UTILITY';
+        $body = trim((string)($t['body_text'] ?? ''));
+        if ($body === '') continue;
+        if (mb_strlen($body) > 1024) $body = mb_substr($body, 0, 1024);
+        $tLang = strtolower(trim((string)($t['language'] ?? $lang)));
+        if (!preg_match('/^[a-z]{2}(_[a-z]{2})?$/', $tLang)) $tLang = 'en';
+        $vars = $t['variables_json'] ?? '{}';
+        if (is_array($vars)) $vars = json_encode($vars, JSON_UNESCAPED_UNICODE);
+        if (!is_array(json_decode((string)$vars, true))) $vars = '{}';
+        $templates[] = compact('n','cat','body','tLang','vars') + ['template_name' => $n, 'category' => $cat, 'language' => $tLang, 'body_text' => $body, 'variables_json' => (string)$vars];
+    }
+
+    // Normalize auto-replies.
+    $autoReplies = [];
+    foreach ((array)$parsed['auto_replies'] as $r) {
+        $name = mb_substr(trim((string)($r['name'] ?? '')), 0, 150);
+        if ($name === '') continue;
+        $mt = strtolower(trim((string)($r['match_type'] ?? 'contains')));
+        if (!in_array($mt, ['contains','starts_with','equals','regex'], true)) $mt = 'contains';
+        $mv = trim((string)($r['match_value'] ?? ''));
+        $reply = trim((string)($r['reply_text'] ?? ''));
+        if ($mv === '' || $reply === '') continue;
+        if ($mt === 'regex' && @preg_match('/' . str_replace('/', '\\/', $mv) . '/iu', '') === false) {
+            $mt = 'contains';
+        }
+        $prio = max(1, min(9999, (int)($r['priority'] ?? 100)));
+        $mediaHint = trim((string)($r['media_hint'] ?? 'none'));
+        $autoReplies[] = [
+            'name'         => $name,
+            'match_type'   => $mt,
+            'match_value'  => $mv,
+            'reply_text'   => $reply,
+            'priority'     => $prio,
+            'media_hint'   => $mediaHint,
+        ];
+    }
+
+    if (!$templates && !$autoReplies) {
+        return ['ok' => false, 'error' => 'Model returned an empty pack.', 'raw' => $text];
+    }
+
+    return [
+        'ok'         => true,
+        'suggestion' => [
+            'templates'    => $templates,
+            'auto_replies' => $autoReplies,
+            'summary'      => trim((string)($parsed['summary'] ?? '')),
+        ],
+        'model' => $model,
+        'usage' => $data['usage'] ?? null,
+    ];
+}

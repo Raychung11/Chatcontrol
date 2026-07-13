@@ -12,10 +12,36 @@ $role   = $current_user['role'] ?? 'agent';
     <span class="brand-text">AiServe Inbox</span>
   </div>
 
+  <?php
+    // Empty-workspace nudge: highlight the setup wizard on top of the
+    // sidebar until they have at least one template OR one auto-reply.
+    // Cheap two-count SELECT, only for the sidebar of managers+.
+    $showWizardBadge = false;
+    if (in_array($role, ['super_admin', 'manager'], true) && !empty($current_user['company_id'])) {
+        try {
+            $wizStmt = aiserve_db()->prepare(
+                'SELECT
+                   (SELECT COUNT(*) FROM message_templates WHERE company_id = ?)
+                   + (SELECT COUNT(*) FROM auto_replies WHERE company_id = ?)
+                    AS total'
+            );
+            $wizStmt->execute([(int)$current_user['company_id'], (int)$current_user['company_id']]);
+            $showWizardBadge = ((int)$wizStmt->fetchColumn()) === 0;
+        } catch (Throwable $e) { /* migration missing - skip badge silently */ }
+    }
+  ?>
   <nav class="sidebar-nav">
     <a href="/dashboard.php" class="<?= $active === 'dashboard' ? 'active' : '' ?>">Dashboard</a>
     <a href="/inbox/index.php" class="<?= $active === 'inbox' ? 'active' : '' ?>">Inbox</a>
     <a href="/contacts.php" class="<?= $active === 'contacts' ? 'active' : '' ?>">Contacts</a>
+    <?php if (in_array($role, ['super_admin', 'manager'], true) && $showWizardBadge): ?>
+      <a href="/admin/setup_wizard.php" class="<?= $active === 'setup_wizard' ? 'active' : '' ?>"
+         style="background: linear-gradient(135deg, #e7faee 0%, transparent 100%); font-weight: 600;">
+        🚀 Quick setup <small style="background:#25D366;color:#fff;padding:1px 6px;border-radius:999px;font-size:10px;margin-left:4px;">NEW</small>
+      </a>
+    <?php elseif (in_array($role, ['super_admin', 'manager'], true)): ?>
+      <a href="/admin/setup_wizard.php" class="<?= $active === 'setup_wizard' ? 'active' : '' ?>">🚀 Quick setup</a>
+    <?php endif; ?>
     <a href="/admin/templates.php" class="<?= $active === 'templates' ? 'active' : '' ?>">Templates</a>
     <?php if (in_array($role, ['super_admin', 'manager'], true)): ?>
       <a href="/admin/broadcasts.php" class="<?= $active === 'broadcasts' ? 'active' : '' ?>">Broadcasts</a>

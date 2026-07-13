@@ -182,17 +182,44 @@ layout_start($current_user, $row ? ('Rule · ' . $row['name']) : 'New auto reply
   <?php if ($saved): ?><div class="alert alert-success">Rule saved.</div><?php endif; ?>
   <?php if ($err): ?><div class="alert alert-error"><?= e($err) ?></div><?php endif; ?>
 
-  <form method="post" enctype="multipart/form-data" class="form-grid">
+  <?php if (!$row): ?>
+    <!-- AI-assist box only on NEW rules - editing existing rules should not
+         accidentally clobber hand-crafted text with a fresh AI draft. -->
+    <div class="ai-ar-builder" style="background:#f4f9f6;border:1px dashed #c6e0d0;border-radius:8px;padding:14px 16px;margin-bottom:18px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;">
+        <strong>Describe in plain English</strong>
+        <span class="muted small">AI drafts the rule for you to review.</span>
+      </div>
+      <p class="muted small" style="margin:6px 0 8px 0;">
+        e.g. <em>"send our menu when customer asks about food"</em> ·
+        <em>"reply with location when they type alamat or location"</em> ·
+        <em>"answer opening hours when they ask when we're open"</em>
+      </p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <input type="text" id="ai-ar-desc" placeholder="What should this rule do?" style="flex:1;min-width:220px;">
+        <select id="ai-ar-lang" style="max-width:120px;">
+          <option value="en">English</option>
+          <option value="ms">Bahasa Malaysia</option>
+          <option value="zh">中文</option>
+          <option value="ta">தமிழ்</option>
+        </select>
+        <button type="button" class="btn btn-primary" id="ai-ar-suggest-btn">Suggest</button>
+      </div>
+      <div id="ai-ar-status" class="small" style="margin-top:8px;"></div>
+    </div>
+  <?php endif; ?>
+
+  <form method="post" enctype="multipart/form-data" class="form-grid" id="ar-form">
     <?= csrf_field() ?>
 
     <h2>Rule</h2>
     <label>Name <small class="muted">(internal, e.g. "Menu request")</small>
-      <input type="text" name="name" required maxlength="150"
+      <input type="text" name="name" id="f-ar-name" required maxlength="150"
              value="<?= e($row['name'] ?? ($_POST['name'] ?? '')) ?>">
     </label>
 
     <label>Priority <small class="muted">(lower = higher priority; first match wins)</small>
-      <input type="number" name="priority" min="1" max="9999"
+      <input type="number" name="priority" id="f-ar-priority" min="1" max="9999"
              value="<?= (int)($row['priority'] ?? 100) ?>">
     </label>
 
@@ -210,7 +237,7 @@ layout_start($current_user, $row ? ('Rule · ' . $row['name']) : 'New auto reply
 
     <h2>Match</h2>
     <label>Match type
-      <select name="match_type">
+      <select name="match_type" id="f-ar-match-type">
         <?php foreach (['contains','starts_with','equals','regex'] as $t): ?>
           <option value="<?= e($t) ?>" <?= ($row['match_type'] ?? 'contains') === $t ? 'selected' : '' ?>>
             <?= e($t) ?>
@@ -219,20 +246,20 @@ layout_start($current_user, $row ? ('Rule · ' . $row['name']) : 'New auto reply
       </select>
     </label>
     <label>Keyword / pattern
-      <input type="text" name="match_value" required maxlength="500"
+      <input type="text" name="match_value" id="f-ar-match-value" required maxlength="500"
              value="<?= e($row['match_value'] ?? '') ?>"
              placeholder="menu   or   ^(hi|hello)  for regex">
       <small class="muted">Matching is case-insensitive. For regex, write without slashes — <code>i</code> and <code>u</code> flags applied automatically.</small>
     </label>
     <label>Cooldown (minutes)
-      <input type="number" name="cooldown_min" min="0" max="1440"
+      <input type="number" name="cooldown_min" id="f-ar-cooldown" min="0" max="1440"
              value="<?= (int)($row['cooldown_min'] ?? 60) ?>">
       <small class="muted">Per-conversation. 0 = no cooldown (fire every time).</small>
     </label>
 
     <h2>Reply</h2>
     <label>Message text
-      <textarea name="reply_text" rows="4" maxlength="4000"
+      <textarea name="reply_text" id="f-ar-reply" rows="4" maxlength="4000"
                 placeholder="Here's our menu — let me know what you'd like to order!"><?= e($row['reply_text'] ?? '') ?></textarea>
       <small class="muted">If a media file is attached, this text becomes its caption.</small>
     </label>
@@ -310,5 +337,56 @@ layout_start($current_user, $row ? ('Rule · ' . $row['name']) : 'New auto reply
     <p class="muted">No fires recorded yet.</p>
   <?php endif; ?>
 </div>
+<?php endif; ?>
+
+<?php if (!$row): ?>
+<script>
+(function () {
+  const csrf = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+  const desc = document.getElementById('ai-ar-desc');
+  const lang = document.getElementById('ai-ar-lang');
+  const btn  = document.getElementById('ai-ar-suggest-btn');
+  const st   = document.getElementById('ai-ar-status');
+  if (!btn) return;
+
+  function setStatus(text, color) { st.textContent = text; st.style.color = color || ''; }
+
+  async function suggest() {
+    const value = desc.value.trim();
+    if (!value) { setStatus('Type what this rule should do first.', '#b3261e'); desc.focus(); return; }
+    btn.disabled = true;
+    setStatus('Asking AI…', '');
+    try {
+      const fd = new FormData();
+      fd.append('description', value);
+      fd.append('language', lang.value);
+      fd.append('_csrf', csrf);
+      const res = await fetch('/api/ai_auto_reply_suggest.php', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) { setStatus('✗ ' + (data.error || 'Failed'), '#b3261e'); return; }
+      const s = data.suggestion;
+      document.getElementById('f-ar-name').value        = s.name || '';
+      document.getElementById('f-ar-priority').value    = s.priority || 100;
+      document.getElementById('f-ar-match-type').value  = s.match_type || 'contains';
+      document.getElementById('f-ar-match-value').value = s.match_value || '';
+      document.getElementById('f-ar-cooldown').value    = s.cooldown_min ?? 60;
+      document.getElementById('f-ar-reply').value       = s.reply_text || '';
+      const parts = ['✓ Filled below.'];
+      if (s.explanation) parts.push(s.explanation);
+      if (s.media_hint && s.media_hint !== 'none') {
+        parts.push('AI suggests attaching a file like ' + s.media_hint + ' — upload it in the Catalog / media file field.');
+      }
+      parts.push('Review and click Create rule to save.');
+      setStatus(parts.join(' '), '#1f7a3f');
+      document.getElementById('f-ar-reply').focus();
+    } catch (e) {
+      setStatus('✗ Network error: ' + e.message, '#b3261e');
+    } finally { btn.disabled = false; }
+  }
+
+  btn.addEventListener('click', suggest);
+  desc.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); suggest(); } });
+})();
+</script>
 <?php endif; ?>
 <?php layout_end(); ?>

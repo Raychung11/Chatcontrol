@@ -1501,3 +1501,140 @@ function ai_generate_setup_pack(array $company, string $businessDescription, str
         'usage' => $data['usage'] ?? null,
     ];
 }
+
+/**
+ * Turn a plain-English brief into ONE keyword auto-reply rule the
+ * operator can review and save. Mirrors ai_suggest_routing_rule and
+ * ai_suggest_template - review-before-save flow, never auto-creates.
+ *
+ * @return array{ok:bool, suggestion?:array, error?:string, model?:string, usage?:array}
+ */
+function ai_suggest_auto_reply(array $company, string $description, string $language = 'en'): array
+{
+    if (!ai_is_configured($company)) {
+        return ['ok' => false, 'error' => 'AI is not enabled for this workspace.'];
+    }
+    $apiKey = ai_api_key($company);
+    if ($apiKey === '') {
+        return ['ok' => false, 'error' => 'No Anthropic API key configured.'];
+    }
+    $description = trim($description);
+    if ($description === '') {
+        return ['ok' => false, 'error' => 'Please describe what this auto-reply should do.'];
+    }
+
+    $model = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
+    $brand = $company['name'] ?? 'this business';
+    $lang  = $language !== '' ? $language : 'en';
+
+    $systemPrompt =
+        "You draft ONE keyword auto-reply rule for {$brand}, a WhatsApp customer-service inbox. "
+      . "Given a plain-English brief from the operator, produce a single rule that fires when a "
+      . "customer's message matches the keyword.\n\n"
+      . "Return a single JSON object with this exact structure:\n"
+      . "{\n"
+      . "  \"name\": \"Short Title Case name (2-4 words)\",\n"
+      . "  \"match_type\": \"contains\" | \"starts_with\" | \"equals\" | \"regex\",\n"
+      . "  \"match_value\": \"keyword or phrase (or regex without slashes)\",\n"
+      . "  \"reply_text\": \"the message customers get back — mention " . $brand . " by name\",\n"
+      . "  \"priority\": 1-9999 (lower = higher priority; default 100),\n"
+      . "  \"cooldown_min\": 0-1440 (per-conversation minutes between fires; default 60),\n"
+      . "  \"media_hint\": \"menu.pdf\" | \"price_list.pdf\" | \"location_map.jpg\" | \"none\",\n"
+      . "  \"explanation\": \"one sentence why this rule fits\"\n"
+      . "}\n\n"
+      . "Rules:\n"
+      . "- Prefer 'contains' unless the brief clearly says 'starts with' or 'exact match'.\n"
+      . "- match_value must be lowercase unless case matters.\n"
+      . "- reply_text must be in the language '" . $lang . "' (write it in that language).\n"
+      . "- reply_text should NOT reference a specific media file the operator hasn't uploaded yet.\n"
+      . "  Instead, phrase it so the media attachment (if operator adds one) becomes a natural\n"
+      . "  supplement, e.g. \"Here's our latest menu 👇\" - so the reply reads fine even without media.\n"
+      . "- Output ONLY the JSON object. No markdown fences, no preamble.";
+
+    $payload = [
+        'model'      => $model,
+        'max_tokens' => 500,
+        'system'     => [
+            ['type' => 'text', 'text' => $systemPrompt,
+             'cache_control' => ['type' => 'ephemeral']],
+        ],
+        'messages'   => [
+            ['role' => 'user', 'content' => "Language: " . $lang . "\n\nOperator's brief:\n" . $description],
+        ],
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_HTTPHEADER     => [
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: ' . AI_API_VERSION,
+            'content-type: application/json',
+        ],
+        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($resp === false) return ['ok' => false, 'error' => 'Network error: ' . $err];
+    $data = json_decode((string)$resp, true);
+    if ($code !== 200) {
+        return ['ok' => false, 'error' => (string)($data['error']['message'] ?? ('HTTP ' . $code))];
+    }
+
+    $text = '';
+    foreach (($data['content'] ?? []) as $block) {
+        if (($block['type'] ?? '') === 'text') $text .= $block['text'];
+    }
+    $text = trim($text);
+    if (preg_match('/^```(?:json)?\s*(.+?)\s*```$/s', $text, $m)) $text = trim($m[1]);
+    $parsed = json_decode($text, true);
+    if (!is_array($parsed)) {
+        $s = strpos($text, '{'); $eIdx = strrpos($text, '}');
+        if ($s !== false && $eIdx !== false && $eIdx > $s) {
+            $parsed = json_decode(substr($text, $s, $eIdx - $s + 1), true);
+        }
+    }
+    if (!is_array($parsed)) {
+        return ['ok' => false, 'error' => 'Model returned malformed JSON.', 'raw' => $text];
+    }
+
+    $name = mb_substr(trim((string)($parsed['name'] ?? '')), 0, 150);
+    if ($name === '') $name = 'Auto reply ' . substr(bin2hex(random_bytes(2)), 0, 4);
+    $mt = strtolower(trim((string)($parsed['match_type'] ?? 'contains')));
+    if (!in_array($mt, ['contains','starts_with','equals','regex'], true)) $mt = 'contains';
+    $mv = trim((string)($parsed['match_value'] ?? ''));
+    if ($mv === '') {
+        return ['ok' => false, 'error' => 'Model did not produce a keyword.', 'raw' => $text];
+    }
+    if ($mt === 'regex' && @preg_match('/' . str_replace('/', '\\/', $mv) . '/iu', '') === false) {
+        return ['ok' => false, 'error' => 'Model produced an invalid regex pattern.', 'raw' => $text];
+    }
+    $reply = trim((string)($parsed['reply_text'] ?? ''));
+    if ($reply === '') {
+        return ['ok' => false, 'error' => 'Model did not produce a reply text.', 'raw' => $text];
+    }
+    $prio     = max(1, min(9999, (int)($parsed['priority']     ?? 100)));
+    $cooldown = max(0, min(1440, (int)($parsed['cooldown_min'] ?? 60)));
+    $mediaHint = trim((string)($parsed['media_hint'] ?? 'none'));
+
+    return [
+        'ok' => true,
+        'suggestion' => [
+            'name'         => $name,
+            'match_type'   => $mt,
+            'match_value'  => $mv,
+            'reply_text'   => $reply,
+            'priority'     => $prio,
+            'cooldown_min' => $cooldown,
+            'media_hint'   => $mediaHint,
+            'explanation'  => trim((string)($parsed['explanation'] ?? '')),
+        ],
+        'model' => $model,
+        'usage' => $data['usage'] ?? null,
+    ];
+}

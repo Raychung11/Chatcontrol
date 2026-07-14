@@ -782,6 +782,52 @@
   })();
 
   // ============================================================
+  // CLICK-TO-TRANSLATE (per message)
+  // ============================================================
+  // Delegated click handler so it also picks up messages appended
+  // by the live-refresh poll without any extra wiring.
+  (function () {
+    document.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.msg-translate-btn');
+      if (!btn) return;
+      const wrap = btn.closest('.msg-translate');
+      if (!wrap) return;
+      const msgId  = wrap.getAttribute('data-msg-id');
+      const status = wrap.querySelector('.msg-translate-status');
+      const out    = wrap.querySelector('.msg-translate-out');
+      if (!msgId) return;
+      btn.disabled = true;
+      if (status) { status.textContent = 'Translating…'; status.style.color = ''; }
+      try {
+        const fd = new FormData();
+        fd.append('message_id', msgId);
+        fd.append('_csrf', csrfToken);
+        const res = await fetch('/api/ai_translate.php', { method: 'POST', body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!data.ok) {
+          if (status) { status.textContent = '✗ ' + (data.error || 'Failed'); status.style.color = '#b3261e'; }
+          btn.disabled = false;
+          return;
+        }
+        // Replace the button + status with the translated block.
+        const flag = document.createElement('span');
+        flag.className = 'msg-translate-flag';
+        flag.textContent = '🌐 ' + (data.target_lang || '');
+        const body = document.createElement('div');
+        body.className = 'msg-translate-out';
+        body.setAttribute('data-lang', data.target_lang || '');
+        body.appendChild(flag);
+        body.appendChild(document.createTextNode(' ' + (data.text || '')));
+        wrap.innerHTML = '';
+        wrap.appendChild(body);
+      } catch (err) {
+        if (status) { status.textContent = '✗ Network error: ' + err.message; status.style.color = '#b3261e'; }
+        btn.disabled = false;
+      }
+    });
+  })();
+
+  // ============================================================
   // VOICE-NOTE DURATION HINT
   // ============================================================
   // Reads audio.duration once the browser has the metadata and shows

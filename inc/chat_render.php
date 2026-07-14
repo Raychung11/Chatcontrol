@@ -104,6 +104,32 @@ function message_bubble_html(array $m): string
 
     $html .= '<div class="msg-body">' . nl2br(e((string)$m['message_text'])) . '</div>';
 
+    // ---- Inline translation (click-to-translate) ----
+    // Skip on empty text and on outgoing agent messages (we know what
+    // WE wrote). Cached translation, if any, renders straight away;
+    // otherwise a small "🌐 Translate" button lets the agent trigger
+    // a single Haiku call. api/ai_translate.php caches the result on
+    // the messages row so the button is a one-time cost per message.
+    $bodyText = trim((string)$m['message_text']);
+    if (!$isOut && $bodyText !== '') {
+        $hasCached = !empty($m['translated_text']);
+        $cachedText = $hasCached ? (string)$m['translated_text'] : '';
+        $cachedLang = $hasCached ? (string)($m['translated_to_lang'] ?? '') : '';
+        $html .= '<div class="msg-translate" data-msg-id="' . (int)$m['id'] . '">';
+        if ($hasCached) {
+            $html .= '<div class="msg-translate-out" data-lang="' . e($cachedLang) . '">'
+                   . '<span class="msg-translate-flag">🌐 ' . e($cachedLang) . '</span> '
+                   . nl2br(e($cachedText))
+                   . '</div>';
+        } else {
+            $html .= '<button type="button" class="msg-translate-btn" '
+                   .   'title="Translate this message">🌐 Translate</button>'
+                   . '<span class="msg-translate-status muted small"></span>'
+                   . '<div class="msg-translate-out" hidden></div>';
+        }
+        $html .= '</div>';
+    }
+
     $html .= '<div class="msg-meta"><span>' . e(fmt_dt($m['created_at'], 'M j, H:i')) . '</span>';
     if ($isOut) {
         $html .= '<span class="msg-status" title="' . e(ucfirst((string)$m['status'])) . '">'

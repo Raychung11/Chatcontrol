@@ -1751,3 +1751,87 @@ function ai_distill_conversation_history(array $company, array $qaPairs): array
         'usage'   => $data['usage'] ?? null,
     ];
 }
+
+/**
+ * Translate one message body to a target language. Cheap Haiku call
+ * (~0.3 sen per message). Preserves emoji, URLs, phone numbers.
+ *
+ * @return array{ok:bool, text?:string, error?:string, model?:string, usage?:array}
+ */
+function ai_translate_message(array $company, string $text, string $targetLang = 'en'): array
+{
+    $text = trim($text);
+    if ($text === '') return ['ok' => false, 'error' => 'Nothing to translate.'];
+    if (!ai_is_configured($company)) {
+        return ['ok' => false, 'error' => 'AI is not enabled for this workspace.'];
+    }
+    $apiKey = ai_api_key($company);
+    if ($apiKey === '') return ['ok' => false, 'error' => 'No Anthropic API key configured.'];
+
+    $targetLang = strtolower(trim($targetLang)) ?: 'en';
+    if (!preg_match('/^[a-z]{2}(_[a-z]{2})?$/', $targetLang)) $targetLang = 'en';
+
+    static $names = [
+        'en' => 'English',    'ms' => 'Bahasa Malaysia', 'zh' => 'Chinese (Simplified)',
+        'ta' => 'Tamil',      'id' => 'Bahasa Indonesia', 'th' => 'Thai',
+        'vi' => 'Vietnamese', 'ja' => 'Japanese',        'ko' => 'Korean',
+        'ar' => 'Arabic',     'hi' => 'Hindi',           'fr' => 'French',
+        'es' => 'Spanish',    'de' => 'German',          'pt' => 'Portuguese',
+    ];
+    $targetName = $names[$targetLang] ?? $targetLang;
+    $model = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
+
+    $systemPrompt =
+        "You translate WhatsApp customer-service messages into {$targetName}. Rules:\n"
+      . "- If the source is already in {$targetName}, output it unchanged.\n"
+      . "- Preserve emoji, URLs, phone numbers, order numbers, and prices verbatim.\n"
+      . "- Keep it natural and conversational - match how a customer would text.\n"
+      . "- Do NOT add greetings, disclaimers, or notes. Do NOT explain your translation.\n"
+      . "- Output ONLY the translated text. No quotes, no preamble, no source-language label.";
+
+    $payload = [
+        'model'      => $model,
+        'max_tokens' => 800,
+        'system'     => [
+            ['type' => 'text', 'text' => $systemPrompt,
+             'cache_control' => ['type' => 'ephemeral']],
+        ],
+        'messages'   => [['role' => 'user', 'content' => $text]],
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_HTTPHEADER     => [
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: ' . AI_API_VERSION,
+            'content-type: application/json',
+        ],
+        CURLOPT_POSTFIELDS     => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if ($resp === false) return ['ok' => false, 'error' => 'Network error: ' . $err];
+    $data = json_decode((string)$resp, true);
+    if ($code !== 200) {
+        return ['ok' => false, 'error' => (string)($data['error']['message'] ?? ('HTTP ' . $code))];
+    }
+    $out = '';
+    foreach (($data['content'] ?? []) as $block) {
+        if (($block['type'] ?? '') === 'text') $out .= $block['text'];
+    }
+    $out = trim($out);
+    if ($out === '') return ['ok' => false, 'error' => 'Model returned empty translation.'];
+
+    return [
+        'ok'    => true,
+        'text'  => $out,
+        'model' => $model,
+        'usage' => $data['usage'] ?? null,
+    ];
+}

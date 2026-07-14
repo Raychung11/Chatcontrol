@@ -77,11 +77,40 @@ $company = $stmt->fetch() ?: [];
 
 $defaultPrompt = ai_default_system_prompt($company);
 
+// Live status readout so the operator can see EXACTLY which requirement
+// is met vs missing - the previous "not enabled" toast lumped several
+// distinct failure modes into one message.
+$hasFlag   = !empty($company['ai_enabled']);
+$hasKey    = !empty($company['ai_api_key']) || (bool)getenv('ANTHROPIC_API_KEY');
+$readyToGo = $hasFlag && $hasKey;
+
 layout_start($current_user, 'AI Settings', 'ai_settings');
 ?>
 <div class="card">
   <?php if ($msg): ?><div class="alert alert-success"><?= e($msg) ?></div><?php endif; ?>
   <?php if ($err): ?><div class="alert alert-error"><?= e($err) ?></div><?php endif; ?>
+
+  <!-- Live status banner + one-click Anthropic probe -->
+  <div class="alert <?= $readyToGo ? 'alert-info' : 'alert-error' ?>"
+       style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;">
+    <div>
+      <strong>AI status:</strong>
+      <?= $hasFlag  ? '✓' : '✗' ?> Enable checkbox ticked
+      &nbsp; · &nbsp;
+      <?= $hasKey   ? '✓' : '✗' ?> Anthropic API key present
+      <?php if (!$readyToGo): ?>
+        <br><small class="muted">
+          Both boxes above must be ✓ for AI to fire. Save the form after ticking / pasting a key.
+        </small>
+      <?php else: ?>
+        <br><small class="muted">Everything looks configured. Click "Test AI connection" to actually reach Anthropic.</small>
+      <?php endif; ?>
+    </div>
+    <button type="button" class="btn" id="ai-test-btn" <?= $readyToGo ? '' : 'disabled' ?>>
+      🧪 Test AI connection
+    </button>
+  </div>
+  <p class="small" id="ai-test-status" style="margin: -6px 0 12px 0;"></p>
 
   <form method="post" class="form-grid">
     <?= csrf_field() ?>
@@ -268,6 +297,39 @@ layout_start($current_user, 'AI Settings', 'ai_settings');
   </ul>
 </div>
 
+<script>
+(function () {
+  const csrf = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+  const btn  = document.getElementById('ai-test-btn');
+  const out  = document.getElementById('ai-test-status');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    out.textContent = 'Probing Anthropic…';
+    out.style.color = '';
+    try {
+      const fd = new FormData();
+      fd.append('_csrf', csrf);
+      const res = await fetch('/api/ai_test.php', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (data.ok) {
+        out.textContent = '✓ AI reachable. Model ' + (data.model || '?')
+          + ' replied "' + (data.reply || '') + '" (tokens: '
+          + (data.usage ? (data.usage.input_tokens + '+' + data.usage.output_tokens) : '?') + ').';
+        out.style.color = '#1f7a3f';
+      } else {
+        out.textContent = '✗ ' + (data.error || ('HTTP ' + res.status));
+        out.style.color = '#b3261e';
+      }
+    } catch (e) {
+      out.textContent = '✗ Network error: ' + e.message;
+      out.style.color = '#b3261e';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
 <style>
 .check-row { display:flex; gap:8px; align-items:flex-start; padding:10px; border:1px solid var(--c-border); border-radius:8px; }
 .check-row input { margin-top:3px; }

@@ -20,6 +20,12 @@ if (is_post()) {
     $model        = trim((string)($_POST['ai_model'] ?? AI_DEFAULT_MODEL)) ?: AI_DEFAULT_MODEL;
     $systemPrompt = trim((string)($_POST['ai_system_prompt'] ?? ''));
     $apiKey       = trim((string)($_POST['ai_api_key'] ?? ''));
+    // Translation target language (used by the 🌐 Translate button on
+    // incoming messages). Validated against the whitelist below.
+    $translateTo  = strtolower(trim((string)($_POST['translate_target_lang'] ?? 'en')));
+    if (!in_array($translateTo, ['en','ms','zh','ta','id','th','vi','ja','ko','ar','hi','fr','es','de','pt'], true)) {
+        $translateTo = 'en';
+    }
 
     // Business hours fields
     $bhEnabled    = !empty($_POST['business_hours_enabled']) ? 1 : 0;
@@ -57,13 +63,15 @@ if (is_post()) {
              ai_first_touch = ?, ai_always_on = ?,
              ai_escalation_phrases = ?, ai_daily_cap = ?,
              business_hours_enabled = ?, business_hours_timezone = ?,
-             business_hours_schedule = ?, off_hours_message = ?
+             business_hours_schedule = ?, off_hours_message = ?,
+             translate_target_lang = ?
          WHERE id = ?'
     )->execute([
         $enabled, $model, $apiKey ?: null, $systemPrompt ?: null, $autoSuggest,
         $firstTouch, $alwaysOn,
         $escalation ?: null, $dailyCap,
         $bhEnabled, $bhTimezone, $scheduleJson, $offHoursMsg ?: null,
+        $translateTo,
         $companyId,
     ]);
 
@@ -280,6 +288,43 @@ layout_start($current_user, 'AI Settings', 'ai_settings');
       <summary>Default prompt (used when blank)</summary>
       <pre style="white-space:pre-wrap"><?= e($defaultPrompt) ?></pre>
     </details>
+
+    <h3>🌐 Translation</h3>
+    <p class="muted small">
+      Agents can click <strong>🌐 Translate</strong> on any incoming customer
+      message to translate it into the language below. Handy for multilingual
+      customer bases (Bahasa Malaysia, Chinese, Tamil, Thai, etc. → English).
+      Cached per message, so a translated bubble is free on repeat clicks.
+    </p>
+    <label>Translate to
+      <select name="translate_target_lang">
+        <?php
+          $curLang = (string)($company['translate_target_lang'] ?? 'en') ?: 'en';
+          $langs = [
+            'en' => 'English',
+            'ms' => 'Bahasa Malaysia',
+            'zh' => 'Chinese (简体)',
+            'ta' => 'Tamil (தமிழ்)',
+            'id' => 'Bahasa Indonesia',
+            'th' => 'Thai (ไทย)',
+            'vi' => 'Vietnamese',
+            'ja' => 'Japanese (日本語)',
+            'ko' => 'Korean (한국어)',
+            'ar' => 'Arabic (العربية)',
+            'hi' => 'Hindi (हिन्दी)',
+            'fr' => 'French',
+            'es' => 'Spanish',
+            'de' => 'German',
+            'pt' => 'Portuguese',
+          ];
+          foreach ($langs as $code => $label) {
+              $sel = $curLang === $code ? ' selected' : '';
+              echo '<option value="' . e($code) . '"' . $sel . '>' . e($label) . '</option>';
+          }
+        ?>
+      </select>
+      <small class="muted">Change this any time — cached translations from previous target languages stay attached to their messages until re-clicked.</small>
+    </label>
 
     <div>
       <button class="btn btn-primary" type="submit">Save AI settings</button>

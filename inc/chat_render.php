@@ -39,7 +39,12 @@ function message_bubble_html(array $m): string
     if (!empty($m['media_local_path']) && is_readable($m['media_local_path'])) {
         $mediaSrc = '/api/media.php?msg=' . (int)$m['id'];
     }
-    $isImage = $mediaSrc && str_starts_with((string)($m['media_mime_type'] ?? ''), 'image/');
+    $mime    = (string)($m['media_mime_type'] ?? '');
+    $isImage = $mediaSrc && str_starts_with($mime, 'image/');
+    $isAudio = $mediaSrc && (str_starts_with($mime, 'audio/')
+                             || ($m['message_type'] ?? '') === 'audio');
+    $isVideo = $mediaSrc && (str_starts_with($mime, 'video/')
+                             || ($m['message_type'] ?? '') === 'video');
 
     if ($mediaSrc && $isImage) {
         // Button (not <a target="_blank">) - the raw new-tab approach hangs
@@ -51,14 +56,43 @@ function message_bubble_html(array $m): string
                . 'aria-label="Open image">'
                . '<img src="' . e($mediaSrc) . '" alt="image" loading="lazy">'
                . '</button></div>';
+    } elseif ($mediaSrc && $isAudio) {
+        // WhatsApp voice notes ship as audio/ogg (Opus). All modern
+        // browsers - including iOS Safari and Android Chrome - play
+        // audio/ogg natively via <audio controls>. preload="none" so
+        // the browser only fetches when the agent hits play (busy
+        // inboxes could have dozens of voice notes in one page).
+        $html .= '<div class="msg-media msg-audio">'
+               . '<audio controls preload="none" src="' . e($mediaSrc) . '"></audio>'
+               . '<a class="msg-media-download" href="' . e($mediaSrc) . '"'
+               . ' download="' . e((string)($m['media_filename'] ?? 'voice.ogg')) . '"'
+               . ' title="Download">⬇︎</a>'
+               . '</div>';
+    } elseif ($mediaSrc && $isVideo) {
+        // Inline HTML5 player. preload="metadata" so agents get the
+        // duration + first frame without paying full bandwidth.
+        $html .= '<div class="msg-media msg-video">'
+               . '<video controls preload="metadata" playsinline src="' . e($mediaSrc) . '"></video>'
+               . '<a class="msg-media-download" href="' . e($mediaSrc) . '"'
+               . ' download="' . e((string)($m['media_filename'] ?? 'video.mp4')) . '"'
+               . ' title="Download">⬇︎</a>'
+               . '</div>';
     } elseif ($mediaSrc) {
-        // Non-images (PDF, doc, video, audio) - use the standard download
-        // link. On PWAs iOS handles the download via the Files app, which
-        // does NOT keep the browser in a stuck standalone tab.
+        // Non-media (PDF, doc, other) - standard download link. On PWAs
+        // iOS handles the download via the Files app so no stranded tab.
         $label = $m['media_filename'] ?: ucfirst((string)$m['message_type']);
         $html .= '<div class="msg-media"><a href="' . e($mediaSrc) . '" '
                . 'download="' . e((string)($m['media_filename'] ?? 'file')) . '">'
                . '⬇︎ ' . e($label) . '</a></div>';
+    } elseif (($m['message_type'] ?? '') === 'audio' || ($m['message_type'] ?? '') === 'video') {
+        // Media didn't download (bytes not on disk yet, or gateway didn't
+        // forward the audio). Show a helpful placeholder instead of the
+        // useless "[audio]" body text.
+        $kind = e((string)$m['message_type']);
+        $html .= '<div class="msg-media msg-media-missing muted small">'
+               . '🎙 ' . $kind . ' message — media not synced. '
+               . 'Ask your partner gateway to include audio bytes in the webhook payload.'
+               . '</div>';
     }
 
     $html .= '<div class="msg-body">' . nl2br(e((string)$m['message_text'])) . '</div>';

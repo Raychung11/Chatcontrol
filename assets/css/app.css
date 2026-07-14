@@ -738,9 +738,17 @@ textarea { resize: vertical; }
   display: flex; align-items: center; gap: 6px; flex-wrap: nowrap;
 }
 .msg-audio audio {
-  width: 280px; max-width: 100%;
+  width: 240px; max-width: 100%;
   height: 34px;
   border-radius: 999px;
+}
+.msg-audio-duration {
+  font-size: 12px;
+  color: var(--color-text-muted, #5b6772);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  white-space: nowrap;
+  min-width: 44px;
 }
 .msg-video video {
   max-width: 320px; max-height: 240px;

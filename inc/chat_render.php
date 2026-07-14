@@ -58,12 +58,19 @@ function message_bubble_html(array $m): string
                . '</button></div>';
     } elseif ($mediaSrc && $isAudio) {
         // WhatsApp voice notes ship as audio/ogg (Opus). All modern
-        // browsers - including iOS Safari and Android Chrome - play
-        // audio/ogg natively via <audio controls>. preload="none" so
-        // the browser only fetches when the agent hits play (busy
-        // inboxes could have dozens of voice notes in one page).
+        // browsers play it natively via <audio controls>.
+        //
+        // preload="metadata" (not "none") so the browser fetches just
+        // the file header - enough to know duration - without pulling
+        // the audio bytes. app.js reads the resulting audio.duration
+        // in a loadedmetadata handler and writes it into the sibling
+        // .msg-audio-duration span, giving the agent a "0:34" hint
+        // BEFORE they decide to hit play. IntersectionObserver in the
+        // JS lazy-loads only players that scroll into view, so a chat
+        // with 50 voice notes doesn't blast bandwidth up front.
         $html .= '<div class="msg-media msg-audio">'
-               . '<audio controls preload="none" src="' . e($mediaSrc) . '"></audio>'
+               . '<audio controls preload="none" data-lazy-meta="1" src="' . e($mediaSrc) . '"></audio>'
+               . '<span class="msg-audio-duration" aria-hidden="true">🎙</span>'
                . '<a class="msg-media-download" href="' . e($mediaSrc) . '"'
                . ' download="' . e((string)($m['media_filename'] ?? 'voice.ogg')) . '"'
                . ' title="Download">⬇︎</a>'

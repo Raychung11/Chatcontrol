@@ -780,4 +780,73 @@
       }
     });
   })();
+
+  // ============================================================
+  // VOICE-NOTE DURATION HINT
+  // ============================================================
+  // Reads audio.duration once the browser has the metadata and shows
+  // "0:34" beside the play button so agents can scan voice notes at a
+  // glance without hitting play. IntersectionObserver lazy-loads only
+  // players that scroll into view - a chat with dozens of voice notes
+  // doesn't blast bandwidth on load.
+  (function () {
+    function fmt(s) {
+      if (!isFinite(s) || s < 0) return '';
+      const m = Math.floor(s / 60);
+      const r = Math.floor(s % 60).toString().padStart(2, '0');
+      return m + ':' + r;
+    }
+
+    function hydrateAudio(audio) {
+      if (audio.__durationHydrated) return;
+      audio.__durationHydrated = true;
+      // Ask the browser for JUST the header.
+      audio.setAttribute('preload', 'metadata');
+      const holder = audio.parentElement && audio.parentElement.querySelector('.msg-audio-duration');
+      const paint = () => {
+        if (holder && isFinite(audio.duration)) {
+          holder.textContent = '🎙 ' + fmt(audio.duration);
+        }
+      };
+      audio.addEventListener('loadedmetadata', paint, { once: true });
+      audio.addEventListener('durationchange', paint);
+      // If browser already has metadata cached (BFCache), paint now.
+      if (audio.readyState >= 1) paint();
+    }
+
+    // Prefer IntersectionObserver so we don't request metadata for players
+    // that are hundreds of messages up the scroll. Fall back to hydrate-all
+    // on browsers that lack it.
+    const supportsIO = typeof IntersectionObserver !== 'undefined';
+    let io = null;
+    if (supportsIO) {
+      io = new IntersectionObserver((entries) => {
+        entries.forEach(e => {
+          if (e.isIntersecting) {
+            hydrateAudio(e.target);
+            io.unobserve(e.target);
+          }
+        });
+      }, { rootMargin: '200px 0px' });
+    }
+
+    function observeAll(root) {
+      (root || document).querySelectorAll('audio[data-lazy-meta]:not([data-hydrating])')
+        .forEach(a => {
+          a.setAttribute('data-hydrating', '1');
+          if (io) io.observe(a);
+          else    hydrateAudio(a);
+        });
+    }
+
+    observeAll(document);
+
+    // Live-refresh appends new message bubbles. MutationObserver on the
+    // chat stream picks them up automatically without hooking the poll
+    // path.
+    const s = document.getElementById('chat-stream');
+    if (s && typeof MutationObserver !== 'undefined') {
+      new MutationObserver(() => observeAll(s)).observe(s, { childList: true, subtree: true });
+    }
+  })();
 })();

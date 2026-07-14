@@ -210,9 +210,11 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
               <?php if ($templates && $supportsTemplates): ?>
                 <button type="button" class="btn btn-sm" id="open-template-picker">Send template</button>
               <?php endif; ?>
-              <label class="btn btn-sm" for="media-input">Attach</label>
+              <label class="btn btn-sm" for="media-input">📎 Attach</label>
               <input type="file" id="media-input" name="media" hidden
                      accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.zip">
+              <button type="button" class="btn btn-sm" id="voice-record-btn"
+                      title="Record a voice message">🎙 Record</button>
               <span class="muted small" id="media-status"></span>
             </div>
             <div>

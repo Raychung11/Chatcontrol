@@ -108,11 +108,15 @@ function chatbot_send_media(array $company, string $waId, string $kind, string $
     if (!chatbot_is_configured($company)) {
         return chatbot_not_configured_error();
     }
-    $kindMap = ['image' => 'image', 'video' => 'video', 'document' => 'document'];
+    // Audio is added to the map so agents can reply with voice notes.
+    // The partner's Evolution-shaped gateway accepts 'audio' as a
+    // mediatype value. If a specific gateway build ever rejects it we
+    // fall through to the normal error path.
+    $kindMap = ['image' => 'image', 'video' => 'video', 'document' => 'document', 'audio' => 'audio'];
     if (!isset($kindMap[$kind])) {
         return [
             'ok' => false, 'wa_message_id' => null,
-            'error' => 'AiServe Chatbot gateway supports image/video/document only.',
+            'error' => 'AiServe Chatbot gateway supports image/video/audio/document only.',
             'http_code' => 400, 'raw' => null,
         ];
     }

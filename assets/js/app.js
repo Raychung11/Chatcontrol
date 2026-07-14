@@ -191,6 +191,151 @@
     box.appendChild(x);
   }
 
+  // ---- Voice recording (agent → customer voice note) --------------
+  //
+  // MediaRecorder captures browser mic → Blob (WebM/Opus on Chrome/
+  // Firefox, MP4/AAC on iOS Safari). We upload the Blob to the same
+  // /api/upload_media.php the file-attach flow uses, then let the
+  // existing composer submit + pendingMedia path do the send. So a
+  // recorded voice note goes through EXACTLY the same provider
+  // dispatch, DB writes, and delivery-tick tracking as any attach.
+  const voiceBtn = document.getElementById('voice-record-btn');
+  let mediaRecorder = null;
+  let chunks = [];
+  let recStartTs = 0;
+  let recTimer = null;
+  let recBar = null;
+
+  function fmtRecTime(sec) {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60).toString().padStart(2, '0');
+    return m + ':' + s;
+  }
+
+  function showRecBar() {
+    if (recBar) return;
+    if (!composer) return;
+    recBar = document.createElement('div');
+    recBar.className = 'voice-rec-bar';
+    recBar.innerHTML =
+      '<span class="voice-rec-dot"></span>' +
+      '<span>Recording…</span>' +
+      '<span class="voice-rec-time" id="voice-rec-time">0:00</span>' +
+      '<button type="button" class="btn btn-sm" id="voice-rec-stop">⏹ Stop &amp; use</button>' +
+      '<button type="button" class="btn btn-sm" id="voice-rec-cancel">✕ Cancel</button>';
+    composer.querySelector('textarea').insertAdjacentElement('afterend', recBar);
+    document.getElementById('voice-rec-stop').addEventListener('click', () => stopRecording(false));
+    document.getElementById('voice-rec-cancel').addEventListener('click', () => stopRecording(true));
+    recStartTs = Date.now();
+    recTimer = setInterval(() => {
+      const t = document.getElementById('voice-rec-time');
+      if (t) t.textContent = fmtRecTime((Date.now() - recStartTs) / 1000);
+    }, 200);
+  }
+
+  function hideRecBar() {
+    if (recTimer) { clearInterval(recTimer); recTimer = null; }
+    if (recBar)   { recBar.remove(); recBar = null; }
+  }
+
+  async function startRecording() {
+    if (mediaRecorder && mediaRecorder.state === 'recording') return;
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      alert('Voice recording is not supported in this browser. Try Chrome or Safari.');
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      alert('Microphone access denied. Grant permission and try again.');
+      return;
+    }
+    // Pick the best supported audio MIME for WhatsApp. Prefer OGG/Opus
+    // (native WhatsApp voice-note format) if the browser supports it.
+    const prefs = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus',
+                   'audio/webm', 'audio/mp4', 'audio/aac'];
+    let picked = '';
+    for (const t of prefs) {
+      if (window.MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) {
+        picked = t; break;
+      }
+    }
+    try {
+      mediaRecorder = picked
+        ? new MediaRecorder(stream, { mimeType: picked })
+        : new MediaRecorder(stream);
+    } catch (_) {
+      mediaRecorder = new MediaRecorder(stream);
+    }
+    chunks = [];
+    mediaRecorder.addEventListener('dataavailable', e => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    });
+    mediaRecorder.addEventListener('stop', async () => {
+      stream.getTracks().forEach(t => t.stop());
+      if (mediaRecorder.__cancelled) return;
+      const type = mediaRecorder.mimeType || 'audio/webm';
+      const blob = new Blob(chunks, { type });
+      await uploadRecording(blob, type);
+    });
+    mediaRecorder.start();
+    showRecBar();
+  }
+
+  function stopRecording(cancel) {
+    if (!mediaRecorder || mediaRecorder.state !== 'recording') return;
+    mediaRecorder.__cancelled = !!cancel;
+    hideRecBar();
+    mediaRecorder.stop();
+  }
+
+  async function uploadRecording(blob, mimeType) {
+    const statusEl = document.getElementById('media-status');
+    if (statusEl) statusEl.textContent = 'Uploading voice note…';
+    // Extension for filename - Meta+partner gateways sniff by content
+    // anyway, but a clean extension helps everyone.
+    const ext = mimeType.includes('ogg')  ? 'ogg'
+              : mimeType.includes('mp4')  ? 'm4a'
+              : mimeType.includes('webm') ? 'webm'
+              : mimeType.includes('aac')  ? 'aac'
+              : 'audio';
+    const filename = 'voice_' + Date.now() + '.' + ext;
+    const fd = new FormData();
+    fd.append('file', blob, filename);
+    fd.append('_csrf', csrfToken);
+    try {
+      const res = await fetch('/api/upload_media.php', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) {
+        alert('Upload failed: ' + (data.error || res.status));
+        if (statusEl) statusEl.textContent = '';
+        return;
+      }
+      pendingMedia = {
+        id: data.media_id, mime_type: data.mime_type, kind: data.kind,
+        filename: data.filename || filename,
+        preview_url: data.preview_url || null,
+        local_path: data.local_path || '',
+      };
+      if (statusEl) statusEl.textContent = '';
+      showMediaPreview(pendingMedia);
+    } catch (e) {
+      alert('Network error: ' + e.message);
+      if (statusEl) statusEl.textContent = '';
+    }
+  }
+
+  if (voiceBtn) {
+    voiceBtn.addEventListener('click', () => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        stopRecording(false);
+      } else {
+        startRecording();
+      }
+    });
+  }
+
   // ---- Template picker --------------------------------------------
   const tplForm     = document.getElementById('template-form');
   const tplPicker   = document.getElementById('template-picker');

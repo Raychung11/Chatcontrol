@@ -330,6 +330,31 @@ function delivery_ticks(string $status): string
     return $svg;
 }
 
+/**
+ * Human-readable tooltip for the delivery tick. The default `title="Sent"`
+ * misled operators into assuming the customer had received the message -
+ * for Evolution / AiServe Chatbot Gateway (no delivery-status webhooks),
+ * "sent" only means "accepted by gateway" and can stay single-tick forever
+ * even when the message actually landed. Text below spells this out so
+ * "single ✓ vs double ✓✓" reads correctly on hover / long-press.
+ */
+function delivery_tick_label(string $status): string
+{
+    return match ($status) {
+        'pending'   => 'Pending — queued locally, not yet sent to the gateway.',
+        'sent'      => 'Sent — the gateway accepted this message and returned a WhatsApp id. '
+                     . 'It has NOT been confirmed as delivered yet. '
+                     . 'Meta Cloud API upgrades this to ✓✓ once WhatsApp confirms delivery. '
+                     . 'Evolution / AiServe Chatbot Gateway do not send delivery-status callbacks, '
+                     . 'so this stays a single ✓ even after the customer receives it.',
+        'delivered' => 'Delivered — reached the recipient\'s phone (Meta Cloud API only).',
+        'read'      => 'Read — the customer opened the message (Meta Cloud API only, if the '
+                     . 'recipient has read receipts enabled).',
+        'failed'    => 'Failed — the gateway rejected the send. See the error below.',
+        default     => ucfirst($status),
+    };
+}
+
 function status_badge(string $status): string
 {
     $map = [

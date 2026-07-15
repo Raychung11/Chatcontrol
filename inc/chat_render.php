@@ -132,7 +132,10 @@ function message_bubble_html(array $m): string
 
     $html .= '<div class="msg-meta"><span>' . e(fmt_dt($m['created_at'], 'M j, H:i')) . '</span>';
     if ($isOut) {
-        $html .= '<span class="msg-status" title="' . e(ucfirst((string)$m['status'])) . '">'
+        // Rich tooltip explains what each tick state actually means -
+        // "Sent" alone used to mislead operators into thinking the
+        // customer had received it.
+        $html .= '<span class="msg-status" title="' . e(delivery_tick_label((string)$m['status'])) . '">'
                . delivery_ticks((string)$m['status']) . '</span>';
     }
     if ($m['status'] === 'failed' && !empty($m['error_message'])) {

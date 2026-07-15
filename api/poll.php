@@ -107,7 +107,13 @@ if ($scope === 'chat') {
     }
 
     $company = load_company_settings((int)$user['company_id']) ?: [];
-    $windowOpen = !provider_enforces_24h_window($company)
+    // Match inbox/chat.php: read the CHANNEL's provider, not the stale
+    // companies.provider column. Otherwise aiserve_chatbot channels
+    // wrongly get flagged as needing the Meta 24-hour reply window.
+    require_once __DIR__ . '/../inc/channels.php';
+    $chatChannel = channel_for_conversation($conv);
+    $providerCtx = $chatChannel ?: $company;
+    $windowOpen = !provider_enforces_24h_window($providerCtx)
         || is_within_service_window($conv['service_window_expires_at']);
 
     json_response([

@@ -104,8 +104,16 @@ $tagsAll->execute([$companyId]);
 $tagsAll = $tagsAll->fetchAll();
 
 $company = load_company_settings($companyId) ?: [];
-$enforceWindow = provider_enforces_24h_window($company);
-$supportsTemplates = provider_supports_templates($company);
+// Provider is per-CHANNEL since the multi-channel refactor. Reading
+// companies.provider used to show the register.php default ("cloud_api")
+// even on aiserve_chatbot channels, incorrectly triggering the
+// "24-hour reply window expired" warning on chats that have no such
+// restriction. Resolve the actual channel this conversation runs on.
+require_once __DIR__ . '/../inc/channels.php';
+$chatChannel = channel_for_conversation($conv);
+$providerCtx = $chatChannel ?: $company;
+$enforceWindow = provider_enforces_24h_window($providerCtx);
+$supportsTemplates = provider_supports_templates($providerCtx);
 $windowOpen = !$enforceWindow || is_within_service_window($conv['service_window_expires_at']);
 
 layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id']), 'inbox');

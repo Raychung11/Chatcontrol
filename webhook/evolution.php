@@ -274,9 +274,14 @@ function handle_aiserve_outgoing_ai(array $company, array $channel, array $paylo
         error_log('[AiServe outgoing AI] missing contact');
         return false;
     }
-    $jid   = $contact;
-    $waId  = explode('@', $jid)[0];
-    $isLid = str_ends_with($jid, '@lid') || !ctype_digit($waId);
+    $jid    = $contact;
+    $waIdIn = explode('@', $jid)[0];
+    $isLid  = str_ends_with($jid, '@lid') || !ctype_digit($waIdIn);
+    // For LID-only payloads, remember the LID identifier so the incoming
+    // path can later find and merge this phantom contact into the real-
+    // phone one. See handle_evolution_message below for the merge.
+    $waLid  = $isLid ? preg_replace('/[^0-9A-Za-z]/', '', $waIdIn) : null;
+    $waId   = $isLid ? ('lid_' . $waLid) : $waIdIn;
 
     if ($text === '' && $mediaUrl === '') {
         error_log('[AiServe outgoing AI] empty ai response for contact=' . $contact);
@@ -286,22 +291,6 @@ function handle_aiserve_outgoing_ai(array $company, array $channel, array $paylo
     $companyId = (int)$company['id'];
     $channelId = (int)$channel['id'];
     $db = aiserve_db();
-
-    // LID-only outgoing echo: the partner's payload only gave us a Linked
-    // ID, not a real phone. We CANNOT map this reliably to a customer -
-    // creating a `lid_...` placeholder contact + conversation would result
-    // in a phantom contact that never merges with the real customer when
-    // they eventually reply through the incoming webhook (which surfaces
-    // remoteJidAlt = the real @s.whatsapp.net phone). Log to
-    // activity_logs so the AI action is not invisible, but skip the
-    // contact/conversation/messages inserts.
-    if ($isLid) {
-        log_activity($companyId, null, 'ai_reply_delivered_lid_only', 'company', $companyId,
-            'chatbot_id=' . (int)($payload['chatbot_id'] ?? 0)
-            . ' contact=' . mb_substr($contact, 0, 100)
-            . ' text=' . mb_substr($text, 0, 200));
-        return true;
-    }
 
     // Dedupe on content hash - the payload has no message id, so a partner
     // retry within a small window would otherwise create a duplicate.
@@ -318,17 +307,35 @@ function handle_aiserve_outgoing_ai(array $company, array $channel, array $paylo
     $check->execute([$waMsgId]);
     if ($check->fetchColumn()) return false;
 
-    // Find or create contact
-    $stmt = $db->prepare('SELECT id FROM contacts WHERE company_id = ? AND wa_id = ? LIMIT 1');
-    $stmt->execute([$companyId, $waId]);
-    $contactId = (int)($stmt->fetchColumn() ?: 0);
+    // Find or create contact. For LID payloads we first look up by wa_lid -
+    // if the customer's real phone came in earlier via an incoming webhook,
+    // the real-phone contact already has wa_lid stamped and we reuse it,
+    // avoiding a phantom row.
+    $contactId = 0;
+    if ($isLid && $waLid) {
+        $q = $db->prepare('SELECT id FROM contacts WHERE company_id = ? AND wa_lid = ? LIMIT 1');
+        $q->execute([$companyId, $waLid]);
+        $contactId = (int)($q->fetchColumn() ?: 0);
+    }
     if ($contactId === 0) {
+        $stmt = $db->prepare('SELECT id FROM contacts WHERE company_id = ? AND wa_id = ? LIMIT 1');
+        $stmt->execute([$companyId, $waId]);
+        $contactId = (int)($stmt->fetchColumn() ?: 0);
+    }
+    if ($contactId === 0) {
+        $displayName = $isLid ? ('LID ' . substr((string)$waLid, 0, 8) . '…') : $waId;
         $ins = $db->prepare(
-            'INSERT INTO contacts (company_id, wa_id, phone, display_name, last_message_at)
-             VALUES (?, ?, ?, ?, NOW())'
+            'INSERT INTO contacts (company_id, wa_id, wa_lid, phone, display_name, last_message_at)
+             VALUES (?, ?, ?, ?, ?, NOW())'
         );
-        $ins->execute([$companyId, $waId, $waId, $waId]);
+        $ins->execute([$companyId, $waId, $waLid, $waId, $displayName]);
         $contactId = (int)$db->lastInsertId();
+    } elseif ($isLid && $waLid) {
+        // Row existed but might not have wa_lid stamped yet - fill it in
+        // so the future incoming-merge query can find it.
+        $db->prepare(
+            'UPDATE contacts SET wa_lid = COALESCE(NULLIF(wa_lid,""), ?) WHERE id = ?'
+        )->execute([$waLid, $contactId]);
     }
 
     // Find or create active conversation
@@ -493,21 +500,67 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
     // pushName is the SENDER's WhatsApp profile name. For fromMe=true
     // events (business replied to the customer via WhatsApp Web / mobile /
     // AI echo), pushName is OUR OWN business name - NOT the customer's.
-    // Applying it to the customer's contact row leaked business names
-    // like "One Lap Studio" / "EE Life Design" into the inbox as if they
-    // were customers. Only trust pushName when it actually came from the
-    // customer, i.e. fromMe=false.
+    // Only trust pushName when it actually came from the customer.
     $profileName = $fromMe ? null : ($msg['pushName'] ?? null);
+
+    // ---- LID → real-phone merge ----
+    // If this incoming event carries a LID (either as remoteJid or via
+    // addressingMode='lid'), we now know the real phone AND the LID for
+    // the same customer. If earlier we created a phantom "lid_..." contact
+    // for an outgoing AI echo, merge it into the real-phone contact so the
+    // AI reply shows up in the correct thread.
+    $incomingLid = null;
+    if (str_ends_with($remoteJid, '@lid')) {
+        $incomingLid = preg_replace('/[^0-9A-Za-z]/', '', explode('@', $remoteJid)[0]);
+    } elseif ($addressingMode === 'lid' && str_ends_with($remoteJidAlt, '@s.whatsapp.net')) {
+        // Sometimes the LID sits in a separate field; use whatever survives.
+        $incomingLid = preg_replace('/[^0-9A-Za-z]/', '', explode('@', $remoteJid)[0]);
+    }
+    if ($incomingLid) {
+        $findPhantom = $db->prepare(
+            'SELECT id FROM contacts
+             WHERE company_id = ? AND wa_lid = ? AND wa_id LIKE "lid_%" LIMIT 1'
+        );
+        $findPhantom->execute([$companyId, $incomingLid]);
+        $phantomId = (int)($findPhantom->fetchColumn() ?: 0);
+        if ($phantomId > 0) {
+            $findReal = $db->prepare(
+                'SELECT id FROM contacts WHERE company_id = ? AND wa_id = ? LIMIT 1'
+            );
+            $findReal->execute([$companyId, $waId]);
+            $realId = (int)($findReal->fetchColumn() ?: 0);
+
+            if ($realId === 0) {
+                // No real-phone row yet - just upgrade the phantom in place.
+                $db->prepare(
+                    'UPDATE contacts SET wa_id = ?, phone = ?
+                     WHERE id = ?'
+                )->execute([$waId, $waId, $phantomId]);
+            } elseif ($realId !== $phantomId) {
+                // Both exist. Move all messages + conversations onto the
+                // real contact, delete the phantom.
+                $db->prepare('UPDATE messages      SET contact_id = ? WHERE contact_id = ?')
+                   ->execute([$realId, $phantomId]);
+                $db->prepare('UPDATE conversations SET contact_id = ? WHERE contact_id = ?')
+                   ->execute([$realId, $phantomId]);
+                $db->prepare('UPDATE contacts      SET wa_lid = COALESCE(NULLIF(wa_lid,""), ?) WHERE id = ?')
+                   ->execute([$incomingLid, $realId]);
+                $db->prepare('DELETE FROM contacts WHERE id = ?')->execute([$phantomId]);
+                log_activity($companyId, null, 'lid_contact_merged', 'contact', $realId,
+                    'phantom=' . $phantomId . ' lid=' . mb_substr($incomingLid, 0, 32));
+            }
+        }
+    }
 
     $stmt = $db->prepare('SELECT * FROM contacts WHERE company_id = ? AND wa_id = ? LIMIT 1');
     $stmt->execute([$companyId, $waId]);
     $contact = $stmt->fetch();
     if (!$contact) {
         $ins = $db->prepare(
-            'INSERT INTO contacts (company_id, wa_id, phone, profile_name, display_name, last_message_at)
-             VALUES (?, ?, ?, ?, ?, NOW())'
+            'INSERT INTO contacts (company_id, wa_id, wa_lid, phone, profile_name, display_name, last_message_at)
+             VALUES (?, ?, ?, ?, ?, ?, NOW())'
         );
-        $ins->execute([$companyId, $waId, $waId, $profileName, $profileName ?: $waId]);
+        $ins->execute([$companyId, $waId, $incomingLid, $waId, $profileName, $profileName ?: $waId]);
         $contactId = (int)$db->lastInsertId();
     } else {
         $contactId = (int)$contact['id'];
@@ -515,10 +568,11 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
             'UPDATE contacts
              SET profile_name = COALESCE(?, profile_name),
                  display_name = COALESCE(NULLIF(display_name,""), ?, wa_id),
+                 wa_lid       = COALESCE(NULLIF(wa_lid,""), ?),
                  last_message_at = NOW()
              WHERE id = ?'
         );
-        $upd->execute([$profileName, $profileName, $contactId]);
+        $upd->execute([$profileName, $profileName, $incomingLid, $contactId]);
     }
 
     // ---- Conversation ----

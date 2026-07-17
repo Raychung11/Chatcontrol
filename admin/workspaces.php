@@ -34,6 +34,14 @@ $stmt = $db->query(
 );
 $rows = $stmt->fetchAll();
 
+$archivedId = (int)($_GET['archived'] ?? 0);
+$archivedName = '';
+if ($archivedId > 0) {
+    $s = $db->prepare('SELECT name FROM companies WHERE id = ? LIMIT 1');
+    $s->execute([$archivedId]);
+    $archivedName = (string)($s->fetchColumn() ?: '');
+}
+
 layout_start($current_user, 'Workspaces', 'workspaces');
 ?>
 <div class="card">
@@ -43,6 +51,14 @@ layout_start($current_user, 'Workspaces', 'workspaces');
     users on their behalf. The customer doesn't need to share their password — every action is
     logged in their activity log.
   </p>
+
+  <?php if ($archivedName !== ''): ?>
+    <div class="alert alert-success" style="margin: 8px 0 14px;">
+      Workspace <strong><?= e($archivedName) ?></strong> archived. It's hidden from this list but
+      the data is preserved — flip <code>companies.status</code> back to <code>active</code> in the
+      database to restore.
+    </div>
+  <?php endif; ?>
 
   <table class="data-table">
     <thead>
@@ -88,6 +104,13 @@ layout_start($current_user, 'Workspaces', 'workspaces');
                 <input type="hidden" name="action" value="start">
                 <input type="hidden" name="company_id" value="<?= (int)$r['id'] ?>">
                 <button class="btn btn-sm btn-primary" type="submit">Sign in as super admin</button>
+              </form>
+              <form method="post" action="/api/workspace_action.php" style="display:inline"
+                    onsubmit="return confirm('Archive workspace &quot;<?= e(addslashes((string)$r['name'])) ?>&quot;?\n\nIt will be hidden from this list. All data (conversations, messages, users) is preserved. You can restore it later from the database.');">
+                <?= csrf_field() ?>
+                <input type="hidden" name="action" value="archive">
+                <input type="hidden" name="company_id" value="<?= (int)$r['id'] ?>">
+                <button class="btn btn-sm btn-danger" type="submit" style="margin-left:6px;">Archive</button>
               </form>
             <?php else: ?>
               <span class="muted small">your workspace</span>

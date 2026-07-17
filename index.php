@@ -13,8 +13,8 @@ $year = date('Y');
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title><?= e(APP_NAME) ?> · WhatsApp customer service with AI assist</title>
-  <meta name="description" content="Shared WhatsApp inbox for customer service teams. AI drafts replies grounded in your knowledge base. Three provider options: Meta Cloud API, Evolution, or any partner gateway.">
+  <title><?= e(APP_NAME) ?> · Stop losing customers in WhatsApp</title>
+  <meta name="description" content="Turn one WhatsApp number into a team inbox. Every message replied to, nothing missed, boss can see everything, AI drafts every reply. Built for shops, clinics, agencies and service businesses.">
   <link rel="stylesheet" href="<?= e(asset_url('/assets/css/app.css')) ?>">
   <?= pwa_head_tags() ?>
 </head>
@@ -26,6 +26,7 @@ $year = date('Y');
     <span class="brand-text"><?= e(APP_NAME) ?></span>
   </a>
   <nav class="landing-nav-links">
+    <a href="#pain">Why</a>
     <a href="#features">Features</a>
     <a href="#how">How it works</a>
     <a href="/pricing.php">Pricing</a>
@@ -36,21 +37,24 @@ $year = date('Y');
 <section class="landing-hero">
   <div class="landing-hero-inner">
     <span class="landing-eyebrow">Shared WhatsApp Inbox · AI-assisted</span>
-    <h1>One WhatsApp number.<br>Your team. With AI.</h1>
+    <h1>Stop losing customers<br>in WhatsApp.</h1>
     <p class="landing-lede">
-      Run customer service on WhatsApp the way Intercom runs email. Multiple agents,
-      one shared inbox, live refresh, role-based access — and Claude drafts a reply
-      for every customer message, grounded in your own knowledge base.
+      Right now, all your customer chats live on <strong>one staff member's phone</strong>.
+      Messages get missed. Two people reply to the same customer. The boss has no idea what's
+      being promised. New hires start from zero.
+      <br><br>
+      Give your team a real inbox — shared, live, with AI drafting every reply from your own FAQs.
+      One WhatsApp number, your whole team, everything logged.
     </p>
     <div class="landing-cta">
-      <a class="btn btn-primary btn-lg" href="/register.php">Create workspace · free</a>
+      <a class="btn btn-primary btn-lg" href="/register.php">Start free · 30 seconds</a>
       <a class="btn btn-lg" href="/login.php">Sign in</a>
     </div>
     <ul class="landing-trust">
-      <li>One official WhatsApp number</li>
-      <li>AI drafts grounded in your docs</li>
-      <li>Live inbox refresh</li>
-      <li>Up to 10 agents on Growth</li>
+      <li>No app to install — works in your browser</li>
+      <li>Keep your existing WhatsApp number</li>
+      <li>AI drafts, humans send</li>
+      <li>Cancel anytime</li>
     </ul>
   </div>
 
@@ -107,49 +111,88 @@ $year = date('Y');
   </div>
 </section>
 
-<section id="features" class="landing-section">
-  <h2 class="landing-h2">Built for customer service teams that share one number</h2>
-  <p class="landing-sub">Everything you need to run WhatsApp like a real support desk — plus AI.</p>
+<section id="pain" class="landing-section landing-alt">
+  <h2 class="landing-h2">Sound familiar?</h2>
+  <p class="landing-sub">If any of these hit close, you're not alone. Every growing business on WhatsApp runs into the same wall.</p>
   <div class="landing-grid">
+    <div class="feature-card">
+      <h3>📱 One phone, one person</h3>
+      <p>Your WhatsApp lives on <em>one</em> staff member's device. When they're on leave, sick, or asleep, replies stop. When they quit, the chat history walks out with them.</p>
+    </div>
+    <div class="feature-card">
+      <h3>💤 Messages slip through</h3>
+      <p>Customer sends at 9pm. Nobody sees it until morning. By then they've messaged your competitor. You never even knew you lost them.</p>
+    </div>
+    <div class="feature-card">
+      <h3>🤝 Double replies</h3>
+      <p>Two staff open WhatsApp Web on the same number and reply to the same customer — with different answers. Awkward, and it kills trust.</p>
+    </div>
+    <div class="feature-card">
+      <h3>👀 No visibility for the boss</h3>
+      <p>You have zero idea what your team is promising customers. No response-time numbers. No way to spot the customer who's been waiting 2 days.</p>
+    </div>
+    <div class="feature-card">
+      <h3>🆕 New hires start from zero</h3>
+      <p>New agent joins. They have no history, no context, no idea how you usually answer FAQs. They learn on real customers, mistakes included.</p>
+    </div>
+    <div class="feature-card">
+      <h3>✍️ Typing the same reply, again</h3>
+      <p>Same 20 questions every day. "Do you ship to Sabah?" "What are your hours?" "How much is delivery?" Your team's whole day is copy-paste.</p>
+    </div>
+  </div>
+</section>
+
+<section id="features" class="landing-section">
+  <h2 class="landing-h2">Here's how <?= e(APP_NAME) ?> fixes it</h2>
+  <p class="landing-sub">A real shared inbox for WhatsApp, with AI that knows your business — so nothing gets missed and nobody has to type the same answer twice.</p>
+  <div class="landing-grid">
+    <div class="feature-card">
+      <h3>📥 One shared inbox for your whole team</h3>
+      <p><strong>Fixes:</strong> "one phone, one person". Every agent sees every chat from any browser. Nothing lives on one device. Nothing walks out the door when someone quits.</p>
+    </div>
+    <div class="feature-card">
+      <h3>🔔 Live refresh + sound alerts</h3>
+      <p><strong>Fixes:</strong> "messages slip through". New messages pop in every 5 seconds without reload. Sound alert on new inbound. Unread counts you can actually trust.</p>
+    </div>
+    <div class="feature-card">
+      <h3>🎯 One owner per conversation</h3>
+      <p><strong>Fixes:</strong> "double replies". Every chat has an assigned agent. Others see who's on it. No more two people replying to the same customer.</p>
+    </div>
     <div class="feature-card feature-ai">
-      <h3>🤖 AI reply suggestions</h3>
-      <p>Claude drafts a reply for every customer message. Agents review, edit, send. AI never sends on its own. Per-workspace API key.</p>
+      <h3>🤖 AI drafts every reply</h3>
+      <p><strong>Fixes:</strong> "typing the same reply, again". Claude reads the customer message + your FAQs and drafts a reply. Agent reviews, edits if needed, sends. AI never sends on its own.</p>
     </div>
     <div class="feature-card feature-ai">
-      <h3>📚 Knowledge base</h3>
-      <p>Upload PDFs, Word docs, or paste your FAQs. The AI grounds answers in your own content — pricing, policies, hours. Citations shown on every draft.</p>
+      <h3>📚 Your knowledge base, your voice</h3>
+      <p>Upload PDFs, Word docs, or paste your FAQs — pricing, hours, shipping, return policy. The AI answers using YOUR content and cites which doc it used, every time.</p>
+    </div>
+    <div class="feature-card">
+      <h3>👀 Manager view + reports</h3>
+      <p><strong>Fixes:</strong> "no visibility for the boss". See every open chat, average response time, per-agent workload, top customer topics. Spot who's been waiting too long before they leave.</p>
+    </div>
+    <div class="feature-card">
+      <h3>🧑‍💼 Role-based access</h3>
+      <p>Super Admin, Manager, and Agent roles. Agents only see what's relevant to them. Managers monitor and assign. You control who can do what.</p>
+    </div>
+    <div class="feature-card">
+      <h3>📖 Full history + internal notes</h3>
+      <p><strong>Fixes:</strong> "new hires start from zero". Every past conversation is searchable. Leave private notes for teammates ("VIP", "prefers Mandarin", "waiting on refund"). Customers never see the notes.</p>
     </div>
     <div class="feature-card feature-ai">
-      <h3>📊 Topics analytics</h3>
-      <p>AI groups conversations by theme. See exactly what customers ask about most, with example messages and one-click tagging.</p>
+      <h3>📊 AI topic analytics</h3>
+      <p>Claude groups all chats by theme so you can see exactly what customers ask about most this week — with example messages and one-click tagging. Fix your website, save your team.</p>
     </div>
     <div class="feature-card">
-      <h3>Live shared inbox</h3>
-      <p>Auto-refreshes every 5 seconds. New messages appear without reload, delivery ticks update in place, sound alerts on new inbound.</p>
+      <h3>🔀 Smart routing + departments</h3>
+      <p>Auto-route "refund" chats to Billing, "delivery" to Ops, everything else to the general queue. Set up once, saves hours of manual reassignment.</p>
     </div>
     <div class="feature-card">
-      <h3>Role-based access</h3>
-      <p>Super Admin, Manager, and Agent roles. Managers monitor and assign; agents only see what's relevant.</p>
+      <h3>🔌 Keep your number, your gateway</h3>
+      <p>Works with Meta Cloud API, Evolution, or any partner WhatsApp gateway. Bring your own number. No new SIM, no new app for your customers.</p>
     </div>
     <div class="feature-card">
-      <h3>Smart assignment &amp; routing</h3>
-      <p>Auto-route new conversations by keyword to the right department. Reassign, escalate, change owner in one click.</p>
-    </div>
-    <div class="feature-card">
-      <h3>Templates &amp; 24h window</h3>
-      <p>For Cloud API tenants, we track Meta's customer service window per conversation and prompt template use after expiry.</p>
-    </div>
-    <div class="feature-card">
-      <h3>Internal notes &amp; tags</h3>
-      <p>Leave private context for teammates. Color-coded tags for filtering. Customers never see either.</p>
-    </div>
-    <div class="feature-card">
-      <h3>Reports with date range</h3>
-      <p>Conversation totals, avg first response, avg resolution time, per-agent stats, daily volume, top tags. All filterable by date.</p>
-    </div>
-    <div class="feature-card">
-      <h3>Activity logs</h3>
-      <p>Every login, assignment, status change, AI suggestion, and reply is logged for auditing and coaching.</p>
+      <h3>🔒 Every action logged</h3>
+      <p>Every login, assignment, status change, AI suggestion, and reply is recorded. For auditing, coaching, or dispute resolution. Nothing gets lost.</p>
     </div>
   </div>
 </section>
@@ -253,9 +296,9 @@ $year = date('Y');
 </section>
 
 <section class="landing-cta-band">
-  <h2>Ready to take your WhatsApp inbox seriously?</h2>
-  <p>Create your workspace in 30 seconds, then invite your team.</p>
-  <a class="btn btn-primary btn-lg" href="/register.php">Create workspace</a>
+  <h2>Every day you wait, more customers slip through.</h2>
+  <p>Set up your workspace in 30 seconds. Invite your team. Stop losing chats — tonight.</p>
+  <a class="btn btn-primary btn-lg" href="/register.php">Start free · 30 seconds</a>
   <a class="btn btn-lg" href="/login.php" style="margin-left:8px;">Sign in</a>
 </section>
 

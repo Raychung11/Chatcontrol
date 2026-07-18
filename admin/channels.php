@@ -66,22 +66,48 @@ layout_start($current_user, 'Channels', 'channels');
 ?>
 <div class="card">
   <div class="card-head">
-    <h2>WhatsApp channels</h2>
+    <h2>Channels</h2>
     <?php if ($isPlatform): ?>
-      <a class="btn btn-primary" href="/admin/channel_edit.php">+ New channel</a>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <a class="btn btn-primary" href="/admin/channel_edit.php">+ New WhatsApp channel</a>
+        <a class="btn" href="/admin/channel_connect_meta.php?platform=facebook"
+           style="background:#1877F2;color:#fff;border-color:#1877F2;">
+          Connect Facebook
+        </a>
+        <a class="btn" href="/admin/channel_connect_meta.php?platform=instagram"
+           style="background:linear-gradient(45deg,#833AB4,#FD1D1D,#FCB045);color:#fff;border-color:transparent;">
+          Connect Instagram
+        </a>
+      </div>
     <?php endif; ?>
   </div>
   <p class="muted small">
-    Each channel = one WhatsApp number your workspace is connected to.
+    Each channel is one place customers reach you — a WhatsApp number, a
+    Facebook Page, or an Instagram Business account.
     <?php if ($isPlatform): ?>
       The <strong>default channel</strong> is used when an incoming webhook arrives without
       an explicit channel token (it's also what unassigned outbound replies use).
     <?php else: ?>
-      To add a new number or change a connection, contact your platform administrator.
+      To add a new channel or change a connection, contact your platform administrator.
     <?php endif; ?>
   </p>
 
   <?php if ($msg): ?><div class="alert alert-success"><?= e($msg) ?></div><?php endif; ?>
+  <?php
+    $connectedPlatform = (string)($_GET['connected'] ?? '');
+    if ($connectedPlatform !== ''):
+  ?>
+    <div class="alert alert-success">
+      <?= e(ucfirst($connectedPlatform)) ?> connected. New comments on your Pages will start
+      appearing in the inbox within seconds.
+    </div>
+  <?php endif; ?>
+  <?php
+    $connectErr = (string)($_GET['error'] ?? '');
+    if ($connectErr !== ''):
+  ?>
+    <div class="alert alert-error">Meta connection failed: <?= e($connectErr) ?></div>
+  <?php endif; ?>
 
   <table class="data-table">
     <thead>

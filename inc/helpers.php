@@ -5,6 +5,7 @@
  */
 
 require_once __DIR__ . '/../config/db_config.php';
+require_once __DIR__ . '/../config/meta_config.php';
 
 // -------------------- Output escaping --------------------
 function e(?string $s): string

@@ -124,7 +124,7 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
     <header class="chat-header">
       <a class="chat-back" href="/inbox/index.php">&larr; Back</a>
       <div class="chat-title">
-        <strong><?= e($conv['display_name'] ?: $conv['profile_name'] ?: $conv['wa_id']) ?></strong>
+        <strong id="chat-header-name"><?= e($conv['display_name'] ?: $conv['profile_name'] ?: $conv['wa_id']) ?></strong>
         <span class="muted">+<?= e($conv['wa_id']) ?></span>
       </div>
       <div class="chat-status">
@@ -262,7 +262,26 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
     <button type="button" class="chat-side-close" id="chat-side-close" aria-label="Close">×</button>
     <div class="side-section">
       <h3>Customer</h3>
-      <div class="kv"><span>Name</span><strong><?= e($conv['display_name'] ?: $conv['profile_name'] ?: '—') ?></strong></div>
+      <form class="contact-rename-form" id="contact-rename-form">
+        <?= csrf_field() ?>
+        <input type="hidden" name="conversation_id" value="<?= (int)$conv['id'] ?>">
+        <label for="contact-rename-input" class="kv-label">Name</label>
+        <div class="contact-rename-row">
+          <input type="text" id="contact-rename-input" name="display_name"
+                 value="<?= e((string)($conv['display_name'] ?? '')) ?>"
+                 maxlength="190"
+                 placeholder="<?= e((string)($conv['profile_name'] ?: $conv['wa_id'])) ?>"
+                 autocomplete="off">
+          <button type="submit" class="btn btn-sm" id="contact-rename-save">Save</button>
+        </div>
+        <div class="muted small" id="contact-rename-hint">
+          <?php if (!empty($conv['profile_name']) && (string)$conv['profile_name'] !== (string)$conv['display_name']): ?>
+            WhatsApp shows this contact as <em><?= e($conv['profile_name']) ?></em>.
+          <?php else: ?>
+            Overrides what WhatsApp shows. Leave blank to fall back to the profile name.
+          <?php endif; ?>
+        </div>
+      </form>
       <div class="kv"><span>WhatsApp ID</span><strong>+<?= e($conv['wa_id']) ?></strong></div>
       <div class="kv"><span>Status</span><strong><?= e(ucfirst($conv['status'])) ?></strong></div>
       <div class="kv"><span>Last customer msg</span><strong><?= e(fmt_dt($conv['last_customer_message_at'])) ?></strong></div>

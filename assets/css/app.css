@@ -904,6 +904,19 @@ body.img-lightbox-locked { overflow: hidden; touch-action: none; }
 .conv-action-form select, .conv-action-form input[type="text"] { flex: 1; min-width: 0; }
 .conv-action-form textarea { width: 100%; }
 
+.contact-rename-form { margin: 0 0 10px; }
+.contact-rename-form .kv-label {
+  display: block; color: var(--c-muted); font-size: 12px;
+  text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px;
+}
+.contact-rename-row { display: flex; gap: 6px; align-items: center; }
+.contact-rename-row input[type="text"] {
+  flex: 1; min-width: 0; padding: 6px 8px; font-size: 14px;
+  border: 1px solid var(--c-border); border-radius: 6px;
+}
+#contact-rename-hint { margin-top: 4px; font-size: 12px; line-height: 1.4; }
+#contact-rename-save.saved { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
+
 .note-list { list-style: none; padding: 0; margin: 0 0 8px; max-height: 280px; overflow-y: auto; }
 .note-list li { padding: 8px 10px; background: #fff8e1; border-left: 3px solid var(--c-warn); border-radius: 4px; margin-bottom: 6px; font-size: 12.5px; }
 .note-meta { display: flex; gap: 8px; align-items: baseline; }

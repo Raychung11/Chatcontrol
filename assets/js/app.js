@@ -530,6 +530,51 @@
     });
   });
 
+  // ---- Contact rename (side panel Name field) ----
+  const renameForm = document.getElementById('contact-rename-form');
+  if (renameForm) {
+    const input = document.getElementById('contact-rename-input');
+    const btn   = document.getElementById('contact-rename-save');
+    const hint  = document.getElementById('contact-rename-hint');
+    const headerName = document.getElementById('chat-header-name');
+    const originalHint = hint ? hint.innerHTML : '';
+
+    renameForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; btn.classList.remove('saved'); }
+      try {
+        const fd  = new FormData(renameForm);
+        const res = await fetch('/api/contact_rename.php', {
+          method: 'POST', body: fd, headers: { 'X-CSRF-Token': csrfToken },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.ok) {
+          alert(data.error || ('Rename failed (HTTP ' + res.status + ')'));
+          return;
+        }
+        if (headerName && data.display_name) headerName.textContent = data.display_name;
+        if (hint) {
+          hint.textContent = data.was_reset
+            ? 'Reset — showing WhatsApp profile name.'
+            : 'Saved. Agents will see this name from now on.';
+        }
+        if (btn) {
+          btn.textContent = 'Saved ✓';
+          btn.classList.add('saved');
+          setTimeout(() => {
+            btn.textContent = 'Save';
+            btn.classList.remove('saved');
+            if (hint) hint.innerHTML = originalHint;
+          }, 2500);
+        }
+      } catch (err) {
+        alert('Network error: ' + err.message);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+  }
+
   // =================================================================
   // AI REPLY SUGGESTION
   // =================================================================

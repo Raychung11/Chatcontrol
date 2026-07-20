@@ -338,13 +338,19 @@ function handle_aiserve_outgoing_ai(array $company, array $channel, array $paylo
         )->execute([$waLid, $contactId]);
     }
 
-    // Find or create active conversation
+    // Find or create active conversation FOR THIS CHANNEL. Per-channel
+    // scoping keeps replies routed to the channel the customer actually
+    // messaged - without it, a workspace with 2 channels sees the same
+    // customer's conversations merged into whichever channel opened first,
+    // and every reply goes out through the wrong number. See the fix
+    // commit for context.
     $stmt = $db->prepare(
         'SELECT id FROM conversations
-         WHERE company_id = ? AND contact_id = ? AND status IN ("open","pending","escalated")
+         WHERE company_id = ? AND contact_id = ? AND channel_id = ?
+           AND status IN ("open","pending","escalated")
          ORDER BY id DESC LIMIT 1'
     );
-    $stmt->execute([$companyId, $contactId]);
+    $stmt->execute([$companyId, $contactId, $channelId]);
     $conversationId = (int)($stmt->fetchColumn() ?: 0);
     if ($conversationId === 0) {
         // Same routing rules the inbound path uses, so an AI-first-touch
@@ -583,10 +589,11 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
 
     $stmt = $db->prepare(
         'SELECT * FROM conversations
-         WHERE company_id = ? AND contact_id = ? AND status IN ("open","pending","escalated")
+         WHERE company_id = ? AND contact_id = ? AND channel_id = ?
+           AND status IN ("open","pending","escalated")
          ORDER BY id DESC LIMIT 1'
     );
-    $stmt->execute([$companyId, $contactId]);
+    $stmt->execute([$companyId, $contactId, (int)$channel['id']]);
     $conv = $stmt->fetch();
 
     if (!$conv) {
@@ -618,19 +625,25 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
         if ($fromMe) {
             // Outgoing (bot) reply: update last_message_* + first_response_at,
             // but DO NOT touch unread_count or the customer service window.
+            // Also refresh channel_id to heal pre-fix merged conversations.
             $upd = $db->prepare(
                 'UPDATE conversations
                  SET status = ?,
+                     channel_id = ?,
                      last_message_text = ?,
                      last_message_at   = ?,
                      first_response_at = COALESCE(first_response_at, ?)
                  WHERE id = ?'
             );
-            $upd->execute([$newStatus, $previewText, $messageDate, $messageDate, $conversationId]);
+            $upd->execute([$newStatus, (int)$channel['id'], $previewText, $messageDate, $messageDate, $conversationId]);
         } else {
+            // Also refresh channel_id: the customer is currently reachable
+            // via this channel, so subsequent agent replies should route
+            // here even if the conversation was pre-fix merged.
             $upd = $db->prepare(
                 'UPDATE conversations
                  SET status = ?,
+                     channel_id = ?,
                      last_message_text = ?,
                      last_message_at = ?,
                      last_customer_message_at = ?,
@@ -638,7 +651,7 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
                      unread_count = unread_count + 1
                  WHERE id = ?'
             );
-            $upd->execute([$newStatus, $previewText, $messageDate, $messageDate, $expiryDate, $conversationId]);
+            $upd->execute([$newStatus, (int)$channel['id'], $previewText, $messageDate, $messageDate, $expiryDate, $conversationId]);
         }
     }
 

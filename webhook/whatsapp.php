@@ -262,13 +262,19 @@ function handle_incoming_message(array $company, array $channel, array $value, a
         $upd->execute([$profileName, $profileName, $contactId]);
     }
 
-    // Find or create active conversation (open or pending)
+    // Find or create active conversation (open or pending) FOR THIS CHANNEL.
+    // Filtering by channel_id is critical for workspaces with more than one
+    // WhatsApp number: otherwise the same customer messaging channel B is
+    // appended to their existing channel-A conversation, that conversation
+    // keeps channel_id = A, and every agent reply goes out via A even
+    // though the customer is now on B. See fix commit for details.
     $stmt = $db->prepare(
         'SELECT * FROM conversations
-         WHERE company_id = ? AND contact_id = ? AND status IN ("open","pending","escalated")
+         WHERE company_id = ? AND contact_id = ? AND channel_id = ?
+           AND status IN ("open","pending","escalated")
          ORDER BY id DESC LIMIT 1'
     );
-    $stmt->execute([$companyId, $contactId]);
+    $stmt->execute([$companyId, $contactId, (int)$channel['id']]);
     $conv = $stmt->fetch();
 
     $previewText  = mb_substr((string)$body, 0, 500);
@@ -300,9 +306,14 @@ function handle_incoming_message(array $company, array $channel, array $value, a
     } else {
         $conversationId = (int)$conv['id'];
         $newStatus = ($conv['status'] === 'closed') ? 'open' : $conv['status'];
+        // Also refresh channel_id: heals conversations that were merged
+        // pre-fix. A fresh incoming message on channel X means the customer
+        // is currently reachable via X, so subsequent agent replies should
+        // route there.
         $upd = $db->prepare(
             'UPDATE conversations
              SET status = ?,
+                 channel_id = ?,
                  last_message_text = ?,
                  last_message_at = ?,
                  last_customer_message_at = ?,
@@ -310,7 +321,7 @@ function handle_incoming_message(array $company, array $channel, array $value, a
                  unread_count = unread_count + 1
              WHERE id = ?'
         );
-        $upd->execute([$newStatus, $previewText, $messageDate, $messageDate, $expiryDate, $conversationId]);
+        $upd->execute([$newStatus, (int)$channel['id'], $previewText, $messageDate, $messageDate, $expiryDate, $conversationId]);
     }
 
     // Insert message (de-duped on wa_message_id unique key)

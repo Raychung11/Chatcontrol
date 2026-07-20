@@ -70,6 +70,7 @@ $role   = $current_user['role'] ?? 'agent';
       <a href="/admin/workspaces.php" class="<?= $active === 'workspaces' ? 'active' : '' ?>">Workspaces</a>
       <a href="/admin/pricing.php" class="<?= $active === 'pricing' ? 'active' : '' ?>">Pricing</a>
       <a href="/admin/legal.php" class="<?= $active === 'legal' ? 'active' : '' ?>">Legal &amp; operator</a>
+      <a href="/admin/branding.php" class="<?= $active === 'branding' ? 'active' : '' ?>">Branding &amp; icon</a>
     <?php endif; ?>
   </nav>
 

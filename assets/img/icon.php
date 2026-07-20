@@ -22,13 +22,57 @@ if (!is_dir($cacheDir)) @mkdir($cacheDir, 0775, true);
 
 $cacheFile = $cacheDir . '/icon-' . $size . ($maskable ? '-maskable' : '') . '.png';
 
-// Serve cached version if fresh (24 h).
+// Custom brand icon uploaded via /admin/branding.php lives here. If
+// present, we resize IT into $cacheFile instead of generating the green
+// "A" default. The upload endpoint clears $cacheDir on upload so the
+// switch is immediate; a stale cached file that predates the current
+// upload is treated as invalid.
+$brandingIcon = __DIR__ . '/../../uploads/branding/pwa_icon.png';
+$hasBranding  = is_file($brandingIcon);
+
+// Serve cached version if fresh (24 h) AND not stale vs the source.
 if (is_file($cacheFile) && (time() - filemtime($cacheFile) < 86400)) {
-    header('Content-Type: image/png');
-    header('Cache-Control: public, max-age=31536000, immutable');
-    header('Content-Length: ' . filesize($cacheFile));
-    readfile($cacheFile);
-    exit;
+    $stale = $hasBranding && filemtime($cacheFile) < filemtime($brandingIcon);
+    if (!$stale) {
+        header('Content-Type: image/png');
+        header('Cache-Control: public, max-age=31536000, immutable');
+        header('Content-Length: ' . filesize($cacheFile));
+        readfile($cacheFile);
+        exit;
+    }
+}
+
+// Branded path: resize the uploaded PNG to the requested size.
+if ($hasBranding && function_exists('imagecreatefrompng')) {
+    $src = @imagecreatefrompng($brandingIcon);
+    if ($src) {
+        $srcW = imagesx($src);
+        $srcH = imagesy($src);
+        $dst  = imagecreatetruecolor($size, $size);
+        imagesavealpha($dst, true);
+        imagealphablending($dst, false);
+        $transparent = imagecolorallocatealpha($dst, 0, 0, 0, 127);
+        imagefill($dst, 0, 0, $transparent);
+        imagealphablending($dst, true);
+
+        // Maskable icons need a 10% safe-zone padding so Android/Chrome
+        // can crop into a circle/rounded-square without eating the logo.
+        $padding = $maskable ? (int)($size * 0.10) : 0;
+        $inner   = $size - (2 * $padding);
+        imagecopyresampled($dst, $src, $padding, $padding, 0, 0, $inner, $inner, $srcW, $srcH);
+
+        imagepng($dst, $cacheFile, 6);
+        imagedestroy($src);
+        imagedestroy($dst);
+
+        header('Content-Type: image/png');
+        header('Cache-Control: public, max-age=31536000, immutable');
+        header('Content-Length: ' . filesize($cacheFile));
+        readfile($cacheFile);
+        exit;
+    }
+    // Decode failed — fall through to the default generator so the
+    // page never renders a broken icon.
 }
 
 if (!function_exists('imagecreatetruecolor')) {

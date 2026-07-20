@@ -144,55 +144,55 @@ $year = date('Y');
 
 <section id="features" class="landing-section">
   <h2 class="landing-h2">Here's how <?= e(APP_NAME) ?> fixes it</h2>
-  <p class="landing-sub">A real shared inbox for WhatsApp, with AI that knows your business — so nothing gets missed and nobody has to type the same answer twice.</p>
+  <p class="landing-sub">Everything a growing team needs to run WhatsApp like a real desk.</p>
   <div class="landing-grid">
     <div class="feature-card">
-      <h3>📥 One shared inbox for your whole team</h3>
-      <p><strong>Fixes:</strong> "one phone, one person". Every agent sees every chat from any browser. Nothing lives on one device. Nothing walks out the door when someone quits.</p>
+      <h3>📥 Shared inbox</h3>
+      <p>Every agent sees every chat, from any browser.</p>
     </div>
     <div class="feature-card">
-      <h3>🔔 Live refresh + sound alerts</h3>
-      <p><strong>Fixes:</strong> "messages slip through". New messages pop in every 5 seconds without reload. Sound alert on new inbound. Unread counts you can actually trust.</p>
+      <h3>🔔 Live refresh</h3>
+      <p>New messages appear in seconds. Sound alerts. No reload.</p>
     </div>
     <div class="feature-card">
-      <h3>🎯 One owner per conversation</h3>
-      <p><strong>Fixes:</strong> "double replies". Every chat has an assigned agent. Others see who's on it. No more two people replying to the same customer.</p>
+      <h3>🎯 One owner per chat</h3>
+      <p>Assigned agent per conversation. No double replies.</p>
     </div>
     <div class="feature-card feature-ai">
-      <h3>🤖 AI drafts every reply</h3>
-      <p><strong>Fixes:</strong> "typing the same reply, again". Claude reads the customer message + your FAQs and drafts a reply. Agent reviews, edits if needed, sends. AI never sends on its own.</p>
+      <h3>🤖 AI drafts replies</h3>
+      <p>Claude drafts, agent sends. Never auto-sent.</p>
     </div>
     <div class="feature-card feature-ai">
-      <h3>📚 Your knowledge base, your voice</h3>
-      <p>Upload PDFs, Word docs, or paste your FAQs — pricing, hours, shipping, return policy. The AI answers using YOUR content and cites which doc it used, every time.</p>
+      <h3>📚 Your knowledge base</h3>
+      <p>Upload FAQs. AI answers in your voice, with citations.</p>
     </div>
     <div class="feature-card">
-      <h3>👀 Manager view + reports</h3>
-      <p><strong>Fixes:</strong> "no visibility for the boss". See every open chat, average response time, per-agent workload, top customer topics. Spot who's been waiting too long before they leave.</p>
+      <h3>👀 Manager reports</h3>
+      <p>Response time, workload, top topics — at a glance.</p>
     </div>
     <div class="feature-card">
       <h3>🧑‍💼 Role-based access</h3>
-      <p>Super Admin, Manager, and Agent roles. Agents only see what's relevant to them. Managers monitor and assign. You control who can do what.</p>
+      <p>Admin, Manager, Agent. Everyone sees what they should.</p>
     </div>
     <div class="feature-card">
-      <h3>📖 Full history + internal notes</h3>
-      <p><strong>Fixes:</strong> "new hires start from zero". Every past conversation is searchable. Leave private notes for teammates ("VIP", "prefers Mandarin", "waiting on refund"). Customers never see the notes.</p>
+      <h3>📖 Full history + notes</h3>
+      <p>Searchable past chats. Private notes for teammates.</p>
     </div>
     <div class="feature-card feature-ai">
-      <h3>📊 AI topic analytics</h3>
-      <p>Claude groups all chats by theme so you can see exactly what customers ask about most this week — with example messages and one-click tagging. Fix your website, save your team.</p>
+      <h3>📊 Topic analytics</h3>
+      <p>AI groups chats by theme. See what customers ask most.</p>
     </div>
     <div class="feature-card">
-      <h3>🔀 Smart routing + departments</h3>
-      <p>Auto-route "refund" chats to Billing, "delivery" to Ops, everything else to the general queue. Set up once, saves hours of manual reassignment.</p>
+      <h3>🔀 Smart routing</h3>
+      <p>Auto-send refund chats to Billing, delivery to Ops.</p>
     </div>
     <div class="feature-card">
-      <h3>🔌 Keep your number, your gateway</h3>
-      <p>Works with Meta Cloud API, Evolution, or any partner WhatsApp gateway. Bring your own number. No new SIM, no new app for your customers.</p>
+      <h3>🔌 Keep your number</h3>
+      <p>Meta Cloud API, Evolution, or any partner gateway.</p>
     </div>
     <div class="feature-card">
-      <h3>🔒 Every action logged</h3>
-      <p>Every login, assignment, status change, AI suggestion, and reply is recorded. For auditing, coaching, or dispute resolution. Nothing gets lost.</p>
+      <h3>🔒 Full audit log</h3>
+      <p>Every login, assignment, reply — recorded.</p>
     </div>
   </div>
 </section>

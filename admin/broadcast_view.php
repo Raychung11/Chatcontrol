@@ -112,8 +112,32 @@ layout_start($current_user, 'Broadcast · ' . $b['name'], 'broadcasts');
 </div>
 
 <div class="card">
-  <h2>Message text</h2>
-  <pre style="background:#f6f9fb; border:1px solid #e3e8ee; border-radius:8px; padding:12px; white-space:pre-wrap; margin:0;"><?= e($b['message_text']) ?></pre>
+  <h2>Message text <?php if (!empty($b['media_path'])): ?><small class="muted">(sent as caption under the file)</small><?php endif; ?></h2>
+  <pre style="background:#f6f9fb; border:1px solid #e3e8ee; border-radius:8px; padding:12px; white-space:pre-wrap; margin:0;"><?= e($b['message_text'] ?? '') ?></pre>
+
+  <?php if (!empty($b['media_path'])): ?>
+    <h3 style="margin-top: 20px;">Attachment</h3>
+    <div style="display:flex; gap:14px; align-items:flex-start; padding:12px; background:#f6f9fb; border:1px solid #e3e8ee; border-radius:8px;">
+      <div style="font-size:28px;">
+        <?php
+          $kind = (string)($b['media_kind'] ?? '');
+          echo ['image'=>'🖼️','video'=>'🎬','document'=>'📄','audio'=>'🎵'][$kind] ?? '📎';
+        ?>
+      </div>
+      <div style="flex:1; min-width:0;">
+        <div><strong><?= e((string)($b['media_filename'] ?? basename((string)$b['media_path']))) ?></strong></div>
+        <div class="muted small">
+          <?= e(strtoupper($kind ?: '—')) ?>
+          <?php if (!empty($b['media_mime_type'])): ?> · <?= e((string)$b['media_mime_type']) ?><?php endif; ?>
+          <?php if (is_file((string)$b['media_path'])): ?>
+            · <?= e(number_format(filesize((string)$b['media_path']) / 1024, 1)) ?> KB
+          <?php else: ?>
+            · <span style="color:#c33;">file missing on disk</span>
+          <?php endif; ?>
+        </div>
+      </div>
+    </div>
+  <?php endif; ?>
 </div>
 
 <div class="card">

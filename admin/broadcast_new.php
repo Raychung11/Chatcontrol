@@ -50,8 +50,68 @@ if (is_post()) {
         if ((int)$c['id'] === $saved['channel_id']) { $ch = $c; break; }
     }
 
+    // ---------- media attachment (optional) ----------
+    // Accept: image/*, video/mp4, application/pdf, audio/mpeg, audio/ogg.
+    // Saved to uploads/broadcasts/<company_id>/ so the cron worker can
+    // read it later. Cleaned up after the broadcast finishes.
+    $mediaLocalPath = null;
+    $mediaKind      = null;
+    $mediaMime      = null;
+    $mediaFilename  = null;
+    if (!$err && !empty($_FILES['media']) && (int)($_FILES['media']['error'] ?? 4) === UPLOAD_ERR_OK) {
+        $file      = $_FILES['media'];
+        $mimeGuess = function_exists('mime_content_type') ? (string)mime_content_type($file['tmp_name']) : '';
+        // Map MIME -> WhatsApp media kind. Anything not in this map is rejected.
+        $kindMap = [
+            'image/jpeg'      => 'image',
+            'image/png'       => 'image',
+            'image/webp'      => 'image',
+            'image/gif'       => 'image',   // Meta converts to video, still works
+            'video/mp4'       => 'video',
+            'video/3gpp'      => 'video',
+            'application/pdf' => 'document',
+            'audio/mpeg'      => 'audio',
+            'audio/ogg'       => 'audio',
+            'audio/mp4'       => 'audio',
+        ];
+        if (!isset($kindMap[$mimeGuess])) {
+            $err = 'Unsupported file type (' . ($mimeGuess ?: 'unknown') . '). Allowed: JPG, PNG, WebP, GIF, MP4, PDF, MP3, OGG.';
+        } else {
+            $maxBytes = 16 * 1024 * 1024;  // 16 MB — WhatsApp caps images at 5 MB, video 16, doc 100. 16 is a safe MVP ceiling.
+            if ((int)$file['size'] > $maxBytes) {
+                $err = 'File too big (max 16 MB).';
+            } else {
+                $dir = __DIR__ . '/../uploads/broadcasts/' . $companyId;
+                if (!is_dir($dir) && !@mkdir($dir, 0775, true)) {
+                    $err = 'Could not create uploads/broadcasts/ — check permissions.';
+                } else {
+                    $ext = strtolower(pathinfo((string)$file['name'], PATHINFO_EXTENSION));
+                    if ($ext === '') {
+                        $ext = ['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp','image/gif'=>'gif',
+                                'video/mp4'=>'mp4','video/3gpp'=>'3gp','application/pdf'=>'pdf',
+                                'audio/mpeg'=>'mp3','audio/ogg'=>'ogg','audio/mp4'=>'m4a'][$mimeGuess] ?? 'bin';
+                    }
+                    $fname = 'bcast_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+                    $dest  = $dir . '/' . $fname;
+                    if (!@move_uploaded_file($file['tmp_name'], $dest)) {
+                        $err = 'Could not save uploaded file.';
+                    } else {
+                        @chmod($dest, 0644);
+                        $mediaLocalPath = $dest;
+                        $mediaKind      = $kindMap[$mimeGuess];
+                        $mediaMime      = $mimeGuess;
+                        $mediaFilename  = basename((string)$file['name']);
+                    }
+                }
+            }
+        }
+    } elseif (!empty($_FILES['media']) && (int)($_FILES['media']['error'] ?? 4) !== UPLOAD_ERR_NO_FILE) {
+        // A file was attempted but failed (too big for php.ini, etc.)
+        $err = 'Upload failed (code ' . (int)$_FILES['media']['error'] . '). File may exceed the server upload limit.';
+    }
+
     if ($saved['name'] === '')               $err = 'Give the broadcast a name.';
-    elseif ($saved['message_text'] === '')   $err = 'Enter the message text.';
+    elseif ($saved['message_text'] === '' && !$mediaLocalPath) $err = 'Enter message text or attach a file.';
     elseif (mb_strlen($saved['message_text']) > 4000) $err = 'Message is too long (max 4000 chars).';
     elseif (!$ch)                            $err = 'Pick a channel.';
 
@@ -95,12 +155,14 @@ if (is_post()) {
             $ins = $db->prepare(
                 'INSERT INTO broadcasts
                     (company_id, channel_id, created_by_user_id, name, message_text,
+                     media_path, media_kind, media_mime_type, media_filename,
                      status, batch_size, batch_interval_min, total_recipients)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $ins->execute([
                 $companyId, $saved['channel_id'], (int)$current_user['id'],
-                $saved['name'], $saved['message_text'],
+                $saved['name'], $saved['message_text'] !== '' ? $saved['message_text'] : null,
+                $mediaLocalPath, $mediaKind, $mediaMime, $mediaFilename,
                 $saved['start_now'] ? 'running' : 'draft',
                 $saved['batch_size'], $saved['interval_min'],
                 count($waIds),
@@ -136,7 +198,7 @@ layout_start($current_user, 'New broadcast', 'broadcasts');
 <div class="card">
   <?php if ($err): ?><div class="alert alert-error"><?= e($err) ?></div><?php endif; ?>
 
-  <form method="post" class="form-grid">
+  <form method="post" class="form-grid" enctype="multipart/form-data">
     <?= csrf_field() ?>
 
     <h2>Message</h2>
@@ -155,10 +217,18 @@ layout_start($current_user, 'New broadcast', 'broadcasts');
         <?php endforeach; ?>
       </select>
     </label>
-    <label>Message text
-      <textarea name="message_text" rows="6" required maxlength="4000"
+    <label>Message text <small class="muted">(optional if you attach a file)</small>
+      <textarea name="message_text" rows="6" maxlength="4000"
                 placeholder="Hi! This is …"><?= e($saved['message_text']) ?></textarea>
-      <small class="muted">Plain text only in this version. Personalization tokens (e.g. {{name}}) coming later.</small>
+      <small class="muted">Plain text. If you attach an image/video/PDF below, this text becomes the caption WhatsApp shows under the media.</small>
+    </label>
+    <label>Attach image or file <small class="muted">(optional)</small>
+      <input type="file" name="media"
+             accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,application/pdf,audio/mpeg,audio/ogg">
+      <small class="muted">
+        Images (JPG, PNG, WebP, GIF), video (MP4), PDF, audio (MP3, OGG).
+        Max 16&nbsp;MB. Same file goes to every recipient.
+      </small>
     </label>
 
     <h2>Recipients</h2>

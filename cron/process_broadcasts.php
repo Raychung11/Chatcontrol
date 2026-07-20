@@ -90,7 +90,30 @@ foreach ($broadcasts as $b) {
 
     $okCount   = 0;
     $errCount  = 0;
-    $messageText = (string)$b['message_text'];
+    $messageText = (string)($b['message_text'] ?? '');
+
+    // Media attachment: upload once per batch, reuse the ref for every
+    // recipient. For Cloud API this is one Meta /media upload per batch
+    // (media_id is reusable). For Evolution and Chatbot the ref IS the
+    // local path so provider_upload_media() is effectively a no-op.
+    // If upload fails, we fall through to text-only rather than failing
+    // the whole batch.
+    $mediaPath = (string)($b['media_path']      ?? '');
+    $mediaKind = (string)($b['media_kind']      ?? '');
+    $mediaMime = (string)($b['media_mime_type'] ?? '');
+    $mediaName = (string)($b['media_filename']  ?? '');
+    $mediaRef  = null;
+    if ($mediaPath !== '' && is_file($mediaPath)) {
+        $up = provider_upload_media($channel, $mediaPath, $mediaMime);
+        if ($up['ok']) {
+            $mediaRef = $up['media_ref'];
+        } else {
+            echo "  bcast=$bid  media upload FAIL: " . substr((string)($up['error'] ?? ''), 0, 120)
+                 . " — sending caption-only\n";
+        }
+    } elseif ($mediaPath !== '') {
+        echo "  bcast=$bid  media file missing on disk: $mediaPath — sending caption-only\n";
+    }
 
     foreach ($batch as $r) {
         $rid = (int)$r['id'];
@@ -102,8 +125,18 @@ foreach ($broadcasts as $b) {
             $contactId      = $target['contact_id'];
             $conversationId = $target['conversation_id'];
 
-            // Send.
-            $result = provider_send_text($channel, $wa, $messageText);
+            // Send text OR media-with-caption depending on what the
+            // broadcast has attached. media_text becomes the caption.
+            if ($mediaRef !== null) {
+                $result = provider_send_media(
+                    $channel, $wa, $mediaKind, $mediaRef,
+                    $messageText !== '' ? $messageText : null,
+                    $mediaName !== '' ? $mediaName : null,
+                    $mediaMime !== '' ? $mediaMime : null
+                );
+            } else {
+                $result = provider_send_text($channel, $wa, $messageText);
+            }
 
             $messageId = broadcast_record_message($db, $companyId, $conversationId,
                 $contactId, $userId, $messageText, $result);

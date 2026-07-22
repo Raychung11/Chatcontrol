@@ -22,6 +22,15 @@ $contacts = $stmt->fetchAll();
 layout_start($current_user, 'Contacts', 'contacts');
 ?>
 <div class="card">
+  <div class="card-head">
+    <h2>Contacts <small class="muted">(<?= count($contacts) ?><?= count($contacts) >= 200 ? '+' : '' ?>)</small></h2>
+    <?php if (in_array($current_user['role'] ?? 'agent', ['super_admin', 'manager'], true)): ?>
+      <div style="display:flex; gap:6px;">
+        <a class="btn btn-sm btn-primary" href="/contact_import.php">📄 Import CSV</a>
+        <a class="btn btn-sm" href="/contact_dedupe.php">🔍 Find duplicates</a>
+      </div>
+    <?php endif; ?>
+  </div>
   <form method="get" class="inline-form">
     <input type="search" name="q" placeholder="Search by name / phone…" value="<?= e($search) ?>">
     <button class="btn btn-primary" type="submit">Search</button>

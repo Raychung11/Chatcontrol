@@ -54,6 +54,7 @@ layout_start($current_user, 'Inbox', 'inbox');
         <?php endforeach; ?>
       </select>
       <button class="btn btn-primary btn-sm" type="submit">Search</button>
+      <a class="btn btn-sm" href="/inbox/new_chat.php" style="margin-left:4px;">+ New chat</a>
     </form>
 
     <ul class="inbox-quickfilters">

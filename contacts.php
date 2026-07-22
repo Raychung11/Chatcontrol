@@ -27,7 +27,6 @@ layout_start($current_user, 'Contacts', 'contacts');
     <?php if (in_array($current_user['role'] ?? 'agent', ['super_admin', 'manager'], true)): ?>
       <div style="display:flex; gap:6px;">
         <a class="btn btn-sm btn-primary" href="/contact_import.php">📄 Import CSV</a>
-        <a class="btn btn-sm" href="/contact_dedupe.php">🔍 Find duplicates</a>
       </div>
     <?php endif; ?>
   </div>

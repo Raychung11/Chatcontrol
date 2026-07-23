@@ -530,6 +530,42 @@
     });
   });
 
+  // ---- Contact branch selector (side panel Branch field) ----
+  const branchForm = document.getElementById('contact-branch-form');
+  if (branchForm) {
+    const bBtn  = document.getElementById('contact-branch-save');
+    const bHint = document.getElementById('contact-branch-hint');
+    const originalBranchHint = bHint ? bHint.textContent : '';
+    branchForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (bBtn) { bBtn.disabled = true; bBtn.textContent = 'Saving…'; }
+      try {
+        const fd  = new FormData(branchForm);
+        const res = await fetch('/api/contact_set_branch.php', {
+          method: 'POST', body: fd, headers: { 'X-CSRF-Token': csrfToken },
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.ok) { alert(data.error || ('Branch save failed (HTTP ' + res.status + ')')); return; }
+        if (bHint) {
+          bHint.textContent = data.branch_name
+            ? 'Owned by ' + data.branch_name + '.'
+            : 'No branch assigned.';
+        }
+        if (bBtn) {
+          bBtn.textContent = 'Saved ✓';
+          setTimeout(() => {
+            bBtn.textContent = 'Save';
+            if (bHint) bHint.textContent = originalBranchHint;
+          }, 2500);
+        }
+      } catch (err) {
+        alert('Network error: ' + err.message);
+      } finally {
+        if (bBtn) bBtn.disabled = false;
+      }
+    });
+  }
+
   // ---- Contact rename (side panel Name field) ----
   const renameForm = document.getElementById('contact-rename-form');
   if (renameForm) {

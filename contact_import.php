@@ -92,17 +92,18 @@ layout_start($current_user, 'Import contacts', 'contacts');
   <h3>CSV format</h3>
   <p class="muted small">
     Recommended: a header row with column names <code>phone</code>, <code>name</code>,
-    <code>tags</code>. Column order doesn't matter and matching is case-insensitive.
+    <code>tags</code>, <code>branch</code>. Column order doesn't matter and matching is case-insensitive.
     <code>tags</code> can be one tag or several separated by <code>|</code>.
+    <code>branch</code> takes a branch name — if it doesn't exist yet, we auto-create it.
   </p>
-  <pre style="background:#f6f9fb; border:1px solid #e3e8ee; border-radius:6px; padding:12px; overflow-x:auto;">phone,name,tags
-60123456789,Vicky Tan,vip|boat-tour
-60198765432,Ali Rahman,new-lead
-6591234567,Jane Doe,</pre>
+  <pre style="background:#f6f9fb; border:1px solid #e3e8ee; border-radius:6px; padding:12px; overflow-x:auto;">phone,name,tags,branch
+60123456789,Vicky Tan,vip|boat-tour,KL Office
+60198765432,Ali Rahman,new-lead,Penang Office
+6591234567,Jane Doe,,</pre>
 
   <p class="muted small">
     <strong>No header row?</strong> That's fine — the importer assumes the order
-    <code>phone, name, tags</code>.<br>
+    <code>phone, name, tags, branch</code>.<br>
     <strong>Phone format:</strong> country code + number, digits only. No <code>+</code>,
     no leading zero. e.g. <code>60123456789</code>, not <code>+60 12-345 6789</code> or
     <code>0123456789</code>. Malformed rows are logged as errors and skipped, the rest
@@ -180,10 +181,10 @@ function contact_import_run(int $companyId, int $userId): array
         if ($digitCount < 6) $isHeader = true;
     }
 
-    // Column mapping: default (no header) is phone / name / tags in that order.
-    $col = ['phone' => 0, 'name' => 1, 'tags' => 2];
+    // Column mapping: default (no header) is phone / name / tags / branch.
+    $col = ['phone' => 0, 'name' => 1, 'tags' => 2, 'branch' => 3];
     if ($isHeader) {
-        $col = ['phone' => -1, 'name' => -1, 'tags' => -1];
+        $col = ['phone' => -1, 'name' => -1, 'tags' => -1, 'branch' => -1];
         foreach ($firstRow as $i => $h) {
             $norm = strtolower(trim(preg_replace('/[^a-z0-9]+/i', '', $h)));
             if (in_array($norm, ['phone','mobile','number','whatsapp','wa','waid','msisdn'], true)) {
@@ -192,6 +193,8 @@ function contact_import_run(int $companyId, int $userId): array
                 $col['name'] = $i;
             } elseif (in_array($norm, ['tag','tags','label','labels'], true)) {
                 $col['tags'] = $i;
+            } elseif (in_array($norm, ['branch','office','location','businessunit'], true)) {
+                $col['branch'] = $i;
             }
         }
         if ($col['phone'] === -1) {
@@ -200,6 +203,18 @@ function contact_import_run(int $companyId, int $userId): array
                     'created' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => []];
         }
         array_shift($rowsRead);
+    }
+
+    // Pre-load workspace branches so we can resolve names -> ids without
+    // hitting the DB per row. Also auto-create any branch name seen in
+    // the CSV that doesn't yet exist so imports Just Work.
+    $branchCache = [];  // name (lower) -> id
+    $bLoad = aiserve_db()->prepare(
+        'SELECT id, name FROM branches WHERE company_id = ?'
+    );
+    $bLoad->execute([$companyId]);
+    foreach ($bLoad->fetchAll() as $bRow) {
+        $branchCache[mb_strtolower((string)$bRow['name'])] = (int)$bRow['id'];
     }
 
     $db = aiserve_db();
@@ -227,9 +242,10 @@ function contact_import_run(int $companyId, int $userId): array
         if (!is_array($row) || count(array_filter($row, fn($x) => trim((string)$x) !== '')) === 0) {
             continue; // blank row
         }
-        $rawPhone = trim((string)($row[$col['phone']] ?? ''));
-        $rawName  = trim((string)($row[$col['name']]  ?? ''));
-        $rawTags  = trim((string)($row[$col['tags']]  ?? ''));
+        $rawPhone  = trim((string)($row[$col['phone']]  ?? ''));
+        $rawName   = trim((string)($row[$col['name']]   ?? ''));
+        $rawTags   = trim((string)($row[$col['tags']]   ?? ''));
+        $rawBranch = $col['branch'] >= 0 ? trim((string)($row[$col['branch']] ?? '')) : '';
 
         $waId = contact_normalize_phone($rawPhone);
         if ($waId === '') {
@@ -246,6 +262,30 @@ function contact_import_run(int $companyId, int $userId): array
             $findStmt->execute([$companyId, $waId]);
             $existing = $findStmt->fetch();
 
+            // Resolve branch name -> id, auto-creating unknown names so
+            // the operator doesn't have to pre-seed branches manually.
+            $branchIdForRow = null;
+            if ($rawBranch !== '') {
+                $lc = mb_strtolower($rawBranch);
+                if (isset($branchCache[$lc])) {
+                    $branchIdForRow = $branchCache[$lc];
+                } else {
+                    try {
+                        $db->prepare(
+                            'INSERT INTO branches (company_id, name, status) VALUES (?, ?, "active")'
+                        )->execute([$companyId, mb_substr($rawBranch, 0, 120)]);
+                        $branchIdForRow = (int)$db->lastInsertId();
+                        $branchCache[$lc] = $branchIdForRow;
+                    } catch (Throwable $eBranch) {
+                        // Uniqueness race (concurrent import) — re-fetch.
+                        $r = $db->prepare('SELECT id FROM branches WHERE company_id = ? AND name = ? LIMIT 1');
+                        $r->execute([$companyId, $rawBranch]);
+                        $branchIdForRow = (int)$r->fetchColumn() ?: null;
+                        if ($branchIdForRow) $branchCache[$lc] = $branchIdForRow;
+                    }
+                }
+            }
+
             $contactId = 0;
             if ($existing) {
                 $contactId = (int)$existing['id'];
@@ -255,6 +295,10 @@ function contact_import_run(int $companyId, int $userId): array
                         $rawPhone !== '' ? preg_replace('/\D/', '', $rawPhone) : '',
                         $contactId,
                     ]);
+                    if ($branchIdForRow) {
+                        $db->prepare('UPDATE contacts SET branch_id = ? WHERE id = ?')
+                           ->execute([$branchIdForRow, $contactId]);
+                    }
                     $updated++;
                 } else {
                     $skipped++;
@@ -263,6 +307,10 @@ function contact_import_run(int $companyId, int $userId): array
                 $insStmt->execute([$companyId, $waId, $waId,
                                    $rawName !== '' ? $rawName : $waId]);
                 $contactId = (int)$db->lastInsertId();
+                if ($branchIdForRow) {
+                    $db->prepare('UPDATE contacts SET branch_id = ? WHERE id = ?')
+                       ->execute([$branchIdForRow, $contactId]);
+                }
                 $created++;
             }
 

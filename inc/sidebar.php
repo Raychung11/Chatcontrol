@@ -55,6 +55,7 @@ $role   = $current_user['role'] ?? 'agent';
       <div class="sidebar-section">Administration</div>
       <a href="/admin/users.php" class="<?= $active === 'users' ? 'active' : '' ?>">Users</a>
       <a href="/admin/departments.php" class="<?= $active === 'departments' ? 'active' : '' ?>">Departments</a>
+      <a href="/admin/branches.php" class="<?= $active === 'branches' ? 'active' : '' ?>">Branches</a>
       <a href="/admin/routing.php" class="<?= $active === 'routing' ? 'active' : '' ?>">Routing rules</a>
       <a href="/admin/channels.php" class="<?= $active === 'channels' ? 'active' : '' ?>">Channels</a>
       <a href="/admin/settings.php" class="<?= $active === 'settings' ? 'active' : '' ?>">Settings</a>

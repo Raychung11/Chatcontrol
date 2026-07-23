@@ -15,11 +15,14 @@ $db = aiserve_db();
 
 $stmt = $db->prepare(
     'SELECT c.*, ct.wa_id, ct.display_name, ct.profile_name, ct.phone AS contact_phone,
-            u.name AS agent_name, d.name AS department_name
+            ct.branch_id AS contact_branch_id,
+            u.name AS agent_name, d.name AS department_name,
+            b.name AS contact_branch_name
      FROM conversations c
      INNER JOIN contacts ct ON ct.id = c.contact_id
      LEFT  JOIN users u ON u.id = c.assigned_user_id
      LEFT  JOIN departments d ON d.id = c.department_id
+     LEFT  JOIN branches b ON b.id = ct.branch_id
      WHERE c.id = ? AND c.company_id = ? LIMIT 1'
 );
 $stmt->execute([$conversationId, $companyId]);
@@ -283,6 +286,34 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
         </div>
       </form>
       <div class="kv"><span>WhatsApp ID</span><strong>+<?= e($conv['wa_id']) ?></strong></div>
+      <?php
+        $branchList = $db->prepare(
+            'SELECT id, name FROM branches WHERE company_id = ? AND status = "active" ORDER BY name'
+        );
+        $branchList->execute([$companyId]);
+        $branchList = $branchList->fetchAll();
+      ?>
+      <?php if ($branchList): ?>
+        <form class="contact-branch-form" id="contact-branch-form" style="margin: 8px 0;">
+          <?= csrf_field() ?>
+          <input type="hidden" name="conversation_id" value="<?= (int)$conv['id'] ?>">
+          <label for="contact-branch-select" class="kv-label">Branch</label>
+          <div class="contact-rename-row">
+            <select id="contact-branch-select" name="branch_id" style="flex:1;">
+              <option value="0"><?= empty($conv['contact_branch_id']) ? '— None —' : '— Remove branch —' ?></option>
+              <?php foreach ($branchList as $b): ?>
+                <option value="<?= (int)$b['id'] ?>" <?= (int)$b['id'] === (int)($conv['contact_branch_id'] ?? 0) ? 'selected' : '' ?>>
+                  <?= e($b['name']) ?>
+                </option>
+              <?php endforeach; ?>
+            </select>
+            <button type="submit" class="btn btn-sm" id="contact-branch-save">Save</button>
+          </div>
+          <div class="muted small" id="contact-branch-hint">
+            Which office / business unit owns this customer.
+          </div>
+        </form>
+      <?php endif; ?>
       <div class="kv"><span>Status</span><strong><?= e(ucfirst($conv['status'])) ?></strong></div>
       <div class="kv"><span>Last customer msg</span><strong><?= e(fmt_dt($conv['last_customer_message_at'])) ?></strong></div>
       <div class="kv"><span>Window expires</span>

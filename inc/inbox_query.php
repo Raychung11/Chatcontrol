@@ -16,7 +16,7 @@ require_once __DIR__ . '/auth.php';
  *   counts: array
  * }
  */
-function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $deptFilter, int $tagFilter): array
+function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $deptFilter, int $tagFilter, int $assigneeFilter = 0): array
 {
     $companyId = (int)$user['company_id'];
     $role      = $user['role'];
@@ -91,6 +91,14 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
     if ($deptFilter > 0) {
         $where[]  = 'c.department_id = ?';
         $params[] = $deptFilter;
+    }
+
+    // Filter by a specific assignee (manager or agent). Applied on top of
+    // the existing agent-visibility clause so an agent can't see anyone
+    // else's conversations even if they pick a name from the dropdown.
+    if ($assigneeFilter > 0) {
+        $where[]  = 'c.assigned_user_id = ?';
+        $params[] = $assigneeFilter;
     }
 
     if ($search !== '') {

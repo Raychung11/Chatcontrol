@@ -857,6 +857,7 @@
         q: inboxShell.dataset.q || '',
         department_id: inboxShell.dataset.departmentId || '0',
         tag_id: inboxShell.dataset.tagId || '0',
+        assignee_id: inboxShell.dataset.assigneeId || '0',
       });
       const res  = await fetch('/api/poll.php?' + qs.toString(),
         { headers: { 'X-CSRF-Token': csrfToken } });

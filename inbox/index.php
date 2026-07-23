@@ -5,14 +5,15 @@ require_once __DIR__ . '/../inc/inbox_query.php';
 $current_user = require_login();
 $companyId    = (int)$current_user['company_id'];
 
-$filter     = $_GET['filter']     ?? 'all';
-$search     = trim((string)($_GET['q'] ?? ''));
-$deptFilter = (int)($_GET['department_id'] ?? 0);
-$tagFilter  = (int)($_GET['tag_id'] ?? 0);
+$filter         = $_GET['filter']     ?? 'all';
+$search         = trim((string)($_GET['q'] ?? ''));
+$deptFilter     = (int)($_GET['department_id']    ?? 0);
+$tagFilter      = (int)($_GET['tag_id']           ?? 0);
+$assigneeFilter = (int)($_GET['assignee_id']      ?? 0);
 
 $db = aiserve_db();
 
-$data          = inbox_fetch($db, $current_user, $filter, $search, $deptFilter, $tagFilter);
+$data          = inbox_fetch($db, $current_user, $filter, $search, $deptFilter, $tagFilter, $assigneeFilter);
 $conversations = $data['conversations'];
 $tagsByConv    = $data['tags_by_conv'];
 $counts        = $data['counts'];
@@ -25,6 +26,20 @@ $tagsAll = $db->prepare('SELECT id, name, color FROM conversation_tags WHERE com
 $tagsAll->execute([$companyId]);
 $tagsAll = $tagsAll->fetchAll();
 
+// Assignees dropdown — only for roles that can look across the workspace.
+// Agents already only see conversations relevant to them, so a per-agent
+// filter would just add noise for them.
+$assignees = [];
+if (in_array($current_user['role'] ?? 'agent', ['super_admin', 'manager'], true)) {
+    $aStmt = $db->prepare(
+        'SELECT id, name, role FROM users
+         WHERE company_id = ? AND status = "active" AND role IN ("super_admin","manager","agent")
+         ORDER BY FIELD(role, "super_admin","manager","agent"), name'
+    );
+    $aStmt->execute([$companyId]);
+    $assignees = $aStmt->fetchAll();
+}
+
 layout_start($current_user, 'Inbox', 'inbox');
 ?>
 <div class="inbox-shell"
@@ -32,7 +47,8 @@ layout_start($current_user, 'Inbox', 'inbox');
      data-filter="<?= e($filter) ?>"
      data-q="<?= e($search) ?>"
      data-department-id="<?= (int)$deptFilter ?>"
-     data-tag-id="<?= (int)$tagFilter ?>">
+     data-tag-id="<?= (int)$tagFilter ?>"
+     data-assignee-id="<?= (int)$assigneeFilter ?>">
   <section class="inbox-filters">
     <form method="get" class="inbox-search">
       <input type="search" name="q" value="<?= e($search) ?>" placeholder="Search name / phone…">
@@ -53,6 +69,29 @@ layout_start($current_user, 'Inbox', 'inbox');
           </option>
         <?php endforeach; ?>
       </select>
+      <?php if ($assignees): ?>
+        <?php
+          // Group assignees by role for a cleaner dropdown UX.
+          $byRole = ['super_admin' => [], 'manager' => [], 'agent' => []];
+          foreach ($assignees as $a) {
+              $byRole[$a['role']][] = $a;
+          }
+          $roleLabels = ['super_admin' => 'Super admins', 'manager' => 'Managers', 'agent' => 'Agents'];
+        ?>
+        <select name="assignee_id" onchange="this.form.submit()">
+          <option value="0">All assignees</option>
+          <?php foreach ($byRole as $role => $people): ?>
+            <?php if (!$people) continue; ?>
+            <optgroup label="<?= e($roleLabels[$role]) ?>">
+              <?php foreach ($people as $p): ?>
+                <option value="<?= (int)$p['id'] ?>" <?= $assigneeFilter === (int)$p['id'] ? 'selected' : '' ?>>
+                  <?= e($p['name']) ?>
+                </option>
+              <?php endforeach; ?>
+            </optgroup>
+          <?php endforeach; ?>
+        </select>
+      <?php endif; ?>
       <button class="btn btn-primary btn-sm" type="submit">Search</button>
       <a class="btn btn-sm" href="/inbox/new_chat.php" style="margin-left:4px;">+ New chat</a>
     </form>
@@ -72,9 +111,10 @@ layout_start($current_user, 'Inbox', 'inbox');
       ];
       foreach ($links as $key => [$label, $countKey]):
         $href = '?filter=' . urlencode($key)
-              . ($search !== '' ? '&q=' . urlencode($search) : '')
-              . ($deptFilter > 0 ? '&department_id=' . $deptFilter : '')
-              . ($tagFilter  > 0 ? '&tag_id=' . $tagFilter : '');
+              . ($search !== ''        ? '&q=' . urlencode($search)     : '')
+              . ($deptFilter > 0       ? '&department_id=' . $deptFilter : '')
+              . ($tagFilter  > 0       ? '&tag_id=' . $tagFilter         : '')
+              . ($assigneeFilter > 0   ? '&assignee_id=' . $assigneeFilter : '');
       ?>
         <li><a class="<?= $filter === $key ? 'active' : '' ?>" href="<?= e($href) ?>" data-filter-key="<?= e($key) ?>">
           <?= e($label) ?> <span class="count" data-count="<?= e($countKey) ?>"><?= (int)($counts[$countKey] ?? 0) ?></span>

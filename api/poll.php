@@ -26,12 +26,13 @@ header('Cache-Control: no-store');
 $scope = (string)($_GET['scope'] ?? '');
 
 if ($scope === 'inbox') {
-    $filter     = (string)($_GET['filter'] ?? 'all');
-    $search     = trim((string)($_GET['q'] ?? ''));
-    $deptFilter = (int)($_GET['department_id'] ?? 0);
-    $tagFilter  = (int)($_GET['tag_id'] ?? 0);
+    $filter         = (string)($_GET['filter'] ?? 'all');
+    $search         = trim((string)($_GET['q'] ?? ''));
+    $deptFilter     = (int)($_GET['department_id'] ?? 0);
+    $tagFilter      = (int)($_GET['tag_id']        ?? 0);
+    $assigneeFilter = (int)($_GET['assignee_id']   ?? 0);
 
-    $data = inbox_fetch($db, $user, $filter, $search, $deptFilter, $tagFilter);
+    $data = inbox_fetch($db, $user, $filter, $search, $deptFilter, $tagFilter, $assigneeFilter);
 
     $rowsHtml = '';
     if (!$data['conversations']) {

@@ -125,15 +125,19 @@ if (is_post()) {
                 // AND contacts by company_id (in addition to the tag's
                 // company_id) so a future stray cross-workspace tag_map
                 // row can't leak foreign contacts into the recipient list.
+                // ALSO filter by channel_id so a tag on a channel-A
+                // conversation doesn't leak into a channel-B blast (the
+                // customer may never have opted in on channel B).
                 $r = $db->prepare(
                     'SELECT DISTINCT ct.wa_id, ct.display_name
                      FROM conversation_tag_map m
-                     JOIN conversations c ON c.id = m.conversation_id AND c.company_id = ?
+                     JOIN conversations c ON c.id = m.conversation_id
+                       AND c.company_id = ? AND c.channel_id = ?
                      JOIN contacts ct     ON ct.id = c.contact_id     AND ct.company_id = ?
                      JOIN conversation_tags t ON t.id = m.tag_id
                      WHERE m.tag_id = ? AND t.company_id = ?'
                 );
-                $r->execute([$companyId, $companyId, $saved['tag_id'], $companyId]);
+                $r->execute([$companyId, $saved['channel_id'], $companyId, $saved['tag_id'], $companyId]);
                 foreach ($r->fetchAll() as $row) {
                     $wa = broadcast_normalize_wa((string)$row['wa_id']);
                     if (strlen($wa) >= 8) $waIds[$wa] = $row['display_name'] ?: $wa;
@@ -145,7 +149,56 @@ if (is_post()) {
             }
         }
 
-        if (!$err && !$waIds) $err = 'No valid recipient numbers found.';
+        // ----------------------------------------------------------------
+        // Restrict recipients to numbers that are ACTUALLY contacts on the
+        // selected channel. A "channel contact" = someone who has (or has
+        // had) a conversation on this specific channel. This prevents:
+        //   - Broadcasting to random typed-in numbers who never opted in
+        //     (accidental spam, WhatsApp policy risk).
+        //   - Broadcasting on channel B to numbers who only ever talked
+        //     to channel A (Cloud API 24h window would reject them
+        //     anyway; Baileys would succeed but the customer never gave
+        //     us permission on that number).
+        //
+        // Skipped numbers are counted so the operator can see how many
+        // fell out and why.
+        $skippedNotChannelContact = 0;
+        if (!$err && $waIds) {
+            $entered = array_keys($waIds);
+            $placeholders = implode(',', array_fill(0, count($entered), '?'));
+            $q = $db->prepare(
+                "SELECT DISTINCT ct.wa_id
+                 FROM contacts ct
+                 INNER JOIN conversations c
+                    ON c.contact_id = ct.id AND c.channel_id = ? AND c.company_id = ?
+                 WHERE ct.company_id = ? AND ct.platform = 'whatsapp'
+                   AND ct.wa_id IN ($placeholders)"
+            );
+            $q->execute(array_merge(
+                [$saved['channel_id'], $companyId, $companyId],
+                $entered
+            ));
+            $allowed = array_map(fn($r) => (string)$r['wa_id'], $q->fetchAll());
+            $allowedSet = array_flip($allowed);
+
+            $filtered = [];
+            foreach ($waIds as $wa => $name) {
+                if (isset($allowedSet[$wa])) {
+                    $filtered[$wa] = $name;
+                } else {
+                    $skippedNotChannelContact++;
+                }
+            }
+            $waIds = $filtered;
+        }
+
+        if (!$err && !$waIds) {
+            $err = $skippedNotChannelContact > 0
+                ? 'None of the numbers you entered are contacts on this channel yet. '
+                . 'Broadcasts can only be sent to numbers who have already messaged this channel. '
+                . 'Ask them to send you a message first, or pick a different channel.'
+                : 'No valid recipient numbers found.';
+        }
         if (!$err && count($waIds) > 5000) $err = 'Recipient limit is 5000 per blast.';
     }
 
@@ -181,10 +234,15 @@ if (is_post()) {
             $db->commit();
             log_activity($companyId, (int)$current_user['id'], 'broadcast_created',
                 'broadcast', $bid,
-                'recipients=' . count($waIds) . ' batch=' . $saved['batch_size']
+                'recipients=' . count($waIds) . ' skipped_not_channel_contact=' . $skippedNotChannelContact
+                . ' batch=' . $saved['batch_size']
                 . ' interval=' . $saved['interval_min'] . 'min'
                 . ' status=' . ($saved['start_now'] ? 'running' : 'draft'));
-            redirect('/admin/broadcast_view.php?id=' . $bid);
+            $qs = '/admin/broadcast_view.php?id=' . $bid;
+            if ($skippedNotChannelContact > 0) {
+                $qs .= '&skipped=' . $skippedNotChannelContact;
+            }
+            redirect($qs);
         } catch (Throwable $e) {
             if ($db->inTransaction()) $db->rollBack();
             error_log('[AiServe broadcast create] ' . $e->getMessage());
@@ -247,6 +305,10 @@ layout_start($current_user, 'New broadcast', 'broadcasts');
       <textarea name="numbers" rows="6" maxlength="200000"
                 placeholder="60123456789&#10;60198765432, 60112223333"><?= e($saved['numbers']) ?></textarea>
       <small class="muted">Digits only, with country code (e.g. 60 for Malaysia). Duplicates are removed automatically.</small>
+      <small class="muted" style="display:block; margin-top:4px;">
+        <strong>Note:</strong> only numbers that are already contacts on the selected channel
+        will receive the broadcast. Others are silently skipped and reported after save.
+      </small>
     </label>
 
     <label data-source="tag">Tag

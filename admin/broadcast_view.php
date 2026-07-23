@@ -58,6 +58,8 @@ $total   = (int)$b['total_recipients'];
 $pct     = $total > 0 ? min(100, (int)round((($sent + $failed) / $total) * 100)) : 0;
 $etaMin  = broadcast_eta_minutes($queued, (int)$b['batch_size'], (int)$b['batch_interval_min']);
 
+$skippedNotChannelContact = (int)($_GET['skipped'] ?? 0);
+
 layout_start($current_user, 'Broadcast · ' . $b['name'], 'broadcasts');
 ?>
 <div class="card">
@@ -65,6 +67,15 @@ layout_start($current_user, 'Broadcast · ' . $b['name'], 'broadcasts');
     <h2><?= e($b['name']) ?></h2>
     <?= status_badge($b['status']) ?>
   </div>
+
+  <?php if ($skippedNotChannelContact > 0): ?>
+    <div class="alert alert-info">
+      <strong><?= (int)$skippedNotChannelContact ?> number(s) skipped.</strong>
+      They aren't contacts on <em><?= e((string)$b['channel_name']) ?></em> yet —
+      broadcasts only go to numbers that have already messaged this channel.
+      Ask them to send a message first, or pick a different channel and try again.
+    </div>
+  <?php endif; ?>
 
   <div class="bcast-meta muted small">
     <strong>Channel:</strong> <?= e($b['channel_name']) ?> (<?= e($b['provider']) ?>)

@@ -303,6 +303,11 @@ function handle_incoming_message(array $company, array $channel, array $value, a
                 'dept=' . ($route['department_id'] ?? 'null')
                 . ' agent=' . ($route['assigned_user_id'] ?? 'null'));
         }
+        // Phase 28: if routing didn't assign anyone AND the contact belongs
+        // to a branch, round-robin among the branch's rotation pool.
+        // No-op when the contact has no branch or the branch's pool is empty.
+        require_once __DIR__ . '/../inc/branch_rotation.php';
+        branch_rotation_apply($db, $conversationId);
     } else {
         $conversationId = (int)$conv['id'];
         $newStatus = ($conv['status'] === 'closed') ? 'open' : $conv['status'];

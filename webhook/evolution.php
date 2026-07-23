@@ -371,6 +371,10 @@ function handle_aiserve_outgoing_ai(array $company, array $channel, array $paylo
             mb_substr($text ?: '(media)', 0, 500),
         ]);
         $conversationId = (int)$db->lastInsertId();
+        // Phase 28: branch-based round-robin fallback if routing didn't
+        // assign anyone and the contact belongs to a branch.
+        require_once __DIR__ . '/../inc/branch_rotation.php';
+        branch_rotation_apply($db, $conversationId);
     }
 
     // Insert the outbound AI message
@@ -619,6 +623,14 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
             $unread, $firstResp,
         ]);
         $conversationId = (int)$db->lastInsertId();
+        // Phase 28: branch-based round-robin fallback. Only fires for
+        // customer-inbound messages - bot echoes (fromMe=true) skip the
+        // rotation so we don't assign someone to a conversation the AI
+        // itself initiated.
+        if (!$fromMe) {
+            require_once __DIR__ . '/../inc/branch_rotation.php';
+            branch_rotation_apply($db, $conversationId);
+        }
     } else {
         $conversationId = (int)$conv['id'];
         $newStatus = ($conv['status'] === 'closed') ? 'open' : $conv['status'];

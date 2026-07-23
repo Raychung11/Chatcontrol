@@ -36,6 +36,11 @@ if (is_post()) {
     $channelIds = array_map('intval', (array)($_POST['channel_ids'] ?? []));
     $channelIds = array_values(array_unique(array_filter($channelIds, fn($i) => $i > 0)));
 
+    // Phase 28: branch_ids this user is in the rotation pool for.
+    // Applies to any role — a manager can be in the rotation too.
+    $branchIds  = array_map('intval', (array)($_POST['branch_ids'] ?? []));
+    $branchIds  = array_values(array_unique(array_filter($branchIds, fn($i) => $i > 0)));
+
     if (!in_array($role, ['super_admin', 'manager', 'agent'], true)) {
         $err = 'Invalid role.';
     } elseif ($name === '' || $email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -89,6 +94,7 @@ if (is_post()) {
                 // Channel access for agents. Wipe + re-insert so
                 // unchecking a box actually removes access.
                 user_edit_save_channels($db, $companyId, (int)$user['id'], $role, $channelIds);
+                user_edit_save_branches($db, $companyId, (int)$user['id'], $branchIds);
                 log_activity($companyId, (int)$current_user['id'], 'user_updated', 'user', (int)$user['id']);
                 $msg = 'User updated.';
                 // refresh
@@ -106,6 +112,7 @@ if (is_post()) {
                 ]);
                 $newId = (int)$db->lastInsertId();
                 user_edit_save_channels($db, $companyId, $newId, $role, $channelIds);
+                user_edit_save_branches($db, $companyId, $newId, $branchIds);
                 log_activity($companyId, (int)$current_user['id'], 'user_created', 'user', $newId);
                 redirect('/admin/user_edit.php?id=' . $newId);
             }
@@ -139,6 +146,27 @@ if ($user) {
     $ac = $db->prepare('SELECT channel_id FROM user_channels WHERE user_id = ?');
     $ac->execute([(int)$user['id']]);
     $allowedChannelIds = array_map('intval', array_column($ac->fetchAll(), 'channel_id'));
+}
+
+// Workspace branches + the ones this user is currently in the rotation
+// pool for. Only fetches if the branches table exists (phase 27 shipped)
+// so a partially-migrated deploy doesn't 500.
+$allBranches      = [];
+$rotationBranchIds = [];
+try {
+    $bStmt = $db->prepare(
+        'SELECT id, name FROM branches
+         WHERE company_id = ? AND status = "active" ORDER BY name'
+    );
+    $bStmt->execute([$companyId]);
+    $allBranches = $bStmt->fetchAll();
+    if ($user) {
+        $ub = $db->prepare('SELECT branch_id FROM user_branches WHERE user_id = ?');
+        $ub->execute([(int)$user['id']]);
+        $rotationBranchIds = array_map('intval', array_column($ub->fetchAll(), 'branch_id'));
+    }
+} catch (Throwable $e) {
+    // branches / user_branches missing — silently skip the section.
 }
 
 layout_start($current_user, $user ? 'Edit user' : 'New user', 'users');
@@ -210,6 +238,28 @@ layout_start($current_user, $user ? 'Edit user' : 'New user', 'users');
       <?php endif; ?>
     </fieldset>
 
+    <?php if ($allBranches): ?>
+    <fieldset style="border:1px solid var(--c-border); border-radius:8px; padding:14px; margin:0;">
+      <legend style="padding:0 6px; font-weight:600; font-size:14px;">Branch rotation</legend>
+      <p class="muted small" style="margin:0 0 10px;">
+        Tick the branches this person is part of. When a new customer conversation
+        opens for a contact belonging to a ticked branch, the system round-robins
+        assignment among everyone in that branch's pool.
+        Applies to any role — a manager can be in the rotation too.
+        Untick everything to remove the user from all rotations.
+      </p>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:6px;">
+        <?php foreach ($allBranches as $b): ?>
+          <label style="display:flex; align-items:center; gap:8px; font-weight:normal; font-size:14px;">
+            <input type="checkbox" name="branch_ids[]" value="<?= (int)$b['id'] ?>"
+                   <?= in_array((int)$b['id'], $rotationBranchIds, true) ? 'checked' : '' ?>>
+            <span><?= e($b['name']) ?></span>
+          </label>
+        <?php endforeach; ?>
+      </div>
+    </fieldset>
+    <?php endif; ?>
+
     <div>
       <button class="btn btn-primary" type="submit"><?= $user ? 'Save changes' : 'Create user' ?></button>
       <a class="btn" href="/admin/users.php">Cancel</a>
@@ -244,6 +294,39 @@ layout_start($current_user, $user ? 'Edit user' : 'New user', 'users');
  * belong to the same company before insert. Prevents URL tampering
  * from cross-linking users to foreign channels.
  */
+/**
+ * Persist the user's branch rotation memberships (phase 28). Same
+ * wipe-and-reinsert shape as user_edit_save_channels. Verifies every
+ * branch belongs to this workspace before insert.
+ */
+function user_edit_save_branches(PDO $db, int $companyId, int $userId, array $branchIds): void
+{
+    try {
+        if (!$branchIds) {
+            $db->prepare('DELETE FROM user_branches WHERE user_id = ?')->execute([$userId]);
+            return;
+        }
+        $placeholders = implode(',', array_fill(0, count($branchIds), '?'));
+        $verify = $db->prepare(
+            "SELECT id FROM branches WHERE company_id = ? AND id IN ($placeholders)"
+        );
+        $verify->execute(array_merge([$companyId], $branchIds));
+        $valid = array_map('intval', array_column($verify->fetchAll(), 'id'));
+        if (!$valid) {
+            $db->prepare('DELETE FROM user_branches WHERE user_id = ?')->execute([$userId]);
+            return;
+        }
+        $db->beginTransaction();
+        $db->prepare('DELETE FROM user_branches WHERE user_id = ?')->execute([$userId]);
+        $ins = $db->prepare('INSERT INTO user_branches (user_id, branch_id) VALUES (?, ?)');
+        foreach ($valid as $bid) $ins->execute([$userId, $bid]);
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        error_log('[AiServe user_edit_save_branches] ' . $e->getMessage());
+    }
+}
+
 function user_edit_save_channels(PDO $db, int $companyId, int $userId, string $role, array $channelIds): void
 {
     if ($role !== 'agent') {

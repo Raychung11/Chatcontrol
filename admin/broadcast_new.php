@@ -50,68 +50,73 @@ if (is_post()) {
         if ((int)$c['id'] === $saved['channel_id']) { $ch = $c; break; }
     }
 
-    // ---------- media attachment (optional) ----------
+    // ---------- media attachments (up to 4) ----------
     // Accept: image/*, video/mp4, application/pdf, audio/mpeg, audio/ogg.
     // Saved to uploads/broadcasts/<company_id>/ so the cron worker can
-    // read it later. Cleaned up after the broadcast finishes.
-    $mediaLocalPath = null;
-    $mediaKind      = null;
-    $mediaMime      = null;
-    $mediaFilename  = null;
-    if (!$err && !empty($_FILES['media']) && (int)($_FILES['media']['error'] ?? 4) === UPLOAD_ERR_OK) {
-        $file      = $_FILES['media'];
-        $mimeGuess = function_exists('mime_content_type') ? (string)mime_content_type($file['tmp_name']) : '';
-        // Map MIME -> WhatsApp media kind. Anything not in this map is rejected.
-        $kindMap = [
-            'image/jpeg'      => 'image',
-            'image/png'       => 'image',
-            'image/webp'      => 'image',
-            'image/gif'       => 'image',   // Meta converts to video, still works
-            'video/mp4'       => 'video',
-            'video/3gpp'      => 'video',
-            'application/pdf' => 'document',
-            'audio/mpeg'      => 'audio',
-            'audio/ogg'       => 'audio',
-            'audio/mp4'       => 'audio',
-        ];
-        if (!isset($kindMap[$mimeGuess])) {
-            $err = 'Unsupported file type (' . ($mimeGuess ?: 'unknown') . '). Allowed: JPG, PNG, WebP, GIF, MP4, PDF, MP3, OGG.';
-        } else {
-            $maxBytes = 16 * 1024 * 1024;  // 16 MB — WhatsApp caps images at 5 MB, video 16, doc 100. 16 is a safe MVP ceiling.
-            if ((int)$file['size'] > $maxBytes) {
-                $err = 'File too big (max 16 MB).';
-            } else {
-                $dir = __DIR__ . '/../uploads/broadcasts/' . $companyId;
-                if (!is_dir($dir) && !@mkdir($dir, 0775, true)) {
-                    $err = 'Could not create uploads/broadcasts/ — check permissions.';
-                } else {
-                    $ext = strtolower(pathinfo((string)$file['name'], PATHINFO_EXTENSION));
-                    if ($ext === '') {
-                        $ext = ['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp','image/gif'=>'gif',
-                                'video/mp4'=>'mp4','video/3gpp'=>'3gp','application/pdf'=>'pdf',
-                                'audio/mpeg'=>'mp3','audio/ogg'=>'ogg','audio/mp4'=>'m4a'][$mimeGuess] ?? 'bin';
-                    }
-                    $fname = 'bcast_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
-                    $dest  = $dir . '/' . $fname;
-                    if (!@move_uploaded_file($file['tmp_name'], $dest)) {
-                        $err = 'Could not save uploaded file.';
-                    } else {
-                        @chmod($dest, 0644);
-                        $mediaLocalPath = $dest;
-                        $mediaKind      = $kindMap[$mimeGuess];
-                        $mediaMime      = $mimeGuess;
-                        $mediaFilename  = basename((string)$file['name']);
-                    }
-                }
-            }
+    // read them later. Empty slots are silently skipped, so the operator
+    // can fill any 1..4 slots without ordering constraints.
+    $maxItems  = 4;
+    $mediaItems = [];   // [ ['path','kind','mime','filename'], ... ]
+    $kindMap = [
+        'image/jpeg'      => 'image',
+        'image/png'       => 'image',
+        'image/webp'      => 'image',
+        'image/gif'       => 'image',   // Meta converts to video, still works
+        'video/mp4'       => 'video',
+        'video/3gpp'      => 'video',
+        'application/pdf' => 'document',
+        'audio/mpeg'      => 'audio',
+        'audio/ogg'       => 'audio',
+        'audio/mp4'       => 'audio',
+    ];
+    for ($slot = 1; $slot <= $maxItems && !$err; $slot++) {
+        $key = 'media_' . $slot;
+        if (empty($_FILES[$key])) continue;
+        $upErr = (int)($_FILES[$key]['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($upErr === UPLOAD_ERR_NO_FILE) continue;
+        if ($upErr !== UPLOAD_ERR_OK) {
+            $err = 'Slot ' . $slot . ' upload failed (code ' . $upErr . '). Likely exceeds the server upload limit.';
+            break;
         }
-    } elseif (!empty($_FILES['media']) && (int)($_FILES['media']['error'] ?? 4) !== UPLOAD_ERR_NO_FILE) {
-        // A file was attempted but failed (too big for php.ini, etc.)
-        $err = 'Upload failed (code ' . (int)$_FILES['media']['error'] . '). File may exceed the server upload limit.';
+        $file      = $_FILES[$key];
+        $mimeGuess = function_exists('mime_content_type') ? (string)mime_content_type($file['tmp_name']) : '';
+        if (!isset($kindMap[$mimeGuess])) {
+            $err = 'Slot ' . $slot . ': unsupported file type (' . ($mimeGuess ?: 'unknown') . '). Allowed: JPG, PNG, WebP, GIF, MP4, PDF, MP3, OGG.';
+            break;
+        }
+        $maxBytes = 16 * 1024 * 1024;  // 16 MB — WA caps images at 5, video 16, doc 100. 16 is a safe MVP ceiling.
+        if ((int)$file['size'] > $maxBytes) {
+            $err = 'Slot ' . $slot . ': file too big (max 16 MB).';
+            break;
+        }
+        $dir = __DIR__ . '/../uploads/broadcasts/' . $companyId;
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true)) {
+            $err = 'Could not create uploads/broadcasts/ — check permissions.';
+            break;
+        }
+        $ext = strtolower(pathinfo((string)$file['name'], PATHINFO_EXTENSION));
+        if ($ext === '') {
+            $ext = ['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp','image/gif'=>'gif',
+                    'video/mp4'=>'mp4','video/3gpp'=>'3gp','application/pdf'=>'pdf',
+                    'audio/mpeg'=>'mp3','audio/ogg'=>'ogg','audio/mp4'=>'m4a'][$mimeGuess] ?? 'bin';
+        }
+        $fname = 'bcast_' . time() . '_' . $slot . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
+        $dest  = $dir . '/' . $fname;
+        if (!@move_uploaded_file($file['tmp_name'], $dest)) {
+            $err = 'Slot ' . $slot . ': could not save uploaded file.';
+            break;
+        }
+        @chmod($dest, 0644);
+        $mediaItems[] = [
+            'path'     => $dest,
+            'kind'     => $kindMap[$mimeGuess],
+            'mime'     => $mimeGuess,
+            'filename' => basename((string)$file['name']),
+        ];
     }
 
     if ($saved['name'] === '')               $err = 'Give the broadcast a name.';
-    elseif ($saved['message_text'] === '' && !$mediaLocalPath) $err = 'Enter message text or attach a file.';
+    elseif ($saved['message_text'] === '' && !$mediaItems) $err = 'Enter message text or attach at least one file.';
     elseif (mb_strlen($saved['message_text']) > 4000) $err = 'Message is too long (max 4000 chars).';
     elseif (!$ch)                            $err = 'Pick a channel.';
 
@@ -205,6 +210,14 @@ if (is_post()) {
     if (!$err) {
         try {
             $db->beginTransaction();
+            // First item is mirrored into the legacy broadcasts.media_*
+            // columns for backward compat with any code that hasn't been
+            // updated to read broadcast_media_items yet.
+            $legacyPath = $mediaItems[0]['path']     ?? null;
+            $legacyKind = $mediaItems[0]['kind']     ?? null;
+            $legacyMime = $mediaItems[0]['mime']     ?? null;
+            $legacyFile = $mediaItems[0]['filename'] ?? null;
+
             $ins = $db->prepare(
                 'INSERT INTO broadcasts
                     (company_id, channel_id, created_by_user_id, name, message_text,
@@ -215,12 +228,26 @@ if (is_post()) {
             $ins->execute([
                 $companyId, $saved['channel_id'], (int)$current_user['id'],
                 $saved['name'], $saved['message_text'] !== '' ? $saved['message_text'] : null,
-                $mediaLocalPath, $mediaKind, $mediaMime, $mediaFilename,
+                $legacyPath, $legacyKind, $legacyMime, $legacyFile,
                 $saved['start_now'] ? 'running' : 'draft',
                 $saved['batch_size'], $saved['interval_min'],
                 count($waIds),
             ]);
             $bid = (int)$db->lastInsertId();
+
+            // Persist every attachment as a broadcast_media_items row.
+            if ($mediaItems) {
+                $itemIns = $db->prepare(
+                    'INSERT INTO broadcast_media_items
+                        (broadcast_id, sequence, media_path, media_kind, media_mime_type, media_filename)
+                     VALUES (?, ?, ?, ?, ?, ?)'
+                );
+                foreach ($mediaItems as $idx => $m) {
+                    $itemIns->execute([
+                        $bid, $idx + 1, $m['path'], $m['kind'], $m['mime'], $m['filename'],
+                    ]);
+                }
+            }
 
             $rins = $db->prepare(
                 'INSERT IGNORE INTO broadcast_recipients
@@ -280,14 +307,27 @@ layout_start($current_user, 'New broadcast', 'broadcasts');
                 placeholder="Hi! This is …"><?= e($saved['message_text']) ?></textarea>
       <small class="muted">Plain text. If you attach an image/video/PDF below, this text becomes the caption WhatsApp shows under the media.</small>
     </label>
-    <label>Attach image or file <small class="muted">(optional)</small>
-      <input type="file" name="media"
-             accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,application/pdf,audio/mpeg,audio/ogg">
-      <small class="muted">
-        Images (JPG, PNG, WebP, GIF), video (MP4), PDF, audio (MP3, OGG).
-        Max 16&nbsp;MB. Same file goes to every recipient.
-      </small>
-    </label>
+    <fieldset style="border:1px solid var(--c-border); border-radius:8px; padding:16px; margin:0;">
+      <legend style="padding:0 6px; font-weight:600; font-size:14px;">
+        Attachments <small class="muted">(optional, up to 4)</small>
+      </legend>
+      <p class="muted small" style="margin:0 0 12px;">
+        Every recipient receives all attached files in order, followed by
+        your message text as the caption on the <strong>last</strong>
+        attachment. Images (JPG/PNG/WebP/GIF), video (MP4), PDF, audio
+        (MP3/OGG). Max 16&nbsp;MB each. Leave any slot empty to skip it.
+      </p>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px;">
+        <?php for ($slot = 1; $slot <= 4; $slot++): ?>
+          <label style="display:block; font-size:13px;">
+            Attachment <?= $slot ?>
+            <input type="file" name="media_<?= $slot ?>"
+                   accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,application/pdf,audio/mpeg,audio/ogg"
+                   style="display:block; margin-top:4px;">
+          </label>
+        <?php endfor; ?>
+      </div>
+    </fieldset>
 
     <h2>Recipients</h2>
     <div class="bcast-source">

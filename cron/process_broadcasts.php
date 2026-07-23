@@ -92,28 +92,56 @@ foreach ($broadcasts as $b) {
     $errCount  = 0;
     $messageText = (string)($b['message_text'] ?? '');
 
-    // Media attachment: upload once per batch, reuse the ref for every
-    // recipient. For Cloud API this is one Meta /media upload per batch
-    // (media_id is reusable). For Evolution and Chatbot the ref IS the
-    // local path so provider_upload_media() is effectively a no-op.
-    // If upload fails, we fall through to text-only rather than failing
-    // the whole batch.
-    $mediaPath = (string)($b['media_path']      ?? '');
-    $mediaKind = (string)($b['media_kind']      ?? '');
-    $mediaMime = (string)($b['media_mime_type'] ?? '');
-    $mediaName = (string)($b['media_filename']  ?? '');
-    $mediaRef  = null;
-    if ($mediaPath !== '' && is_file($mediaPath)) {
-        $up = provider_upload_media($channel, $mediaPath, $mediaMime);
-        if ($up['ok']) {
-            $mediaRef = $up['media_ref'];
-        } else {
-            echo "  bcast=$bid  media upload FAIL: " . substr((string)($up['error'] ?? ''), 0, 120)
-                 . " — sending caption-only\n";
-        }
-    } elseif ($mediaPath !== '') {
-        echo "  bcast=$bid  media file missing on disk: $mediaPath — sending caption-only\n";
+    // -----------------------------------------------------------
+    // Load the up-to-4 media items for this broadcast (phase 25).
+    // Fallback: if broadcast_media_items has no rows for this bid
+    // (broadcast created before the migration), use the legacy
+    // broadcasts.media_* columns as a single implicit item.
+    // -----------------------------------------------------------
+    $itemsStmt = $db->prepare(
+        'SELECT sequence, media_path, media_kind, media_mime_type, media_filename
+         FROM broadcast_media_items
+         WHERE broadcast_id = ?
+         ORDER BY sequence ASC'
+    );
+    $itemsStmt->execute([$bid]);
+    $items = $itemsStmt->fetchAll();
+    if (!$items && !empty($b['media_path'])) {
+        $items = [[
+            'sequence'        => 1,
+            'media_path'      => (string)$b['media_path'],
+            'media_kind'      => (string)($b['media_kind']      ?? ''),
+            'media_mime_type' => (string)($b['media_mime_type'] ?? ''),
+            'media_filename'  => (string)($b['media_filename']  ?? ''),
+        ]];
     }
+
+    // Upload each item once per batch (reused across every recipient).
+    // For Cloud API this is one Meta /media upload per item per batch.
+    // For Evolution / AiServe Chatbot it's a no-op that returns the
+    // local path unchanged. Items that fail to upload are dropped from
+    // this batch's send list rather than failing every recipient.
+    $mediaRefs = [];
+    foreach ($items as $it) {
+        $path = (string)$it['media_path'];
+        if ($path === '' || !is_file($path)) {
+            echo "  bcast=$bid  media file missing on disk: $path — skipping this item\n";
+            continue;
+        }
+        $up = provider_upload_media($channel, $path, (string)$it['media_mime_type']);
+        if (!$up['ok']) {
+            echo "  bcast=$bid  media upload FAIL (seq " . (int)$it['sequence'] . "): "
+                 . substr((string)($up['error'] ?? ''), 0, 120) . " — skipping this item\n";
+            continue;
+        }
+        $mediaRefs[] = [
+            'ref'      => $up['media_ref'],
+            'kind'     => (string)$it['media_kind'],
+            'mime'     => (string)$it['media_mime_type'],
+            'filename' => (string)$it['media_filename'],
+        ];
+    }
+    $lastIdx = count($mediaRefs) - 1;   // -1 if no media
 
     foreach ($batch as $r) {
         $rid = (int)$r['id'];
@@ -125,15 +153,32 @@ foreach ($broadcasts as $b) {
             $contactId      = $target['contact_id'];
             $conversationId = $target['conversation_id'];
 
-            // Send text OR media-with-caption depending on what the
-            // broadcast has attached. media_text becomes the caption.
-            if ($mediaRef !== null) {
-                $result = provider_send_media(
-                    $channel, $wa, $mediaKind, $mediaRef,
-                    $messageText !== '' ? $messageText : null,
-                    $mediaName !== '' ? $mediaName : null,
-                    $mediaMime !== '' ? $mediaMime : null
-                );
+            // Send each media item in order. Caption (message_text) goes
+            // on the LAST item so it appears at the bottom of the
+            // recipient's chat, right above the reply box — the standard
+            // WhatsApp multi-photo-with-caption pattern.
+            //
+            // If ANY item fails, mark the whole recipient as failed and
+            // stop the chain (don't try later items on the same recipient
+            // once one has failed — it usually means the number is bad).
+            $result = ['ok' => true, 'wa_message_id' => null, 'error' => null];
+            if ($mediaRefs) {
+                foreach ($mediaRefs as $idx => $m) {
+                    $isLast  = ($idx === $lastIdx);
+                    $caption = $isLast && $messageText !== '' ? $messageText : null;
+                    $step = provider_send_media(
+                        $channel, $wa, $m['kind'], $m['ref'],
+                        $caption,
+                        $m['filename'] !== '' ? $m['filename'] : null,
+                        $m['mime']     !== '' ? $m['mime']     : null
+                    );
+                    if (!$step['ok']) { $result = $step; break; }
+                    $result = $step;   // the LAST successful step is what we record
+                }
+                // If there were media items but caption never got attached
+                // (because none succeeded and message_text is set) send
+                // the text separately so the customer at least gets the
+                // message body. Only when at least one media step ran.
             } else {
                 $result = provider_send_text($channel, $wa, $messageText);
             }

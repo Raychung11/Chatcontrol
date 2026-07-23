@@ -122,31 +122,55 @@ layout_start($current_user, 'Broadcast · ' . $b['name'], 'broadcasts');
   <a class="btn" href="/admin/broadcasts.php">Back to list</a>
 </div>
 
+<?php
+  // Fetch attachments. Fall back to the legacy single-column shape if
+  // no items rows exist (broadcast created before phase 25).
+  $bmItems = $db->prepare(
+      'SELECT sequence, media_path, media_kind, media_mime_type, media_filename
+       FROM broadcast_media_items WHERE broadcast_id = ? ORDER BY sequence ASC'
+  );
+  $bmItems->execute([$bid]);
+  $bmItems = $bmItems->fetchAll();
+  if (!$bmItems && !empty($b['media_path'])) {
+      $bmItems = [[
+          'sequence' => 1,
+          'media_path' => (string)$b['media_path'],
+          'media_kind' => (string)$b['media_kind'],
+          'media_mime_type' => (string)$b['media_mime_type'],
+          'media_filename' => (string)$b['media_filename'],
+      ]];
+  }
+?>
 <div class="card">
-  <h2>Message text <?php if (!empty($b['media_path'])): ?><small class="muted">(sent as caption under the file)</small><?php endif; ?></h2>
+  <h2>Message text <?php if ($bmItems): ?><small class="muted">(sent as caption under the last attachment)</small><?php endif; ?></h2>
   <pre style="background:#f6f9fb; border:1px solid #e3e8ee; border-radius:8px; padding:12px; white-space:pre-wrap; margin:0;"><?= e($b['message_text'] ?? '') ?></pre>
 
-  <?php if (!empty($b['media_path'])): ?>
-    <h3 style="margin-top: 20px;">Attachment</h3>
-    <div style="display:flex; gap:14px; align-items:flex-start; padding:12px; background:#f6f9fb; border:1px solid #e3e8ee; border-radius:8px;">
-      <div style="font-size:28px;">
-        <?php
-          $kind = (string)($b['media_kind'] ?? '');
-          echo ['image'=>'🖼️','video'=>'🎬','document'=>'📄','audio'=>'🎵'][$kind] ?? '📎';
-        ?>
-      </div>
-      <div style="flex:1; min-width:0;">
-        <div><strong><?= e((string)($b['media_filename'] ?? basename((string)$b['media_path']))) ?></strong></div>
-        <div class="muted small">
-          <?= e(strtoupper($kind ?: '—')) ?>
-          <?php if (!empty($b['media_mime_type'])): ?> · <?= e((string)$b['media_mime_type']) ?><?php endif; ?>
-          <?php if (is_file((string)$b['media_path'])): ?>
-            · <?= e(number_format(filesize((string)$b['media_path']) / 1024, 1)) ?> KB
-          <?php else: ?>
-            · <span style="color:#c33;">file missing on disk</span>
-          <?php endif; ?>
+  <?php if ($bmItems): ?>
+    <h3 style="margin-top: 20px;">Attachments (<?= count($bmItems) ?>)</h3>
+    <div style="display:grid; gap:8px;">
+      <?php foreach ($bmItems as $it): ?>
+        <?php $kind = (string)($it['media_kind'] ?? ''); ?>
+        <div style="display:flex; gap:14px; align-items:center; padding:12px; background:#f6f9fb; border:1px solid #e3e8ee; border-radius:8px;">
+          <div style="min-width:32px; text-align:center; font-weight:700; color:var(--c-muted);">
+            #<?= (int)$it['sequence'] ?>
+          </div>
+          <div style="font-size:24px;">
+            <?= ['image'=>'🖼️','video'=>'🎬','document'=>'📄','audio'=>'🎵'][$kind] ?? '📎' ?>
+          </div>
+          <div style="flex:1; min-width:0;">
+            <div><strong><?= e((string)($it['media_filename'] ?: basename((string)$it['media_path']))) ?></strong></div>
+            <div class="muted small">
+              <?= e(strtoupper($kind ?: '—')) ?>
+              <?php if (!empty($it['media_mime_type'])): ?> · <?= e((string)$it['media_mime_type']) ?><?php endif; ?>
+              <?php if (is_file((string)$it['media_path'])): ?>
+                · <?= e(number_format(filesize((string)$it['media_path']) / 1024, 1)) ?> KB
+              <?php else: ?>
+                · <span style="color:#c33;">file missing on disk</span>
+              <?php endif; ?>
+            </div>
+          </div>
         </div>
-      </div>
+      <?php endforeach; ?>
     </div>
   <?php endif; ?>
 </div>

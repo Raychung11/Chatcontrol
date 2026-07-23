@@ -308,6 +308,12 @@ function handle_incoming_message(array $company, array $channel, array $value, a
         // No-op when the contact has no branch or the branch's pool is empty.
         require_once __DIR__ . '/../inc/branch_rotation.php';
         branch_rotation_apply($db, $conversationId);
+
+        // Phase 29: dispatch flows (start any 'new_conversation' matches,
+        // advance any waiting instance). Fires AFTER routing + rotation
+        // so if a flow reassigns via assign_dept it wins.
+        require_once __DIR__ . '/../inc/flow_engine.php';
+        flow_engine_dispatch($db, $companyId, $conversationId, (string)$body);
     } else {
         $conversationId = (int)$conv['id'];
         $newStatus = ($conv['status'] === 'closed') ? 'open' : $conv['status'];
@@ -327,6 +333,12 @@ function handle_incoming_message(array $company, array $channel, array $value, a
              WHERE id = ?'
         );
         $upd->execute([$newStatus, (int)$channel['id'], $previewText, $messageDate, $messageDate, $expiryDate, $conversationId]);
+
+        // Phase 29: advance any waiting flow instance for this
+        // conversation. Also picks up keyword-triggered flows that fire
+        // on subsequent messages, not just the first one.
+        require_once __DIR__ . '/../inc/flow_engine.php';
+        flow_engine_dispatch($db, $companyId, $conversationId, (string)$body);
     }
 
     // Insert message (de-duped on wa_message_id unique key)

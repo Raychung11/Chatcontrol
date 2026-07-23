@@ -57,6 +57,7 @@ $role   = $current_user['role'] ?? 'agent';
       <a href="/admin/departments.php" class="<?= $active === 'departments' ? 'active' : '' ?>">Departments</a>
       <a href="/admin/branches.php" class="<?= $active === 'branches' ? 'active' : '' ?>">Branches</a>
       <a href="/admin/routing.php" class="<?= $active === 'routing' ? 'active' : '' ?>">Routing rules</a>
+      <a href="/admin/flows.php" class="<?= $active === 'flows' ? 'active' : '' ?>">Message flows</a>
       <a href="/admin/channels.php" class="<?= $active === 'channels' ? 'active' : '' ?>">Channels</a>
       <a href="/admin/settings.php" class="<?= $active === 'settings' ? 'active' : '' ?>">Settings</a>
       <a href="/admin/ai_settings.php" class="<?= $active === 'ai_settings' ? 'active' : '' ?>">AI Settings</a>

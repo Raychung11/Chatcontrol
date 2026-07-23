@@ -630,6 +630,10 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
         if (!$fromMe) {
             require_once __DIR__ . '/../inc/branch_rotation.php';
             branch_rotation_apply($db, $conversationId);
+
+            // Phase 29: dispatch flows for the new inbound.
+            require_once __DIR__ . '/../inc/flow_engine.php';
+            flow_engine_dispatch($db, $companyId, $conversationId, (string)$body);
         }
     } else {
         $conversationId = (int)$conv['id'];
@@ -664,6 +668,10 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
                  WHERE id = ?'
             );
             $upd->execute([$newStatus, (int)$channel['id'], $previewText, $messageDate, $messageDate, $expiryDate, $conversationId]);
+            // Phase 29: advance any waiting flow / fire keyword triggers
+            // on subsequent inbound messages.
+            require_once __DIR__ . '/../inc/flow_engine.php';
+            flow_engine_dispatch($db, $companyId, $conversationId, (string)$body);
         }
     }
 

@@ -1,0 +1,438 @@
+<?php
+/**
+ * Message flow execution engine (phase 29).
+ *
+ * Two entry points:
+ *   flow_engine_start(flow, conversation)       -- new instance
+ *   flow_engine_advance_for_conversation(...)   -- customer replied
+ *
+ * Everything else is internal to this file. Node execution is a plain
+ * dispatcher on node_type; adding a new node type is: one case in the
+ * switch, plus its config shape documented in migration_phase29.sql.
+ *
+ * Safety rails:
+ *   - MAX_STEPS_PER_TICK caps how many nodes we walk in a single call so
+ *     a mis-authored flow (send_message -> send_message -> ... loop) can
+ *     never runaway.
+ *   - Any node throwing sets the instance to status='failed' with the
+ *     error_message; the conversation is otherwise untouched so agents
+ *     can still take over manually.
+ */
+
+require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/channels.php';
+require_once __DIR__ . '/provider.php';
+
+if (!defined('FLOW_MAX_STEPS_PER_TICK')) {
+    define('FLOW_MAX_STEPS_PER_TICK', 20);
+}
+
+// ---------------------------------------------------------------------
+// Trigger dispatch
+// ---------------------------------------------------------------------
+
+/**
+ * Called by the webhook after a new conversation is created OR after a
+ * new inbound message lands on an existing conversation. Starts any
+ * matching flows for the workspace that aren't already running for
+ * this conversation.
+ */
+function flow_engine_dispatch(PDO $db, int $companyId, int $conversationId, string $customerMessage): void
+{
+    // 1. Advance any waiting instance for this conversation first — the
+    //    customer's reply feeds into a wait_reply that was pending.
+    $waiting = $db->prepare(
+        'SELECT * FROM flow_instances
+         WHERE conversation_id = ? AND status = "waiting"
+         ORDER BY id ASC'
+    );
+    $waiting->execute([$conversationId]);
+    foreach ($waiting->fetchAll() as $inst) {
+        try {
+            flow_engine_advance_instance($db, $inst, $customerMessage);
+        } catch (Throwable $e) {
+            flow_engine_fail_instance($db, (int)$inst['id'], $e->getMessage());
+        }
+    }
+
+    // 2. Fire any 'new_conversation' or 'keyword' flows whose triggers match.
+    $triggers = $db->prepare(
+        'SELECT * FROM flows
+         WHERE company_id = ? AND status = "active"
+           AND trigger_type IN ("new_conversation", "keyword")'
+    );
+    $triggers->execute([$companyId]);
+
+    // Existing running/waiting/completed instances for this conversation,
+    // so we don't restart a flow that already handled this customer.
+    $seen = $db->prepare(
+        'SELECT flow_id FROM flow_instances WHERE conversation_id = ?'
+    );
+    $seen->execute([$conversationId]);
+    $seenFlowIds = array_map('intval', array_column($seen->fetchAll(), 'flow_id'));
+
+    // Is this conversation brand-new (no prior inbound message)?
+    // Only "new_conversation" triggers fire on brand-new; keyword fires
+    // on any inbound.
+    $msgCount = (int)$db->query(
+        "SELECT COUNT(*) FROM messages
+         WHERE conversation_id = " . $conversationId . " AND direction = 'incoming'"
+    )->fetchColumn();
+    $isNewConversation = ($msgCount <= 1);
+
+    foreach ($triggers->fetchAll() as $flow) {
+        if (in_array((int)$flow['id'], $seenFlowIds, true)) continue;
+
+        if ($flow['trigger_type'] === 'new_conversation' && !$isNewConversation) {
+            continue;
+        }
+        if ($flow['trigger_type'] === 'keyword') {
+            if (!flow_engine_matches_keyword((string)$flow['trigger_keywords'], $customerMessage)) {
+                continue;
+            }
+        }
+        try {
+            flow_engine_start($db, (int)$flow['id'], $conversationId, $customerMessage);
+        } catch (Throwable $e) {
+            error_log('[AiServe flow_engine_dispatch] ' . $e->getMessage());
+        }
+    }
+}
+
+function flow_engine_matches_keyword(string $keywords, string $message): bool
+{
+    $kws = array_filter(array_map('trim', explode(',', $keywords)));
+    if (!$kws) return false;
+    $needle = mb_strtolower($message);
+    foreach ($kws as $kw) {
+        if ($kw !== '' && mb_stripos($needle, mb_strtolower($kw)) !== false) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------
+// Instance lifecycle
+// ---------------------------------------------------------------------
+
+function flow_engine_start(PDO $db, int $flowId, int $conversationId, string $initialMessage): ?int
+{
+    $fStmt = $db->prepare('SELECT * FROM flows WHERE id = ? LIMIT 1');
+    $fStmt->execute([$flowId]);
+    $flow = $fStmt->fetch();
+    if (!$flow || $flow['status'] !== 'active') return null;
+    if (!$flow['entry_node_id']) return null;
+
+    // Idempotent: unique key (flow_id, conversation_id) means a second
+    // attempt collides. Silently no-op.
+    try {
+        $ins = $db->prepare(
+            'INSERT INTO flow_instances
+                (flow_id, conversation_id, current_node_id, status, state)
+             VALUES (?, ?, ?, "running", ?)'
+        );
+        $ins->execute([
+            $flowId, $conversationId, (int)$flow['entry_node_id'],
+            json_encode(['vars' => [], 'last_reply' => $initialMessage], JSON_UNESCAPED_UNICODE),
+        ]);
+    } catch (PDOException $e) {
+        if ((int)$e->errorInfo[1] === 1062) return null;
+        throw $e;
+    }
+    $instanceId = (int)$db->lastInsertId();
+
+    log_activity(
+        (int)$flow['company_id'], null,
+        'flow_started', 'flow', $flowId,
+        'instance=' . $instanceId . ' conv=' . $conversationId
+    );
+
+    // Re-fetch so the walker has the full row shape.
+    $sel = $db->prepare('SELECT * FROM flow_instances WHERE id = ?');
+    $sel->execute([$instanceId]);
+    $inst = $sel->fetch();
+    try {
+        flow_engine_walk($db, $inst);
+    } catch (Throwable $e) {
+        flow_engine_fail_instance($db, $instanceId, $e->getMessage());
+    }
+    return $instanceId;
+}
+
+function flow_engine_advance_instance(PDO $db, array $inst, string $customerReply): void
+{
+    $state = flow_engine_state($inst);
+    $state['last_reply'] = $customerReply;
+
+    // The instance was waiting on a wait_reply node. Save the reply into
+    // state[vars][var_name] if the node had one configured.
+    $nodeId = (int)$inst['current_node_id'];
+    $node   = flow_engine_node($db, $nodeId);
+    if ($node && $node['node_type'] === 'wait_reply') {
+        $cfg = flow_engine_config($node);
+        $varName = trim((string)($cfg['var_name'] ?? ''));
+        if ($varName !== '') {
+            $state['vars'][$varName] = $customerReply;
+        }
+        // Advance to the next node.
+        $nextId = (int)($node['next_node_id'] ?? 0);
+        flow_engine_persist_state($db, (int)$inst['id'], $state, $nextId, 'running');
+        $inst['status']          = 'running';
+        $inst['state']           = json_encode($state, JSON_UNESCAPED_UNICODE);
+        $inst['current_node_id'] = $nextId;
+    }
+    flow_engine_walk($db, $inst);
+}
+
+/**
+ * Walk the instance forward: run nodes until we hit a wait_reply or end.
+ */
+function flow_engine_walk(PDO $db, array $inst): void
+{
+    $steps = 0;
+    while ($steps++ < FLOW_MAX_STEPS_PER_TICK) {
+        $nodeId = (int)$inst['current_node_id'];
+        if (!$nodeId) {
+            flow_engine_complete_instance($db, (int)$inst['id']);
+            return;
+        }
+        $node = flow_engine_node($db, $nodeId);
+        if (!$node) {
+            flow_engine_fail_instance($db, (int)$inst['id'], 'Node not found: ' . $nodeId);
+            return;
+        }
+        $result = flow_engine_execute_node($db, $inst, $node);
+        // execute_node returns the next node id, 0 = end, or -1 = wait
+        if ($result === -1) {
+            // Wait state — already persisted by the node handler.
+            return;
+        }
+        if ($result === 0) {
+            flow_engine_complete_instance($db, (int)$inst['id']);
+            return;
+        }
+        // Continue walking with the new current node.
+        $state = flow_engine_state($inst);
+        flow_engine_persist_state($db, (int)$inst['id'], $state, $result, 'running');
+        $inst['current_node_id'] = $result;
+    }
+    flow_engine_fail_instance($db, (int)$inst['id'], 'Max walk depth exceeded (possible loop)');
+}
+
+// ---------------------------------------------------------------------
+// Node execution
+// Returns:
+//   >0   : next node id to walk to
+//    0   : done (transition to completed)
+//   -1   : suspended (waiting for external event, already persisted)
+// ---------------------------------------------------------------------
+function flow_engine_execute_node(PDO $db, array $inst, array $node): int
+{
+    $state = flow_engine_state($inst);
+    $cfg   = flow_engine_config($node);
+
+    switch ($node['node_type']) {
+
+        case 'send_message':
+            $text = flow_engine_render((string)($cfg['text'] ?? ''), $state);
+            if ($text !== '') {
+                $conv = flow_engine_conversation($db, (int)$inst['conversation_id']);
+                if ($conv) {
+                    $channel = channel_by_id((int)($conv['channel_id'] ?? 0));
+                    if ($channel) {
+                        $result = provider_send_text($channel, (string)$conv['wa_id'], $text);
+                        flow_engine_log_outgoing_message($db, $conv, $text, $result);
+                    }
+                }
+            }
+            return (int)($node['next_node_id'] ?? 0);
+
+        case 'wait_reply':
+            // Persist wait state and suspend. flow_engine_advance_instance
+            // will pick us back up when the customer replies.
+            $db->prepare(
+                'UPDATE flow_instances
+                 SET status = "waiting", waiting_since = NOW()
+                 WHERE id = ?'
+            )->execute([(int)$inst['id']]);
+            return -1;
+
+        case 'branch':
+            // Evaluate every outgoing edge in sort_order. First keyword
+            // match against last_reply wins; the "default" edge is the
+            // fallback if none matched.
+            $edges = flow_engine_edges_from($db, (int)$node['id']);
+            $reply = mb_strtolower((string)($state['last_reply'] ?? ''));
+            $default = 0;
+            foreach ($edges as $e) {
+                if ($e['condition_type'] === 'default') {
+                    $default = (int)$e['to_node_id'];
+                    continue;
+                }
+                if ($e['condition_type'] === 'keyword') {
+                    $kw = mb_strtolower(trim((string)$e['condition_value']));
+                    if ($kw !== '' && mb_stripos($reply, $kw) !== false) {
+                        return (int)$e['to_node_id'];
+                    }
+                }
+            }
+            return $default;
+
+        case 'assign_dept':
+            $deptId = (int)($cfg['department_id'] ?? 0);
+            if ($deptId > 0) {
+                $db->prepare('UPDATE conversations SET department_id = ? WHERE id = ?')
+                   ->execute([$deptId, (int)$inst['conversation_id']]);
+            }
+            return (int)($node['next_node_id'] ?? 0);
+
+        case 'save_note':
+            $text = flow_engine_render((string)($cfg['template'] ?? ''), $state);
+            if ($text !== '') {
+                $conv = flow_engine_conversation($db, (int)$inst['conversation_id']);
+                if ($conv) {
+                    $db->prepare(
+                        'INSERT INTO internal_notes
+                            (company_id, conversation_id, user_id, note_text)
+                         VALUES (?, ?, NULL, ?)'
+                    )->execute([(int)$conv['company_id'], (int)$conv['id'], $text]);
+                }
+            }
+            return (int)($node['next_node_id'] ?? 0);
+
+        case 'end':
+        default:
+            return 0;
+    }
+}
+
+// ---------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------
+
+function flow_engine_state(array $inst): array
+{
+    $s = json_decode((string)($inst['state'] ?? ''), true);
+    if (!is_array($s)) $s = [];
+    if (!isset($s['vars']) || !is_array($s['vars'])) $s['vars'] = [];
+    return $s;
+}
+
+function flow_engine_config(array $node): array
+{
+    $c = json_decode((string)($node['config'] ?? ''), true);
+    return is_array($c) ? $c : [];
+}
+
+function flow_engine_node(PDO $db, int $nodeId): ?array
+{
+    $s = $db->prepare('SELECT * FROM flow_nodes WHERE id = ? LIMIT 1');
+    $s->execute([$nodeId]);
+    return $s->fetch() ?: null;
+}
+
+function flow_engine_edges_from(PDO $db, int $nodeId): array
+{
+    $s = $db->prepare(
+        'SELECT * FROM flow_edges WHERE from_node_id = ? ORDER BY sort_order ASC, id ASC'
+    );
+    $s->execute([$nodeId]);
+    return $s->fetchAll();
+}
+
+function flow_engine_conversation(PDO $db, int $conversationId): ?array
+{
+    $s = $db->prepare(
+        'SELECT c.*, ct.wa_id
+         FROM conversations c
+         INNER JOIN contacts ct ON ct.id = c.contact_id
+         WHERE c.id = ? LIMIT 1'
+    );
+    $s->execute([$conversationId]);
+    return $s->fetch() ?: null;
+}
+
+function flow_engine_persist_state(PDO $db, int $instanceId, array $state, int $nextNodeId, string $status): void
+{
+    $db->prepare(
+        'UPDATE flow_instances
+         SET current_node_id = ?, status = ?, state = ?
+         WHERE id = ?'
+    )->execute([
+        $nextNodeId > 0 ? $nextNodeId : null,
+        $status,
+        json_encode($state, JSON_UNESCAPED_UNICODE),
+        $instanceId,
+    ]);
+}
+
+function flow_engine_complete_instance(PDO $db, int $instanceId): void
+{
+    $db->prepare(
+        'UPDATE flow_instances
+         SET status = "completed", completed_at = NOW()
+         WHERE id = ?'
+    )->execute([$instanceId]);
+}
+
+function flow_engine_fail_instance(PDO $db, int $instanceId, string $errorMessage): void
+{
+    error_log('[AiServe flow_engine] instance ' . $instanceId . ' failed: ' . $errorMessage);
+    $db->prepare(
+        'UPDATE flow_instances
+         SET status = "failed", error_message = ?, completed_at = NOW()
+         WHERE id = ?'
+    )->execute([mb_substr($errorMessage, 0, 500), $instanceId]);
+}
+
+/**
+ * Simple {{var}} substitution against state.vars, e.g.
+ *   "Hi {{customer_name}}!" + vars.customer_name = "Vicky"
+ *      -> "Hi Vicky!"
+ * Unknown vars leave the placeholder in place so template errors are
+ * visible instead of silently blanked.
+ */
+function flow_engine_render(string $template, array $state): string
+{
+    if ($template === '') return '';
+    $vars = $state['vars'] ?? [];
+    return (string)preg_replace_callback('/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/', function ($m) use ($vars) {
+        return array_key_exists($m[1], $vars) ? (string)$vars[$m[1]] : $m[0];
+    }, $template);
+}
+
+/**
+ * Persist the outgoing message that a send_message node emitted so the
+ * inbox shows a proper bubble and the AI history stays intact.
+ * sender_type = 'system' to distinguish flow-emitted messages from
+ * agent/AI ones.
+ */
+function flow_engine_log_outgoing_message(PDO $db, array $conv, string $text, array $result): void
+{
+    try {
+        $ins = $db->prepare(
+            'INSERT INTO messages
+                (company_id, channel_id, conversation_id, contact_id, sender_type,
+                 wa_message_id, direction, message_type, message_text, status, sent_at)
+             VALUES (?, ?, ?, ?, "system", ?, "outgoing", "text", ?,
+                     ?, ?)'
+        );
+        $ins->execute([
+            (int)$conv['company_id'], (int)($conv['channel_id'] ?? 0), (int)$conv['id'],
+            (int)$conv['contact_id'],
+            $result['wa_message_id'] ?? null,
+            $text,
+            $result['ok'] ? 'sent' : 'failed',
+            $result['ok'] ? date('Y-m-d H:i:s') : null,
+        ]);
+        $db->prepare(
+            'UPDATE conversations
+             SET last_message_text = ?, last_message_at = NOW(),
+                 first_response_at = COALESCE(first_response_at, NOW())
+             WHERE id = ?'
+        )->execute([mb_substr($text, 0, 500), (int)$conv['id']]);
+    } catch (Throwable $e) {
+        error_log('[AiServe flow_engine] log_outgoing_message: ' . $e->getMessage());
+    }
+}

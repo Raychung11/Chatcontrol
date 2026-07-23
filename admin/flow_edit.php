@@ -1,0 +1,396 @@
+<?php
+/**
+ * Flow editor — form-based (visual canvas ships in a follow-up).
+ *
+ * Layout:
+ *   1. Trigger + status form (name, trigger_type, keywords, entry node).
+ *   2. Nodes list — one row per node. Each row edits its own node
+ *      (type, config, next_node).
+ *   3. Branch edges — for any branch node, a secondary sub-form to
+ *      manage its outgoing edges (keyword / default -> to_node_id).
+ *   4. "Add node" button at the bottom.
+ *
+ * All mutations go through this single page; save = full form POST.
+ * The engine reads the same rows the next time a trigger fires.
+ */
+
+require_once __DIR__ . '/../inc/layout.php';
+
+$current_user = require_role(['super_admin', 'manager']);
+$companyId    = (int)$current_user['company_id'];
+$db           = aiserve_db();
+
+$flowId = (int)($_GET['id'] ?? 0);
+if ($flowId <= 0) redirect('/admin/flows.php');
+
+$fStmt = $db->prepare('SELECT * FROM flows WHERE id = ? AND company_id = ? LIMIT 1');
+$fStmt->execute([$flowId, $companyId]);
+$flow = $fStmt->fetch();
+if (!$flow) { http_response_code(404); exit('Flow not found.'); }
+
+$msg = '';
+$err = '';
+
+if (is_post()) {
+    csrf_check();
+    $action = (string)($_POST['action'] ?? '');
+
+    if ($action === 'save_flow') {
+        $name    = trim((string)($_POST['name'] ?? ''));
+        $trigger = (string)($_POST['trigger_type'] ?? 'new_conversation');
+        $kws     = trim((string)($_POST['trigger_keywords'] ?? ''));
+        $entryId = (int)($_POST['entry_node_id'] ?? 0);
+        $status  = (string)($_POST['status'] ?? 'draft');
+        if (!in_array($trigger, ['new_conversation','keyword','manual'], true)) $trigger = 'new_conversation';
+        if (!in_array($status,  ['draft','active','paused'], true)) $status = 'draft';
+        if ($name === '') { $err = 'Name is required.'; }
+        else {
+            $db->prepare(
+                'UPDATE flows
+                 SET name = ?, trigger_type = ?, trigger_keywords = ?, entry_node_id = ?, status = ?
+                 WHERE id = ? AND company_id = ?'
+            )->execute([$name, $trigger, $kws ?: null, $entryId ?: null, $status, $flowId, $companyId]);
+            $msg = 'Flow saved.';
+        }
+    } elseif ($action === 'add_node') {
+        $ins = $db->prepare(
+            'INSERT INTO flow_nodes (flow_id, node_type, config) VALUES (?, "send_message", ?)'
+        );
+        $ins->execute([$flowId, json_encode(['text' => 'Hi 👋'], JSON_UNESCAPED_UNICODE)]);
+        $msg = 'Node added.';
+    } elseif ($action === 'save_node') {
+        $nodeId = (int)($_POST['node_id'] ?? 0);
+        $type   = (string)($_POST['node_type'] ?? 'send_message');
+        $label  = trim((string)($_POST['label'] ?? '')) ?: null;
+        $nextId = (int)($_POST['next_node_id'] ?? 0);
+        if (!in_array($type, ['send_message','wait_reply','branch','assign_dept','save_note','end'], true)) {
+            $type = 'send_message';
+        }
+        $cfg = flow_edit_pack_config($type, $_POST);
+        $db->prepare(
+            'UPDATE flow_nodes
+             SET node_type = ?, label = ?, config = ?, next_node_id = ?
+             WHERE id = ? AND flow_id = ?'
+        )->execute([$type, $label, $cfg, $nextId ?: null, $nodeId, $flowId]);
+        $msg = 'Node saved.';
+    } elseif ($action === 'delete_node') {
+        $nodeId = (int)($_POST['node_id'] ?? 0);
+        $db->prepare('DELETE FROM flow_nodes WHERE id = ? AND flow_id = ?')
+           ->execute([$nodeId, $flowId]);
+        // Clear entry_node_id if it pointed here.
+        $db->prepare('UPDATE flows SET entry_node_id = NULL WHERE id = ? AND entry_node_id = ?')
+           ->execute([$flowId, $nodeId]);
+        $msg = 'Node deleted.';
+    } elseif ($action === 'save_edges') {
+        $nodeId = (int)($_POST['node_id'] ?? 0);
+        // Wipe + re-insert branch edges from the sub-form.
+        $db->prepare('DELETE FROM flow_edges WHERE from_node_id = ?')->execute([$nodeId]);
+        $ins = $db->prepare(
+            'INSERT INTO flow_edges (flow_id, from_node_id, to_node_id, condition_type, condition_value, sort_order)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $rows = (array)($_POST['edge'] ?? []);
+        foreach ($rows as $i => $r) {
+            $toId  = (int)($r['to_node_id'] ?? 0);
+            $ctype = (string)($r['condition_type'] ?? 'keyword');
+            $cval  = trim((string)($r['condition_value'] ?? ''));
+            if ($toId <= 0) continue;
+            if (!in_array($ctype, ['keyword','default'], true)) $ctype = 'keyword';
+            if ($ctype === 'keyword' && $cval === '') continue;
+            $ins->execute([$flowId, $nodeId, $toId, $ctype, $cval ?: null, (int)$i]);
+        }
+        $msg = 'Branch edges saved.';
+    }
+
+    if ($msg) {
+        // Reload the flow so the just-saved fields render.
+        $fStmt->execute([$flowId, $companyId]);
+        $flow = $fStmt->fetch();
+    }
+}
+
+// Load nodes + departments + edges-by-node.
+$nodes = $db->prepare('SELECT * FROM flow_nodes WHERE flow_id = ? ORDER BY id ASC');
+$nodes->execute([$flowId]);
+$nodes = $nodes->fetchAll();
+
+$edges = $db->prepare('SELECT * FROM flow_edges WHERE flow_id = ? ORDER BY from_node_id, sort_order');
+$edges->execute([$flowId]);
+$edgesByNode = [];
+foreach ($edges->fetchAll() as $e) {
+    $edgesByNode[(int)$e['from_node_id']][] = $e;
+}
+
+$depts = $db->prepare('SELECT id, name FROM departments WHERE company_id = ? AND status = "active" ORDER BY name');
+$depts->execute([$companyId]);
+$depts = $depts->fetchAll();
+
+layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
+?>
+<div class="card">
+  <div class="card-head">
+    <h2>Edit flow · <?= e($flow['name']) ?></h2>
+    <a class="btn" href="/admin/flows.php">← All flows</a>
+  </div>
+  <?php if ($msg): ?><div class="alert alert-success"><?= e($msg) ?></div><?php endif; ?>
+  <?php if ($err): ?><div class="alert alert-error"><?= e($err) ?></div><?php endif; ?>
+
+  <form method="post" class="form-grid">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="save_flow">
+    <label>Name
+      <input type="text" name="name" required maxlength="150" value="<?= e($flow['name']) ?>">
+    </label>
+    <label>Trigger
+      <select name="trigger_type" onchange="document.getElementById('kw-row').style.display = (this.value === 'keyword') ? '' : 'none';">
+        <?php foreach (['new_conversation' => 'When a new conversation opens',
+                        'keyword'          => 'When a message contains keyword(s)',
+                        'manual'           => 'Manual (started from the chat by an agent)'] as $k => $v): ?>
+          <option value="<?= $k ?>" <?= $flow['trigger_type'] === $k ? 'selected' : '' ?>><?= e($v) ?></option>
+        <?php endforeach; ?>
+      </select>
+    </label>
+    <div id="kw-row" style="<?= $flow['trigger_type'] === 'keyword' ? '' : 'display:none;' ?>">
+      <label>Trigger keywords
+        <input type="text" name="trigger_keywords" maxlength="500" value="<?= e((string)($flow['trigger_keywords'] ?? '')) ?>"
+               placeholder="menu, help, sales">
+        <small class="muted">Comma-separated. Case-insensitive substring match on the customer's message.</small>
+      </label>
+    </div>
+    <label>Entry node <small class="muted">(the first step the flow runs)</small>
+      <select name="entry_node_id">
+        <option value="0">— pick a node —</option>
+        <?php foreach ($nodes as $n): ?>
+          <option value="<?= (int)$n['id'] ?>" <?= (int)$flow['entry_node_id'] === (int)$n['id'] ? 'selected' : '' ?>>
+            #<?= (int)$n['id'] ?> <?= e(flow_edit_node_label($n)) ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
+    </label>
+    <label>Status
+      <select name="status">
+        <?php foreach (['draft' => 'Draft (not running)',
+                        'active' => 'Active (running)',
+                        'paused' => 'Paused'] as $k => $v): ?>
+          <option value="<?= $k ?>" <?= $flow['status'] === $k ? 'selected' : '' ?>><?= e($v) ?></option>
+        <?php endforeach; ?>
+      </select>
+    </label>
+    <div>
+      <button class="btn btn-primary" type="submit">Save flow</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>Nodes</h2>
+    <form method="post" style="display:inline">
+      <?= csrf_field() ?>
+      <input type="hidden" name="action" value="add_node">
+      <button type="submit" class="btn btn-primary">+ Add node</button>
+    </form>
+  </div>
+  <p class="muted small">
+    Each node is a step. Use <code>{{var_name}}</code> in text templates to inject
+    something the customer replied earlier (variables come from
+    <em>Wait for reply</em> nodes).
+  </p>
+
+  <?php if (!$nodes): ?>
+    <p class="muted">No nodes yet — click <strong>+ Add node</strong>.</p>
+  <?php endif; ?>
+
+  <?php foreach ($nodes as $n): ?>
+    <?php $cfg = json_decode((string)($n['config'] ?? ''), true) ?: []; ?>
+    <div style="border:1px solid var(--c-border); border-radius:8px; padding:14px; margin: 10px 0;">
+      <form method="post" class="form-grid">
+        <?= csrf_field() ?>
+        <input type="hidden" name="action" value="save_node">
+        <input type="hidden" name="node_id" value="<?= (int)$n['id'] ?>">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div><strong>Node #<?= (int)$n['id'] ?></strong>
+            <?php if ((int)$flow['entry_node_id'] === (int)$n['id']): ?>
+              <span class="badge badge-open" style="margin-left:6px;">entry</span>
+            <?php endif; ?>
+          </div>
+          <div>
+            <label style="display:inline-flex; align-items:center; gap:6px;">
+              Type
+              <select name="node_type" onchange="this.form.submit()">
+                <?php foreach ([
+                    'send_message' => 'Send message',
+                    'wait_reply'   => 'Wait for reply',
+                    'branch'       => 'Branch',
+                    'assign_dept'  => 'Assign to department',
+                    'save_note'    => 'Save internal note',
+                    'end'          => 'End',
+                ] as $k => $v): ?>
+                  <option value="<?= $k ?>" <?= $n['node_type'] === $k ? 'selected' : '' ?>><?= e($v) ?></option>
+                <?php endforeach; ?>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <label>Label <small class="muted">(optional, for your reference)</small>
+          <input type="text" name="label" maxlength="120" value="<?= e((string)($n['label'] ?? '')) ?>"
+                 placeholder="e.g. Ask for name">
+        </label>
+
+        <?php switch ($n['node_type']):
+          case 'send_message': ?>
+            <label>Message text
+              <textarea name="text" rows="3" maxlength="4000"
+                        placeholder="Hi! What's your name?"><?= e((string)($cfg['text'] ?? '')) ?></textarea>
+              <small class="muted">Supports <code>{{var_name}}</code> from earlier Wait-for-reply nodes.</small>
+            </label>
+            <?php break; ?>
+
+          <?php case 'wait_reply': ?>
+            <label>Save the reply into variable
+              <input type="text" name="var_name" maxlength="60"
+                     value="<?= e((string)($cfg['var_name'] ?? '')) ?>"
+                     placeholder="customer_name">
+              <small class="muted">letters, digits, underscore. Reference it later as <code>{{customer_name}}</code>.</small>
+            </label>
+            <?php break; ?>
+
+          <?php case 'assign_dept': ?>
+            <label>Department
+              <select name="department_id">
+                <option value="0">— pick a department —</option>
+                <?php foreach ($depts as $d): ?>
+                  <option value="<?= (int)$d['id'] ?>" <?= (int)($cfg['department_id'] ?? 0) === (int)$d['id'] ? 'selected' : '' ?>>
+                    <?= e($d['name']) ?>
+                  </option>
+                <?php endforeach; ?>
+              </select>
+            </label>
+            <?php break; ?>
+
+          <?php case 'save_note': ?>
+            <label>Note template
+              <textarea name="template" rows="3" maxlength="2000"
+                        placeholder="Qualification: name={{customer_name}}, budget={{budget}}"><?= e((string)($cfg['template'] ?? '')) ?></textarea>
+              <small class="muted">Rendered with the collected variables and dropped as an internal note.</small>
+            </label>
+            <?php break; ?>
+
+          <?php case 'branch': ?>
+            <div class="muted small">Branch has no config — use the "Edges" panel below to route.</div>
+            <?php break; ?>
+
+          <?php case 'end': ?>
+            <div class="muted small">End marks the instance completed.</div>
+            <?php break; ?>
+        <?php endswitch; ?>
+
+        <?php if ($n['node_type'] !== 'branch' && $n['node_type'] !== 'end'): ?>
+          <label>Next node
+            <select name="next_node_id">
+              <option value="0">— end after this step —</option>
+              <?php foreach ($nodes as $n2):
+                if ((int)$n2['id'] === (int)$n['id']) continue; ?>
+                <option value="<?= (int)$n2['id'] ?>" <?= (int)($n['next_node_id'] ?? 0) === (int)$n2['id'] ? 'selected' : '' ?>>
+                  #<?= (int)$n2['id'] ?> <?= e(flow_edit_node_label($n2)) ?>
+                </option>
+              <?php endforeach; ?>
+            </select>
+          </label>
+        <?php endif; ?>
+
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-primary btn-sm" type="submit">Save node</button>
+          <button class="btn btn-sm btn-danger" type="submit"
+                  formaction="?id=<?= $flowId ?>"
+                  onclick="if(!confirm('Delete this node?')){return false;} this.form.querySelector('input[name=action]').value='delete_node';">
+            Delete node
+          </button>
+        </div>
+      </form>
+
+      <?php if ($n['node_type'] === 'branch'): ?>
+        <form method="post" style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--c-border);">
+          <?= csrf_field() ?>
+          <input type="hidden" name="action" value="save_edges">
+          <input type="hidden" name="node_id" value="<?= (int)$n['id'] ?>">
+          <div class="muted small" style="margin-bottom:6px;">Edges from this branch:</div>
+          <table class="data-table" style="margin-bottom:6px;">
+            <thead><tr><th>#</th><th>Condition</th><th>Keyword</th><th>Go to node</th></tr></thead>
+            <tbody>
+              <?php
+                $ee = $edgesByNode[(int)$n['id']] ?? [];
+                $rowCount = max(4, count($ee) + 1);
+                for ($i = 0; $i < $rowCount; $i++):
+                    $e = $ee[$i] ?? ['condition_type' => '', 'condition_value' => '', 'to_node_id' => 0];
+              ?>
+                <tr>
+                  <td><?= $i + 1 ?></td>
+                  <td>
+                    <select name="edge[<?= $i ?>][condition_type]">
+                      <option value="">— skip —</option>
+                      <option value="keyword" <?= $e['condition_type'] === 'keyword' ? 'selected' : '' ?>>If reply contains</option>
+                      <option value="default" <?= $e['condition_type'] === 'default' ? 'selected' : '' ?>>Default (no match)</option>
+                    </select>
+                  </td>
+                  <td><input type="text" name="edge[<?= $i ?>][condition_value]" maxlength="255" value="<?= e((string)($e['condition_value'] ?? '')) ?>" placeholder="e.g. 1 or sales"></td>
+                  <td>
+                    <select name="edge[<?= $i ?>][to_node_id]">
+                      <option value="0">—</option>
+                      <?php foreach ($nodes as $n2): ?>
+                        <option value="<?= (int)$n2['id'] ?>" <?= (int)($e['to_node_id'] ?? 0) === (int)$n2['id'] ? 'selected' : '' ?>>
+                          #<?= (int)$n2['id'] ?> <?= e(flow_edit_node_label($n2)) ?>
+                        </option>
+                      <?php endforeach; ?>
+                    </select>
+                  </td>
+                </tr>
+              <?php endfor; ?>
+            </tbody>
+          </table>
+          <button class="btn btn-sm" type="submit">Save edges</button>
+        </form>
+      <?php endif; ?>
+    </div>
+  <?php endforeach; ?>
+</div>
+
+<?php layout_end(); ?>
+
+<?php
+function flow_edit_node_label(array $n): string
+{
+    $lbl = trim((string)($n['label'] ?? ''));
+    if ($lbl !== '') return $lbl;
+    $map = [
+        'send_message' => 'Send message',
+        'wait_reply'   => 'Wait for reply',
+        'branch'       => 'Branch',
+        'assign_dept'  => 'Assign to dept',
+        'save_note'    => 'Save note',
+        'end'          => 'End',
+    ];
+    return $map[$n['node_type']] ?? (string)$n['node_type'];
+}
+
+function flow_edit_pack_config(string $type, array $post): string
+{
+    switch ($type) {
+        case 'send_message':
+            return json_encode(['text' => (string)($post['text'] ?? '')], JSON_UNESCAPED_UNICODE);
+        case 'wait_reply':
+            $v = trim((string)($post['var_name'] ?? ''));
+            $v = preg_replace('/[^a-zA-Z0-9_]/', '', $v);
+            return json_encode(['var_name' => $v], JSON_UNESCAPED_UNICODE);
+        case 'assign_dept':
+            return json_encode(['department_id' => (int)($post['department_id'] ?? 0)], JSON_UNESCAPED_UNICODE);
+        case 'save_note':
+            return json_encode(['template' => (string)($post['template'] ?? '')], JSON_UNESCAPED_UNICODE);
+        case 'branch':
+        case 'end':
+        default:
+            return '{}';
+    }
+}
+?>

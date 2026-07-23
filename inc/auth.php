@@ -127,15 +127,62 @@ function require_role(array $roles): array
     return $u;
 }
 
+/**
+ * Return the channel IDs an agent is restricted to, or null if unrestricted.
+ *
+ * - Super admin / Manager always return null (they see everything). The
+ *   restriction is an agent-level control.
+ * - Agent with no user_channels rows returns null (unrestricted — matches
+ *   pre-phase-26 behavior).
+ * - Agent with one or more rows returns the array of channel_ids.
+ *
+ * Cached per request via a static so repeated calls in the same page
+ * don't hit the DB again.
+ */
+function user_visible_channel_ids(array $user): ?array
+{
+    if (in_array($user['role'] ?? 'agent', ['super_admin', 'manager'], true)) {
+        return null;
+    }
+    static $cache = [];
+    $uid = (int)$user['id'];
+    if (array_key_exists($uid, $cache)) return $cache[$uid];
+
+    try {
+        $stmt = aiserve_db()->prepare(
+            'SELECT channel_id FROM user_channels WHERE user_id = ?'
+        );
+        $stmt->execute([$uid]);
+        $ids = array_map('intval', array_column($stmt->fetchAll(), 'channel_id'));
+    } catch (Throwable $e) {
+        // Table not yet migrated - fall back to unrestricted so we don't
+        // 500 the whole inbox on a partially-deployed workspace.
+        error_log('[AiServe user_visible_channel_ids] ' . $e->getMessage());
+        return $cache[$uid] = null;
+    }
+    return $cache[$uid] = ($ids ?: null);
+}
+
 function user_can_view_conversation(array $user, array $conversation): bool
 {
-    if (in_array($user['role'], ['super_admin', 'manager'], true)) {
-        return (int)$user['company_id'] === (int)$conversation['company_id'];
-    }
-    // Agent: assigned to them, or unassigned in their department, or unassigned with no dept.
+    // Workspace scope check applies to everyone including super admins.
     if ((int)$conversation['company_id'] !== (int)$user['company_id']) {
         return false;
     }
+    // Channel-access restriction (phase 26) — applies to agents only.
+    // Manager / super admin get null back and skip this branch.
+    $allowedChannels = user_visible_channel_ids($user);
+    if ($allowedChannels !== null) {
+        $cid = (int)($conversation['channel_id'] ?? 0);
+        if ($cid <= 0 || !in_array($cid, $allowedChannels, true)) {
+            return false;
+        }
+    }
+
+    if (in_array($user['role'], ['super_admin', 'manager'], true)) {
+        return true;
+    }
+    // Agent: assigned to them, or unassigned in their department, or unassigned with no dept.
     if ((int)($conversation['assigned_user_id'] ?? 0) === (int)$user['id']) {
         return true;
     }

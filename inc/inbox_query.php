@@ -7,6 +7,7 @@
  */
 
 require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/auth.php';
 
 /**
  * @return array{
@@ -74,6 +75,17 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
                            AND (c.department_id IS NULL OR c.department_id = ?)))';
         $params[] = (int)$user['id'];
         $params[] = (int)($user['department_id'] ?? 0);
+    }
+
+    // Phase 26: per-agent channel access. If this user is restricted to a
+    // subset of channels, the inbox query returns only conversations on
+    // those channels. Null (managers, super admins, or unrestricted
+    // agents) skips this clause entirely.
+    $allowedChannels = user_visible_channel_ids($user);
+    if ($allowedChannels !== null) {
+        $placeholders = implode(',', array_fill(0, count($allowedChannels), '?'));
+        $where[] = 'c.channel_id IN (' . $placeholders . ')';
+        foreach ($allowedChannels as $cid) $params[] = $cid;
     }
 
     if ($deptFilter > 0) {

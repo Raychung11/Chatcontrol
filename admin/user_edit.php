@@ -31,6 +31,11 @@ if (is_post()) {
     $status   = ((string)($_POST['status'] ?? 'active') === 'inactive') ? 'inactive' : 'active';
     $password = (string)($_POST['password'] ?? '');
 
+    // Phase 26: channel_ids the agent can view. Only meaningful for
+    // role=agent — the form hides the section for super_admin / manager.
+    $channelIds = array_map('intval', (array)($_POST['channel_ids'] ?? []));
+    $channelIds = array_values(array_unique(array_filter($channelIds, fn($i) => $i > 0)));
+
     if (!in_array($role, ['super_admin', 'manager', 'agent'], true)) {
         $err = 'Invalid role.';
     } elseif ($name === '' || $email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -81,6 +86,9 @@ if (is_post()) {
                 $params[] = $companyId;
                 $stmt = $db->prepare($sql);
                 $stmt->execute($params);
+                // Channel access for agents. Wipe + re-insert so
+                // unchecking a box actually removes access.
+                user_edit_save_channels($db, $companyId, (int)$user['id'], $role, $channelIds);
                 log_activity($companyId, (int)$current_user['id'], 'user_updated', 'user', (int)$user['id']);
                 $msg = 'User updated.';
                 // refresh
@@ -97,6 +105,7 @@ if (is_post()) {
                     password_hash($password, PASSWORD_BCRYPT), $role, $status,
                 ]);
                 $newId = (int)$db->lastInsertId();
+                user_edit_save_channels($db, $companyId, $newId, $role, $channelIds);
                 log_activity($companyId, (int)$current_user['id'], 'user_created', 'user', $newId);
                 redirect('/admin/user_edit.php?id=' . $newId);
             }
@@ -114,6 +123,23 @@ if (is_post()) {
 $dstmt = $db->prepare('SELECT id, name FROM departments WHERE company_id = ? AND status = "active" ORDER BY name');
 $dstmt->execute([$companyId]);
 $departments = $dstmt->fetchAll();
+
+// Channels this workspace has, plus the ones this user is currently
+// restricted to. Empty allowedChannelIds = unrestricted (all channels).
+$chStmt = $db->prepare(
+    'SELECT id, name, display_phone, provider FROM channels
+     WHERE company_id = ? AND status = "active"
+     ORDER BY is_default DESC, name'
+);
+$chStmt->execute([$companyId]);
+$allChannels = $chStmt->fetchAll();
+
+$allowedChannelIds = [];
+if ($user) {
+    $ac = $db->prepare('SELECT channel_id FROM user_channels WHERE user_id = ?');
+    $ac->execute([(int)$user['id']]);
+    $allowedChannelIds = array_map('intval', array_column($ac->fetchAll(), 'channel_id'));
+}
 
 layout_start($current_user, $user ? 'Edit user' : 'New user', 'users');
 ?>
@@ -154,10 +180,104 @@ layout_start($current_user, $user ? 'Edit user' : 'New user', 'users');
     <label><?= $user ? 'New password (leave blank to keep current)' : 'Password' ?>
       <input type="password" name="password" autocomplete="new-password" minlength="8" <?= $user ? '' : 'required' ?>>
     </label>
+
+    <fieldset id="channel-access-fieldset"
+              style="border:1px solid var(--c-border); border-radius:8px; padding:14px; margin:0;">
+      <legend style="padding:0 6px; font-weight:600; font-size:14px;">Channel access</legend>
+      <p class="muted small" style="margin:0 0 10px;">
+        <strong>Agents only.</strong> Tick the channels this agent is allowed to see.
+        <strong>Leaving every box unticked</strong> means the agent can see conversations
+        on <em>every</em> channel (default, unrestricted).
+        Managers and super admins always see every channel — this section is ignored for them.
+      </p>
+      <?php if (!$allChannels): ?>
+        <p class="muted small">No channels yet. Add one in <a href="/admin/channels.php">Channels</a> first.</p>
+      <?php else: ?>
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:6px;">
+          <?php foreach ($allChannels as $ch): ?>
+            <label style="display:flex; align-items:center; gap:8px; font-weight:normal; font-size:14px;">
+              <input type="checkbox" name="channel_ids[]" value="<?= (int)$ch['id'] ?>"
+                     <?= in_array((int)$ch['id'], $allowedChannelIds, true) ? 'checked' : '' ?>>
+              <span>
+                <?= e($ch['name']) ?>
+                <?php if ($ch['display_phone']): ?>
+                  <br><small class="muted"><?= e($ch['display_phone']) ?> · <?= e($ch['provider']) ?></small>
+                <?php endif; ?>
+              </span>
+            </label>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
+    </fieldset>
+
     <div>
       <button class="btn btn-primary" type="submit"><?= $user ? 'Save changes' : 'Create user' ?></button>
       <a class="btn" href="/admin/users.php">Cancel</a>
     </div>
   </form>
 </div>
+
+<script>
+// Hide the Channel access fieldset when role is manager or super_admin —
+// the restriction is agent-only.
+(function () {
+  const roleSel = document.querySelector('select[name="role"]');
+  const fset    = document.getElementById('channel-access-fieldset');
+  if (!roleSel || !fset) return;
+  function sync() {
+    fset.style.display = (roleSel.value === 'agent') ? '' : 'none';
+  }
+  roleSel.addEventListener('change', sync);
+  sync();
+})();
+</script>
 <?php layout_end(); ?>
+
+<?php
+/**
+ * Persist the agent's channel access list. Wipe + re-insert so an
+ * unchecked box removes access; explicit no-op for managers / super
+ * admins so the fieldset's hidden state doesn't accidentally revoke
+ * everything on save.
+ *
+ * Belt-and-braces workspace scope: every channel_id is verified to
+ * belong to the same company before insert. Prevents URL tampering
+ * from cross-linking users to foreign channels.
+ */
+function user_edit_save_channels(PDO $db, int $companyId, int $userId, string $role, array $channelIds): void
+{
+    if ($role !== 'agent') {
+        // Managers + super admins bypass the restriction entirely.
+        // Wipe any stale rows they might have from an earlier agent role.
+        $db->prepare('DELETE FROM user_channels WHERE user_id = ?')->execute([$userId]);
+        return;
+    }
+    if (!$channelIds) {
+        // Empty list = unrestricted (see phase 26 migration comment).
+        $db->prepare('DELETE FROM user_channels WHERE user_id = ?')->execute([$userId]);
+        return;
+    }
+    $placeholders = implode(',', array_fill(0, count($channelIds), '?'));
+    $verify = $db->prepare(
+        "SELECT id FROM channels WHERE company_id = ? AND id IN ($placeholders)"
+    );
+    $verify->execute(array_merge([$companyId], $channelIds));
+    $valid = array_map('intval', array_column($verify->fetchAll(), 'id'));
+    if (!$valid) {
+        $db->prepare('DELETE FROM user_channels WHERE user_id = ?')->execute([$userId]);
+        return;
+    }
+    $db->beginTransaction();
+    try {
+        $db->prepare('DELETE FROM user_channels WHERE user_id = ?')->execute([$userId]);
+        $ins = $db->prepare('INSERT INTO user_channels (user_id, channel_id) VALUES (?, ?)');
+        foreach ($valid as $cid) {
+            $ins->execute([$userId, $cid]);
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        error_log('[AiServe user_edit_save_channels] ' . $e->getMessage());
+    }
+}
+

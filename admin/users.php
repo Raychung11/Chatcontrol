@@ -81,6 +81,7 @@ layout_start($current_user, 'Users', 'users');
       <span class="badge <?= $seatFull ? 'badge-failed' : 'badge-open' ?>" style="margin-right:8px;">
         <?= (int)$seatUsed ?> / <?= (int)$seatLimit ?> seats used (<?= e(ucfirst($plan)) ?>)
       </span>
+      <a class="btn" href="/admin/user_import.php" style="margin-right:6px;">📄 Import CSV</a>
       <a class="btn btn-primary" href="/admin/user_edit.php" <?= $seatFull ? 'title="Seat limit reached"' : '' ?>>+ New user</a>
     </div>
   </div>

@@ -240,13 +240,18 @@ layout_start($current_user, $user ? 'Edit user' : 'New user', 'users');
 
     <?php if ($allBranches): ?>
     <fieldset style="border:1px solid var(--c-border); border-radius:8px; padding:14px; margin:0;">
-      <legend style="padding:0 6px; font-weight:600; font-size:14px;">Branch rotation</legend>
+      <legend style="padding:0 6px; font-weight:600; font-size:14px;">Branch access &amp; rotation</legend>
       <p class="muted small" style="margin:0 0 10px;">
-        Tick the branches this person is part of. When a new customer conversation
-        opens for a contact belonging to a ticked branch, the system round-robins
-        assignment among everyone in that branch's pool.
-        Applies to any role — a manager can be in the rotation too.
-        Untick everything to remove the user from all rotations.
+        Tick the branches this person belongs to. Ticks do <strong>two things</strong>:
+        <br>
+        · <strong>For agents:</strong> the rotation pool for those branches includes
+          this person, so new conversations for contacts in a ticked branch may be
+          auto-assigned to them.<br>
+        · <strong>For managers (e.g. an Area Manager):</strong> visibility gets
+          scoped — they only see conversations for contacts in ticked branches.
+          <em>Leaving all ticks empty for a manager means they see every branch
+          (unrestricted).</em><br>
+        Super admins always see every branch — this section is ignored for them.
       </p>
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:6px;">
         <?php foreach ($allBranches as $b): ?>

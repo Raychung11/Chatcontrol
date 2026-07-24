@@ -88,6 +88,17 @@ function inbox_fetch(PDO $db, array $user, string $filter, string $search, int $
         foreach ($allowedChannels as $cid) $params[] = $cid;
     }
 
+    // Phase 30: per-user branch access. Managers or agents with entries
+    // in user_branches only see conversations whose contact belongs to
+    // one of those branches. Super admins bypass. The JOIN below uses
+    // ct.branch_id which is already loaded via the contacts join later.
+    $allowedBranches = user_visible_branch_ids($user);
+    if ($allowedBranches !== null) {
+        $placeholders = implode(',', array_fill(0, count($allowedBranches), '?'));
+        $where[] = 'ct.branch_id IN (' . $placeholders . ')';
+        foreach ($allowedBranches as $bid) $params[] = $bid;
+    }
+
     if ($deptFilter > 0) {
         $where[]  = 'c.department_id = ?';
         $params[] = $deptFilter;

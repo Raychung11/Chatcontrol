@@ -163,6 +163,38 @@ function user_visible_channel_ids(array $user): ?array
     return $cache[$uid] = ($ids ?: null);
 }
 
+/**
+ * Return the branch IDs a user is restricted to (phase 30), or null if
+ * unrestricted. Different from channels:
+ *   - Super admin: always null.
+ *   - Manager or agent with entries in user_branches: restricted to
+ *     conversations for contacts in those branches.
+ *   - No entries: unrestricted.
+ * For agents the same table (from phase 28) also serves as the rotation
+ * pool; ticking a branch does double duty.
+ */
+function user_visible_branch_ids(array $user): ?array
+{
+    if (($user['role'] ?? 'agent') === 'super_admin') {
+        return null;
+    }
+    static $cache = [];
+    $uid = (int)$user['id'];
+    if (array_key_exists($uid, $cache)) return $cache[$uid];
+
+    try {
+        $stmt = aiserve_db()->prepare(
+            'SELECT branch_id FROM user_branches WHERE user_id = ?'
+        );
+        $stmt->execute([$uid]);
+        $ids = array_map('intval', array_column($stmt->fetchAll(), 'branch_id'));
+    } catch (Throwable $e) {
+        error_log('[AiServe user_visible_branch_ids] ' . $e->getMessage());
+        return $cache[$uid] = null;
+    }
+    return $cache[$uid] = ($ids ?: null);
+}
+
 function user_can_view_conversation(array $user, array $conversation): bool
 {
     // Workspace scope check applies to everyone including super admins.
@@ -175,6 +207,23 @@ function user_can_view_conversation(array $user, array $conversation): bool
     if ($allowedChannels !== null) {
         $cid = (int)($conversation['channel_id'] ?? 0);
         if ($cid <= 0 || !in_array($cid, $allowedChannels, true)) {
+            return false;
+        }
+    }
+    // Branch-access restriction (phase 30) — applies to managers AND
+    // agents. Super admins bypass. Conversation's contact must belong
+    // to one of the user's allowed branches.
+    $allowedBranches = user_visible_branch_ids($user);
+    if ($allowedBranches !== null) {
+        $convBranchId = (int)($conversation['contact_branch_id'] ?? 0);
+        // Row wasn't loaded with the join — fall back to a lookup so
+        // the guard still holds for callers that didn't prep the row.
+        if ($convBranchId === 0 && !empty($conversation['contact_id'])) {
+            $bs = aiserve_db()->prepare('SELECT branch_id FROM contacts WHERE id = ?');
+            $bs->execute([(int)$conversation['contact_id']]);
+            $convBranchId = (int)($bs->fetchColumn() ?: 0);
+        }
+        if ($convBranchId === 0 || !in_array($convBranchId, $allowedBranches, true)) {
             return false;
         }
     }

@@ -17,12 +17,14 @@ $stmt = $db->prepare(
     'SELECT c.*, ct.wa_id, ct.display_name, ct.profile_name, ct.phone AS contact_phone,
             ct.branch_id AS contact_branch_id,
             u.name AS agent_name, d.name AS department_name,
-            b.name AS contact_branch_name
+            b.name AS contact_branch_name,
+            ch.name AS channel_name, ch.display_phone AS channel_phone, ch.provider AS channel_provider
      FROM conversations c
      INNER JOIN contacts ct ON ct.id = c.contact_id
      LEFT  JOIN users u ON u.id = c.assigned_user_id
      LEFT  JOIN departments d ON d.id = c.department_id
      LEFT  JOIN branches b ON b.id = ct.branch_id
+     LEFT  JOIN channels ch ON ch.id = c.channel_id
      WHERE c.id = ? AND c.company_id = ? LIMIT 1'
 );
 $stmt->execute([$conversationId, $companyId]);
@@ -129,6 +131,15 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
       <div class="chat-title">
         <strong id="chat-header-name"><?= e($conv['display_name'] ?: $conv['profile_name'] ?: $conv['wa_id']) ?></strong>
         <span class="muted">+<?= e($conv['wa_id']) ?></span>
+        <?php if (!empty($conv['channel_name'])): ?>
+          <span class="chat-channel-badge"
+                title="This conversation is on <?= e((string)$conv['channel_name']) ?><?= !empty($conv['channel_phone']) ? ' (' . e((string)$conv['channel_phone']) . ')' : '' ?>">
+            via <?= e((string)$conv['channel_name']) ?>
+            <?php if (!empty($conv['channel_phone'])): ?>
+              <span class="muted"> · <?= e((string)$conv['channel_phone']) ?></span>
+            <?php endif; ?>
+          </span>
+        <?php endif; ?>
       </div>
       <div class="chat-status">
         <?= status_badge($conv['status']) ?>
@@ -286,6 +297,17 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
         </div>
       </form>
       <div class="kv"><span>WhatsApp ID</span><strong>+<?= e($conv['wa_id']) ?></strong></div>
+      <?php if (!empty($conv['channel_name'])): ?>
+        <div class="kv">
+          <span>Channel</span>
+          <strong>
+            <?= e((string)$conv['channel_name']) ?>
+            <?php if (!empty($conv['channel_phone'])): ?>
+              <br><span class="muted small">+<?= e(ltrim((string)$conv['channel_phone'], '+')) ?></span>
+            <?php endif; ?>
+          </strong>
+        </div>
+      <?php endif; ?>
       <?php
         $branchList = $db->prepare(
             'SELECT id, name FROM branches WHERE company_id = ? AND status = "active" ORDER BY name'

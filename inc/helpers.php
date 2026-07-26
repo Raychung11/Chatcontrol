@@ -258,14 +258,41 @@ function relative_time(?string $datetime): string
  */
 function pwa_head_tags(): string
 {
-    $h  = '<link rel="manifest" href="/manifest.json">' . "\n";
+    // Version stamp for every icon URL. Reads the mtime of the uploaded
+    // brand icon (or falls back to the default generator source). When
+    // the operator uploads a new icon, mtime bumps, the ?v= query
+    // parameter changes, every browser refetches the icon instead of
+    // serving the stale cached one. Without this, icon.php always
+    // returns Cache-Control: immutable so the browser never revalidates.
+    $v = pwa_icon_version();
+
+    $h  = '<link rel="manifest" href="/manifest.php?v=' . $v . '">' . "\n";
     $h .= '  <meta name="theme-color" content="#25D366">' . "\n";
     $h .= '  <meta name="apple-mobile-web-app-capable" content="yes">' . "\n";
     $h .= '  <meta name="apple-mobile-web-app-status-bar-style" content="default">' . "\n";
     $h .= '  <meta name="apple-mobile-web-app-title" content="AiServe">' . "\n";
-    $h .= '  <link rel="apple-touch-icon" href="/assets/img/icon.php?size=180">' . "\n";
-    $h .= '  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/icon.php?size=32">';
+    $h .= '  <link rel="apple-touch-icon" sizes="180x180" href="/assets/img/icon.php?size=180&v=' . $v . '">' . "\n";
+    $h .= '  <link rel="icon" type="image/png" sizes="32x32" href="/assets/img/icon.php?size=32&v=' . $v . '">' . "\n";
+    $h .= '  <link rel="shortcut icon" href="/assets/img/icon.php?size=32&v=' . $v . '">';
     return $h;
+}
+
+/**
+ * Timestamp used as the cache-buster for every icon URL. Returns the
+ * mtime of the uploaded brand icon if present; otherwise a stable
+ * value so repeat requests still cache cleanly. Public so manifest.php
+ * can reuse the exact same value.
+ */
+function pwa_icon_version(): int
+{
+    $brand = __DIR__ . '/../uploads/branding/pwa_icon.png';
+    if (is_file($brand)) {
+        return (int)@filemtime($brand);
+    }
+    // Fallback: use the icon generator's own mtime so a code update to
+    // the default icon still busts caches on redeploy.
+    $gen = __DIR__ . '/../assets/img/icon.php';
+    return (int)@filemtime($gen) ?: 1;
 }
 
 // -------------------- Asset cache-busting --------------------

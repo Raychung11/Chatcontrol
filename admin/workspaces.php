@@ -60,6 +60,17 @@ layout_start($current_user, 'Workspaces', 'workspaces');
     </div>
   <?php endif; ?>
 
+  <?php $planChanged = (string)($_GET['plan_changed'] ?? ''); if ($planChanged !== ''): ?>
+    <div class="alert alert-success" style="margin: 8px 0 14px;">
+      Plan updated: <?= e($planChanged) ?>.
+    </div>
+  <?php endif; ?>
+  <?php $planError = (string)($_GET['plan_error'] ?? ''); if ($planError !== ''): ?>
+    <div class="alert alert-error" style="margin: 8px 0 14px;">
+      <?= e($planError) ?>
+    </div>
+  <?php endif; ?>
+
   <table class="data-table">
     <thead>
       <tr>
@@ -82,7 +93,22 @@ layout_start($current_user, 'Workspaces', 'workspaces');
         <tr>
           <td><strong><?= e((string)$r['name']) ?></strong></td>
           <td><code><?= e((string)$r['slug']) ?></code></td>
-          <td><?= e(ucfirst((string)$r['plan'])) ?></td>
+          <td>
+            <form method="post" action="/api/workspace_action.php" style="display:flex; gap:4px; align-items:center;"
+                  onsubmit="return confirm('Change plan for &quot;<?= e(addslashes((string)$r['name'])) ?>&quot; from <?= e(ucfirst((string)$r['plan'])) ?> to ' + this.plan.options[this.plan.selectedIndex].text + '?');">
+              <?= csrf_field() ?>
+              <input type="hidden" name="action" value="change_plan">
+              <input type="hidden" name="company_id" value="<?= (int)$r['id'] ?>">
+              <select name="plan" style="padding:2px 4px; font-size:12px;">
+                <?php foreach (['starter' => 'Starter', 'growth' => 'Growth', 'enterprise' => 'Enterprise'] as $key => $label): ?>
+                  <option value="<?= $key ?>" <?= (string)$r['plan'] === $key ? 'selected' : '' ?>>
+                    <?= $label ?> (<?= (int)plan_seat_limit($key) === 9999 ? '∞' : (int)plan_seat_limit($key) ?>)
+                  </option>
+                <?php endforeach; ?>
+              </select>
+              <button type="submit" class="btn btn-sm" style="padding:2px 6px;" title="Change plan">✓</button>
+            </form>
+          </td>
           <td>
             <?php if (!empty($r['provider'])): ?>
               <?= e((string)$r['provider']) ?>

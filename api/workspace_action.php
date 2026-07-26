@@ -44,6 +44,60 @@ if ($companyId === (int)$user['company_id']) {
 
 $db = aiserve_db();
 
+if ($action === 'change_plan') {
+    // Bump the workspace's plan tier. Used when a customer needs more
+    // seats than their current tier allows. Downgrading is allowed too,
+    // but blocked if the workspace currently has more active users than
+    // the target plan permits (would silently orphan users otherwise).
+    $newPlan = (string)($_POST['plan'] ?? '');
+    if (!in_array($newPlan, ['starter', 'growth', 'enterprise'], true)) {
+        http_response_code(400);
+        exit('Invalid plan.');
+    }
+
+    $stmt = $db->prepare('SELECT id, name, plan FROM companies WHERE id = ? LIMIT 1');
+    $stmt->execute([$companyId]);
+    $company = $stmt->fetch();
+    if (!$company) {
+        http_response_code(404);
+        exit('Workspace not found.');
+    }
+    if ($company['plan'] === $newPlan) {
+        redirect('/admin/workspaces.php');
+    }
+
+    // Downgrade guard: refuse if the workspace has more active users
+    // than the target plan supports. Operator has to deactivate seats
+    // first, else the seat-limit check on the next user create/edit
+    // would look consistent while the underlying data is off.
+    $active = (int)$db->query(
+        "SELECT COUNT(*) FROM users
+         WHERE company_id = $companyId AND status = 'active'"
+    )->fetchColumn();
+    $newLimit = plan_seat_limit($newPlan);
+    if ($active > $newLimit) {
+        redirect('/admin/workspaces.php?plan_error=' . rawurlencode(
+            'Cannot downgrade "' . $company['name'] . '" to ' . ucfirst($newPlan)
+            . ': ' . $active . ' active users but plan allows only ' . $newLimit
+            . '. Deactivate users first, then retry.'
+        ));
+    }
+
+    $db->prepare('UPDATE companies SET plan = ? WHERE id = ? LIMIT 1')
+       ->execute([$newPlan, $companyId]);
+
+    log_activity(
+        $companyId, (int)$user['id'], 'workspace_plan_changed',
+        'company', $companyId,
+        'from=' . $company['plan'] . ' to=' . $newPlan
+    );
+
+    redirect('/admin/workspaces.php?plan_changed=' . rawurlencode(
+        $company['name'] . ' → ' . ucfirst($newPlan)
+        . ' (seat limit now ' . $newLimit . ')'
+    ));
+}
+
 if ($action === 'archive') {
     $stmt = $db->prepare(
         'SELECT id, name, status FROM companies WHERE id = ? LIMIT 1'

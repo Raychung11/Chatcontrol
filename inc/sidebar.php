@@ -5,11 +5,44 @@
  */
 $active = $active_nav ?? '';
 $role   = $current_user['role'] ?? 'agent';
+
+// Per-workspace branding: company name + logo. Read once so the header
+// carries the customer's brand instead of the default AiServe wordmark.
+// Falls back gracefully when the workspace has neither.
+$sb_companyId   = (int)($current_user['company_id'] ?? 0);
+$sb_companyName = '';
+$sb_hasLogo     = false;
+$sb_logoMtime   = 0;
+if ($sb_companyId > 0) {
+    try {
+        $sb = aiserve_db()->prepare('SELECT name, logo FROM companies WHERE id = ? LIMIT 1');
+        $sb->execute([$sb_companyId]);
+        $sbRow = $sb->fetch();
+        if ($sbRow) {
+            $sb_companyName = (string)($sbRow['name'] ?? '');
+            if (!empty($sbRow['logo'])) {
+                $lp = __DIR__ . '/../uploads/companies/' . $sb_companyId . '/logo.png';
+                if (is_file($lp)) {
+                    $sb_hasLogo   = true;
+                    $sb_logoMtime = (int)filemtime($lp);
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        // Non-fatal — sidebar always renders even if the query fails.
+    }
+}
 ?>
 <aside class="sidebar">
   <div class="sidebar-brand">
-    <span class="brand-dot" style="background: <?= e($brand_color ?? '#25D366') ?>"></span>
-    <span class="brand-text">AiServe Inbox</span>
+    <?php if ($sb_hasLogo): ?>
+      <img class="sidebar-logo"
+           src="/assets/img/company_logo.php?company_id=<?= $sb_companyId ?>&v=<?= $sb_logoMtime ?>"
+           alt="<?= e($sb_companyName ?: 'Workspace') ?> logo">
+    <?php else: ?>
+      <span class="brand-dot" style="background: <?= e($brand_color ?? '#25D366') ?>"></span>
+    <?php endif; ?>
+    <span class="brand-text"><?= e($sb_companyName !== '' ? $sb_companyName : 'AiServe Inbox') ?></span>
   </div>
 
   <?php

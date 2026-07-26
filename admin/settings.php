@@ -55,9 +55,82 @@ if (is_post()) {
             $skipStickers, $mediaRetention, $mediaMaxKb,
             $companyId,
         ]);
+
+        // ---- Company logo upload (optional). ----
+        // Saved to uploads/companies/<company_id>/logo.png, normalized
+        // to a 512x512 PNG via GD so every workspace's logo renders at
+        // the same size in the sidebar / anywhere else it appears.
+        // Non-square sources are center-cropped. Empty = leave alone.
+        if (!empty($_FILES['logo']) && (int)($_FILES['logo']['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) {
+            $lErr = settings_save_company_logo($companyId, $_FILES['logo']);
+            if ($lErr !== null) {
+                $err = $lErr;
+            } else {
+                $db->prepare('UPDATE companies SET logo = "logo.png" WHERE id = ?')
+                   ->execute([$companyId]);
+            }
+        } elseif (!empty($_POST['logo_delete'])) {
+            $logoPath = __DIR__ . '/../uploads/companies/' . $companyId . '/logo.png';
+            if (is_file($logoPath)) @unlink($logoPath);
+            $db->prepare('UPDATE companies SET logo = NULL WHERE id = ?')->execute([$companyId]);
+        }
+
         log_activity($companyId, (int)$current_user['id'], 'settings_updated', 'company', $companyId, 'Workspace settings updated');
-        $msg = 'Settings saved.';
+        if ($err === '') $msg = 'Settings saved.';
     }
+}
+
+/**
+ * Validate + normalize an uploaded logo. Returns null on success or an
+ * error message on failure. On success writes to
+ * uploads/companies/<company_id>/logo.png as a 512x512 PNG.
+ */
+function settings_save_company_logo(int $companyId, array $file): ?string
+{
+    $maxBytes = 4 * 1024 * 1024;
+    if ((int)$file['size'] > $maxBytes) return 'Logo too big (max 4 MB).';
+
+    $mime = function_exists('mime_content_type') ? (string)mime_content_type($file['tmp_name']) : '';
+    $decoders = [
+        'image/png'  => 'imagecreatefrompng',
+        'image/jpeg' => 'imagecreatefromjpeg',
+        'image/webp' => 'imagecreatefromwebp',
+    ];
+    if (!isset($decoders[$mime]) || !function_exists($decoders[$mime])) {
+        return 'Unsupported logo type (' . ($mime ?: 'unknown') . '). Use PNG, JPG, or WebP.';
+    }
+    $src = @($decoders[$mime])($file['tmp_name']);
+    if (!$src) return 'Could not decode the uploaded image.';
+
+    $srcW = imagesx($src); $srcH = imagesy($src);
+    if ($srcW < 64 || $srcH < 64) {
+        imagedestroy($src);
+        return 'Logo is too small. Upload at least 128x128 pixels for a crisp render.';
+    }
+
+    $target = 512;
+    $dst = imagecreatetruecolor($target, $target);
+    imagesavealpha($dst, true);
+    imagealphablending($dst, false);
+    $tp = imagecolorallocatealpha($dst, 0, 0, 0, 127);
+    imagefill($dst, 0, 0, $tp);
+    imagealphablending($dst, true);
+
+    $side = min($srcW, $srcH);
+    $srcX = (int)(($srcW - $side) / 2);
+    $srcY = (int)(($srcH - $side) / 2);
+    imagecopyresampled($dst, $src, 0, 0, $srcX, $srcY, $target, $target, $side, $side);
+
+    $dir = __DIR__ . '/../uploads/companies/' . $companyId;
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true)) {
+        imagedestroy($src); imagedestroy($dst);
+        return 'Could not create uploads/companies/ — check server permissions.';
+    }
+    $ok = imagepng($dst, $dir . '/logo.png', 6);
+    imagedestroy($src); imagedestroy($dst);
+    if (!$ok) return 'Could not save the logo file to disk.';
+    @chmod($dir . '/logo.png', 0644);
+    return null;
 }
 
 $stmt = $db->prepare('SELECT * FROM companies WHERE id = ?');
@@ -74,7 +147,7 @@ layout_start($current_user, 'Workspace settings', 'settings', $company['brand_co
   <?php if ($msg): ?><div class="alert alert-success"><?= e($msg) ?></div><?php endif; ?>
   <?php if ($err): ?><div class="alert alert-error"><?= e($err) ?></div><?php endif; ?>
 
-  <form method="post" class="form-grid">
+  <form method="post" class="form-grid" enctype="multipart/form-data">
     <?= csrf_field() ?>
 
     <h2>Company</h2>
@@ -88,6 +161,30 @@ layout_start($current_user, 'Workspace settings', 'settings', $company['brand_co
     </label>
     <label>Brand color
       <input type="color" name="brand_color" value="<?= e($company['brand_color'] ?? '#25D366') ?>">
+    </label>
+
+    <?php
+      $hasLogo   = !empty($company['logo']);
+      $logoPath  = __DIR__ . '/../uploads/companies/' . $companyId . '/logo.png';
+      $logoMtime = $hasLogo && is_file($logoPath) ? filemtime($logoPath) : 0;
+    ?>
+    <label>Company logo <small class="muted">(optional — shown in the sidebar and anywhere your workspace is branded)</small>
+      <?php if ($hasLogo && $logoMtime > 0): ?>
+        <div style="display:flex; align-items:center; gap:12px; margin: 4px 0 8px;">
+          <img src="/assets/img/company_logo.php?company_id=<?= (int)$companyId ?>&v=<?= (int)$logoMtime ?>"
+               alt="Current logo"
+               style="width:64px; height:64px; border-radius:8px; border:1px solid var(--c-border); background:#f4f6f8; object-fit:contain;">
+          <label style="display:inline-flex; align-items:center; gap:6px; font-weight:normal;">
+            <input type="checkbox" name="logo_delete" value="1">
+            <span class="muted small">Remove current logo</span>
+          </label>
+        </div>
+      <?php endif; ?>
+      <input type="file" name="logo" accept="image/png,image/jpeg,image/webp">
+      <small class="muted">
+        PNG, JPG or WebP. Square works best (128&times;128+). We center-crop
+        non-square uploads and normalize to a 512&times;512 PNG.
+      </small>
     </label>
     <label>Default timezone
       <input type="text" name="timezone" value="<?= e($company['timezone'] ?? APP_TIMEZONE) ?>" placeholder="Asia/Kuala_Lumpur">

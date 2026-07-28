@@ -98,6 +98,37 @@ if ($action === 'change_plan') {
     ));
 }
 
+if ($action === 'change_broadcast_plan') {
+    // Flip a workspace between the free and paid broadcast metering tier.
+    // Quota + price are set globally at /admin/pricing.php; this endpoint
+    // only decides which of those two limits this workspace lives under.
+    $newBcastPlan = (string)($_POST['broadcast_plan'] ?? '');
+    if (!in_array($newBcastPlan, ['free', 'paid'], true)) {
+        http_response_code(400);
+        exit('Invalid broadcast plan.');
+    }
+    $stmt = $db->prepare('SELECT id, name, broadcast_plan FROM companies WHERE id = ? LIMIT 1');
+    $stmt->execute([$companyId]);
+    $company = $stmt->fetch();
+    if (!$company) {
+        http_response_code(404);
+        exit('Workspace not found.');
+    }
+    if ($company['broadcast_plan'] === $newBcastPlan) {
+        redirect('/admin/workspaces.php');
+    }
+    $db->prepare('UPDATE companies SET broadcast_plan = ? WHERE id = ? LIMIT 1')
+       ->execute([$newBcastPlan, $companyId]);
+    log_activity(
+        $companyId, (int)$user['id'], 'workspace_broadcast_plan_changed',
+        'company', $companyId,
+        'from=' . ($company['broadcast_plan'] ?? 'free') . ' to=' . $newBcastPlan
+    );
+    redirect('/admin/workspaces.php?plan_changed=' . rawurlencode(
+        $company['name'] . ' broadcast plan → ' . ucfirst($newBcastPlan)
+    ));
+}
+
 if ($action === 'archive') {
     $stmt = $db->prepare(
         'SELECT id, name, status FROM companies WHERE id = ? LIMIT 1'

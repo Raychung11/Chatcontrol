@@ -65,6 +65,26 @@ $fields = [
         'type'  => 'textarea',
         'hint'  => 'Shown in the public pricing FAQ under "Can I change plans later?".',
     ],
+
+    // --- Broadcast metering (phase 30) --------------------------------
+    'broadcast_free_limit' => [
+        'label' => 'Broadcast free tier: monthly recipient limit',
+        'type'  => 'number',
+        'hint'  => 'Every workspace on the FREE broadcast plan can send this many recipients per calendar month at no extra charge. One recipient = one billable send. Default 1000.',
+        'step'  => '1',
+    ],
+    'broadcast_paid_limit' => [
+        'label' => 'Broadcast paid tier: monthly recipient limit',
+        'type'  => 'number',
+        'hint'  => 'Workspaces on the PAID broadcast plan can send up to this many recipients per calendar month. Default 10000.',
+        'step'  => '1',
+    ],
+    'broadcast_paid_price' => [
+        'label' => 'Broadcast paid tier: monthly price',
+        'type'  => 'number',
+        'hint'  => 'Flat monthly price for the paid broadcast plan. In the same currency as the seat pricing above.',
+        'step'  => '0.01',
+    ],
 ];
 
 if (is_post()) {

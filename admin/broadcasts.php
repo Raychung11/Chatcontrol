@@ -42,8 +42,36 @@ $stmt = $db->prepare(
 $stmt->execute([$companyId]);
 $rows = $stmt->fetchAll();
 
+$quota = broadcast_quota_for_workspace($companyId);
+$quotaPct = $quota['limit'] > 0 ? round(($quota['used'] / $quota['limit']) * 100) : 0;
+$quotaBarColor = $quotaPct >= 90 ? '#DC2626' : ($quotaPct >= 70 ? '#F59E0B' : '#25D366');
+
 layout_start($current_user, 'Broadcasts', 'broadcasts');
 ?>
+
+<div class="card" style="margin-bottom: 12px; border-left: 4px solid <?= $quotaBarColor ?>;">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+    <div>
+      <strong>
+        <?= $quota['plan'] === 'paid' ? '💎 Paid broadcast plan' : 'Free broadcast plan' ?>
+      </strong>
+      <span class="muted small">
+        · <?= number_format($quota['used']) ?> / <?= number_format($quota['limit']) ?> recipients used this month
+        · <?= number_format($quota['remaining']) ?> remaining
+      </span>
+    </div>
+    <?php if ($quota['plan'] === 'free'): ?>
+      <span class="muted small">
+        Upgrade: <strong><?= e($quota['currency']) ?> <?= rtrim(rtrim(number_format($quota['price'], 2), '0'), '.') ?> / month</strong>
+        for <?= number_format($quota['paid_limit']) ?> recipients
+      </span>
+    <?php endif; ?>
+  </div>
+  <div style="height:6px; background:#f6f9fb; border-radius:3px; overflow:hidden; margin-top:6px;">
+    <div style="height:100%; width:<?= min(100, $quotaPct) ?>%; background:<?= $quotaBarColor ?>;"></div>
+  </div>
+</div>
+
 <div class="card">
   <div class="card-head">
     <h2>WhatsApp broadcasts</h2>

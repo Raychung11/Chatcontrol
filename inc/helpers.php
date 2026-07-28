@@ -423,6 +423,62 @@ function plan_seat_limit(string $plan): int
 }
 
 /**
+ * Broadcast quota / usage for a workspace this calendar month.
+ *
+ * Returns:
+ *   plan      : 'free' | 'paid'
+ *   limit     : int - monthly recipient allowance for that plan
+ *   used      : int - recipients sent so far this month (from broadcast_recipients.sent_at)
+ *   remaining : int - max(limit - used, 0)
+ *   price     : float - monthly price of the paid plan (for upgrade CTA)
+ *
+ * "Used" counts every broadcast_recipients row with sent_at inside the
+ * current calendar month. Failed sends still count against quota — this
+ * matches how most SMS/WA pricing works (the API call was made). If you
+ * want to change that policy just add "AND status = 'sent'" to the query.
+ */
+function broadcast_quota_for_workspace(int $companyId): array
+{
+    $freeLimit  = (int)platform_setting('broadcast_free_limit', '1000');
+    $paidLimit  = (int)platform_setting('broadcast_paid_limit', '10000');
+    $paidPrice  = (float)platform_setting('broadcast_paid_price', '480');
+    $currency   = platform_setting('pricing_currency', 'RM');
+
+    $plan = 'free';
+    try {
+        $s = aiserve_db()->prepare('SELECT broadcast_plan FROM companies WHERE id = ? LIMIT 1');
+        $s->execute([$companyId]);
+        $plan = (string)($s->fetchColumn() ?: 'free');
+    } catch (Throwable $e) { /* column missing = fall through to 'free' */ }
+
+    $limit = $plan === 'paid' ? $paidLimit : $freeLimit;
+
+    $used = 0;
+    try {
+        $s = aiserve_db()->prepare(
+            "SELECT COUNT(*) FROM broadcast_recipients r
+             INNER JOIN broadcasts b ON b.id = r.broadcast_id
+             WHERE b.company_id = ?
+               AND r.sent_at IS NOT NULL
+               AND r.sent_at >= DATE_FORMAT(NOW(), '%Y-%m-01')"
+        );
+        $s->execute([$companyId]);
+        $used = (int)$s->fetchColumn();
+    } catch (Throwable $e) { /* ok */ }
+
+    return [
+        'plan'      => $plan,
+        'limit'     => $limit,
+        'used'      => $used,
+        'remaining' => max($limit - $used, 0),
+        'price'     => $paidPrice,
+        'currency'  => $currency,
+        'free_limit'=> $freeLimit,
+        'paid_limit'=> $paidLimit,
+    ];
+}
+
+/**
  * Per-process cache of /admin/pricing.php settings. All public pricing pages
  * read through this so editing settings is reflected immediately on the next
  * request. Falls back to the original RM 12 / RM 60 / RM 12-extra defaults

@@ -20,7 +20,7 @@ $db = aiserve_db();
 // stayed at whatever companies.provider was seeded to on register.
 // Fallback if no channel exists yet: show "(no channel)".
 $stmt = $db->query(
-    'SELECT c.id, c.name, c.slug, c.plan, c.created_at,
+    'SELECT c.id, c.name, c.slug, c.plan, c.broadcast_plan, c.created_at,
             (SELECT provider FROM channels
               WHERE company_id = c.id AND is_default = 1 LIMIT 1)
               AS provider,
@@ -77,6 +77,7 @@ layout_start($current_user, 'Workspaces', 'workspaces');
         <th>Workspace</th>
         <th>Slug</th>
         <th>Plan</th>
+        <th>Broadcast plan</th>
         <th>Provider</th>
         <th>Users</th>
         <th>Conversations</th>
@@ -87,7 +88,7 @@ layout_start($current_user, 'Workspaces', 'workspaces');
     </thead>
     <tbody>
       <?php if (!$rows): ?>
-        <tr><td colspan="9" class="muted">No active workspaces yet.</td></tr>
+        <tr><td colspan="10" class="muted">No active workspaces yet.</td></tr>
       <?php endif; ?>
       <?php foreach ($rows as $r): ?>
         <tr>
@@ -108,6 +109,26 @@ layout_start($current_user, 'Workspaces', 'workspaces');
               </select>
               <button type="submit" class="btn btn-sm" style="padding:2px 6px;" title="Change plan">✓</button>
             </form>
+          </td>
+          <td>
+            <?php
+              $bcastPlan = (string)($r['broadcast_plan'] ?? 'free');
+              $bcastQuota = broadcast_quota_for_workspace((int)$r['id']);
+            ?>
+            <form method="post" action="/api/workspace_action.php" style="display:flex; gap:4px; align-items:center;"
+                  onsubmit="return confirm('Change broadcast plan for &quot;<?= e(addslashes((string)$r['name'])) ?>&quot; to ' + this.broadcast_plan.options[this.broadcast_plan.selectedIndex].text + '?');">
+              <?= csrf_field() ?>
+              <input type="hidden" name="action" value="change_broadcast_plan">
+              <input type="hidden" name="company_id" value="<?= (int)$r['id'] ?>">
+              <select name="broadcast_plan" style="padding:2px 4px; font-size:12px;">
+                <option value="free" <?= $bcastPlan === 'free' ? 'selected' : '' ?>>Free (<?= number_format($bcastQuota['free_limit']) ?>)</option>
+                <option value="paid" <?= $bcastPlan === 'paid' ? 'selected' : '' ?>>Paid (<?= number_format($bcastQuota['paid_limit']) ?>)</option>
+              </select>
+              <button type="submit" class="btn btn-sm" style="padding:2px 6px;" title="Change broadcast plan">✓</button>
+            </form>
+            <div class="muted small" style="margin-top:2px;">
+              <?= number_format($bcastQuota['used']) ?> / <?= number_format($bcastQuota['limit']) ?> used this month
+            </div>
           </td>
           <td>
             <?php if (!empty($r['provider'])): ?>

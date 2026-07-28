@@ -206,12 +206,12 @@ if (is_post()) {
         }
         if (!$err && count($waIds) > 5000) $err = 'Recipient limit is 5000 per blast.';
 
-        // Phase 30: broadcast metering. Check that this workspace's remaining
-        // monthly quota can cover the whole recipient list. Block otherwise
-        // with an upgrade CTA to the paid plan.
+        // Phase 30/31: broadcast metering. PAYG plans skip the quota
+        // block entirely (they pay per-recipient). Free / Paid plans get
+        // blocked when the recipient list would exceed remaining quota.
         if (!$err && count($waIds) > 0) {
             $quota = broadcast_quota_for_workspace($companyId);
-            if (count($waIds) > $quota['remaining']) {
+            if (!$quota['unlimited'] && count($waIds) > $quota['remaining']) {
                 $needMore = count($waIds) - $quota['remaining'];
                 if ($quota['plan'] === 'free') {
                     $err = 'This broadcast would exceed your free-plan quota by '
@@ -221,12 +221,17 @@ if (is_post()) {
                         . 'Upgrade to the paid plan (' . e($quota['currency']) . ' '
                         . rtrim(rtrim(number_format($quota['price'], 2), '0'), '.')
                         . ' / month for ' . number_format($quota['paid_limit'])
-                        . ' recipients) — ask your platform admin to switch this workspace to the paid plan.';
+                        . ' recipients) or pay-as-you-go at ' . e($quota['currency']) . ' '
+                        . rtrim(rtrim(number_format($quota['payg_rate'], 2), '0'), '.')
+                        . ' per recipient. Ask your platform admin to switch this workspace.';
                 } else {
                     $err = 'This broadcast would exceed your paid-plan quota by '
                         . number_format($needMore) . ' recipient(s). '
                         . 'You have ' . number_format($quota['remaining']) . ' left this month out of '
-                        . number_format($quota['limit']) . '. Quota resets on the 1st of next month.';
+                        . number_format($quota['limit']) . '. Quota resets on the 1st of next month. '
+                        . 'Or switch to pay-as-you-go for unlimited sends at '
+                        . e($quota['currency']) . ' ' . rtrim(rtrim(number_format($quota['payg_rate'], 2), '0'), '.')
+                        . ' per recipient.';
                 }
             }
         }
@@ -304,8 +309,13 @@ if (is_post()) {
 }
 
 $quota = broadcast_quota_for_workspace($companyId);
-$quotaPct = $quota['limit'] > 0 ? round(($quota['used'] / $quota['limit']) * 100) : 0;
-$quotaBarColor = $quotaPct >= 90 ? '#DC2626' : ($quotaPct >= 70 ? '#F59E0B' : '#25D366');
+if (!$quota['unlimited']) {
+    $quotaPct = $quota['limit'] > 0 ? round(($quota['used'] / $quota['limit']) * 100) : 0;
+    $quotaBarColor = $quotaPct >= 90 ? '#DC2626' : ($quotaPct >= 70 ? '#F59E0B' : '#25D366');
+} else {
+    $quotaPct = 0;
+    $quotaBarColor = '#0891B2';
+}
 
 layout_start($current_user, 'New broadcast', 'broadcasts');
 ?>
@@ -313,23 +323,38 @@ layout_start($current_user, 'New broadcast', 'broadcasts');
 <div class="card" style="margin-bottom: 12px; border-left: 4px solid <?= $quotaBarColor ?>;">
   <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
     <div>
-      <strong><?= $quota['plan'] === 'paid' ? 'Paid broadcast plan' : 'Free broadcast plan' ?></strong>
-      <span class="muted small">
-        · <?= number_format($quota['used']) ?> / <?= number_format($quota['limit']) ?> recipients used this month
-        · <?= number_format($quota['remaining']) ?> remaining
-      </span>
+      <strong>
+        <?php if ($quota['plan'] === 'payg'): ?>⚡ Pay-as-you-go
+        <?php elseif ($quota['plan'] === 'paid'): ?>💎 Paid broadcast plan
+        <?php else: ?>Free broadcast plan<?php endif; ?>
+      </strong>
+      <?php if ($quota['plan'] === 'payg'): ?>
+        <span class="muted small">
+          · <?= number_format($quota['used']) ?> recipient(s) sent this month
+          · accrued: <strong><?= e($quota['currency']) ?> <?= number_format($quota['payg_accrued'], 2) ?></strong>
+          at <?= e($quota['currency']) ?> <?= rtrim(rtrim(number_format($quota['payg_rate'], 2), '0'), '.') ?>/recipient
+        </span>
+      <?php else: ?>
+        <span class="muted small">
+          · <?= number_format($quota['used']) ?> / <?= number_format($quota['limit']) ?> recipients used this month
+          · <?= number_format($quota['remaining']) ?> remaining
+        </span>
+      <?php endif; ?>
     </div>
     <?php if ($quota['plan'] === 'free'): ?>
       <span class="muted small">
-        Upgrade to paid: <strong><?= e($quota['currency']) ?> <?= rtrim(rtrim(number_format($quota['price'], 2), '0'), '.') ?> / month</strong>
-        for <?= number_format($quota['paid_limit']) ?> recipients.
-        Contact your platform admin.
+        Upgrade: <strong><?= e($quota['currency']) ?> <?= rtrim(rtrim(number_format($quota['price'], 2), '0'), '.') ?>/mo</strong>
+        for <?= number_format($quota['paid_limit']) ?> recipients, or PAYG at <?= e($quota['currency']) ?> <?= rtrim(rtrim(number_format($quota['payg_rate'], 2), '0'), '.') ?>/recipient
       </span>
+    <?php elseif ($quota['plan'] === 'paid' && $quota['billing_cycle'] === 'yearly'): ?>
+      <span class="muted small">Yearly billing (<?= (int)$quota['yearly_discount'] ?>% off)</span>
     <?php endif; ?>
   </div>
-  <div style="height:6px; background:#f6f9fb; border-radius:3px; overflow:hidden; margin-top:6px;">
-    <div style="height:100%; width:<?= min(100, $quotaPct) ?>%; background:<?= $quotaBarColor ?>;"></div>
-  </div>
+  <?php if (!$quota['unlimited']): ?>
+    <div style="height:6px; background:#f6f9fb; border-radius:3px; overflow:hidden; margin-top:6px;">
+      <div style="height:100%; width:<?= min(100, $quotaPct) ?>%; background:<?= $quotaBarColor ?>;"></div>
+    </div>
+  <?php endif; ?>
 </div>
 
 <div class="card">

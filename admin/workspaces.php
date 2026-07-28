@@ -20,7 +20,7 @@ $db = aiserve_db();
 // stayed at whatever companies.provider was seeded to on register.
 // Fallback if no channel exists yet: show "(no channel)".
 $stmt = $db->query(
-    'SELECT c.id, c.name, c.slug, c.plan, c.broadcast_plan, c.created_at,
+    'SELECT c.id, c.name, c.slug, c.plan, c.broadcast_plan, c.broadcast_billing_cycle, c.created_at,
             (SELECT provider FROM channels
               WHERE company_id = c.id AND is_default = 1 LIMIT 1)
               AS provider,
@@ -115,7 +115,8 @@ layout_start($current_user, 'Workspaces', 'workspaces');
               $bcastPlan = (string)($r['broadcast_plan'] ?? 'free');
               $bcastQuota = broadcast_quota_for_workspace((int)$r['id']);
             ?>
-            <form method="post" action="/api/workspace_action.php" style="display:flex; gap:4px; align-items:center;"
+            <?php $curCycle = (string)($r['broadcast_billing_cycle'] ?? 'monthly'); ?>
+            <form method="post" action="/api/workspace_action.php" style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;"
                   onsubmit="return confirm('Change broadcast plan for &quot;<?= e(addslashes((string)$r['name'])) ?>&quot; to ' + this.broadcast_plan.options[this.broadcast_plan.selectedIndex].text + '?');">
               <?= csrf_field() ?>
               <input type="hidden" name="action" value="change_broadcast_plan">
@@ -123,11 +124,21 @@ layout_start($current_user, 'Workspaces', 'workspaces');
               <select name="broadcast_plan" style="padding:2px 4px; font-size:12px;">
                 <option value="free" <?= $bcastPlan === 'free' ? 'selected' : '' ?>>Free (<?= number_format($bcastQuota['free_limit']) ?>)</option>
                 <option value="paid" <?= $bcastPlan === 'paid' ? 'selected' : '' ?>>Paid (<?= number_format($bcastQuota['paid_limit']) ?>)</option>
+                <option value="payg" <?= $bcastPlan === 'payg' ? 'selected' : '' ?>>PAYG (∞)</option>
+              </select>
+              <select name="broadcast_billing_cycle" style="padding:2px 4px; font-size:12px;">
+                <option value="monthly" <?= $curCycle === 'monthly' ? 'selected' : '' ?>>Monthly</option>
+                <option value="yearly"  <?= $curCycle === 'yearly'  ? 'selected' : '' ?>>Yearly (<?= (int)$bcastQuota['yearly_discount'] ?>% off)</option>
               </select>
               <button type="submit" class="btn btn-sm" style="padding:2px 6px;" title="Change broadcast plan">✓</button>
             </form>
             <div class="muted small" style="margin-top:2px;">
-              <?= number_format($bcastQuota['used']) ?> / <?= number_format($bcastQuota['limit']) ?> used this month
+              <?php if ($bcastPlan === 'payg'): ?>
+                <?= number_format($bcastQuota['used']) ?> sent · accrued
+                <?= e($bcastQuota['currency']) ?> <?= number_format($bcastQuota['payg_accrued'], 2) ?>
+              <?php else: ?>
+                <?= number_format($bcastQuota['used']) ?> / <?= number_format($bcastQuota['limit']) ?> used
+              <?php endif; ?>
             </div>
           </td>
           <td>

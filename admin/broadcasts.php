@@ -43,8 +43,13 @@ $stmt->execute([$companyId]);
 $rows = $stmt->fetchAll();
 
 $quota = broadcast_quota_for_workspace($companyId);
-$quotaPct = $quota['limit'] > 0 ? round(($quota['used'] / $quota['limit']) * 100) : 0;
-$quotaBarColor = $quotaPct >= 90 ? '#DC2626' : ($quotaPct >= 70 ? '#F59E0B' : '#25D366');
+if (!$quota['unlimited']) {
+    $quotaPct = $quota['limit'] > 0 ? round(($quota['used'] / $quota['limit']) * 100) : 0;
+    $quotaBarColor = $quotaPct >= 90 ? '#DC2626' : ($quotaPct >= 70 ? '#F59E0B' : '#25D366');
+} else {
+    $quotaPct = 0;
+    $quotaBarColor = '#0891B2';
+}
 
 layout_start($current_user, 'Broadcasts', 'broadcasts');
 ?>
@@ -53,23 +58,35 @@ layout_start($current_user, 'Broadcasts', 'broadcasts');
   <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
     <div>
       <strong>
-        <?= $quota['plan'] === 'paid' ? '💎 Paid broadcast plan' : 'Free broadcast plan' ?>
+        <?php if ($quota['plan'] === 'payg'): ?>⚡ Pay-as-you-go
+        <?php elseif ($quota['plan'] === 'paid'): ?>💎 Paid broadcast plan
+        <?php else: ?>Free broadcast plan<?php endif; ?>
       </strong>
-      <span class="muted small">
-        · <?= number_format($quota['used']) ?> / <?= number_format($quota['limit']) ?> recipients used this month
-        · <?= number_format($quota['remaining']) ?> remaining
-      </span>
+      <?php if ($quota['plan'] === 'payg'): ?>
+        <span class="muted small">
+          · <?= number_format($quota['used']) ?> recipient(s) sent this month
+          · accrued: <strong><?= e($quota['currency']) ?> <?= number_format($quota['payg_accrued'], 2) ?></strong>
+        </span>
+      <?php else: ?>
+        <span class="muted small">
+          · <?= number_format($quota['used']) ?> / <?= number_format($quota['limit']) ?> recipients used this month
+          · <?= number_format($quota['remaining']) ?> remaining
+        </span>
+      <?php endif; ?>
     </div>
     <?php if ($quota['plan'] === 'free'): ?>
       <span class="muted small">
-        Upgrade: <strong><?= e($quota['currency']) ?> <?= rtrim(rtrim(number_format($quota['price'], 2), '0'), '.') ?> / month</strong>
-        for <?= number_format($quota['paid_limit']) ?> recipients
+        Upgrade: <strong><?= e($quota['currency']) ?> <?= rtrim(rtrim(number_format($quota['price'], 2), '0'), '.') ?>/mo</strong>
       </span>
+    <?php elseif ($quota['plan'] === 'paid' && $quota['billing_cycle'] === 'yearly'): ?>
+      <span class="muted small">Yearly billing (<?= (int)$quota['yearly_discount'] ?>% off)</span>
     <?php endif; ?>
   </div>
-  <div style="height:6px; background:#f6f9fb; border-radius:3px; overflow:hidden; margin-top:6px;">
-    <div style="height:100%; width:<?= min(100, $quotaPct) ?>%; background:<?= $quotaBarColor ?>;"></div>
-  </div>
+  <?php if (!$quota['unlimited']): ?>
+    <div style="height:6px; background:#f6f9fb; border-radius:3px; overflow:hidden; margin-top:6px;">
+      <div style="height:100%; width:<?= min(100, $quotaPct) ?>%; background:<?= $quotaBarColor ?>;"></div>
+    </div>
+  <?php endif; ?>
 </div>
 
 <div class="card">

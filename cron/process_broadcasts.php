@@ -47,6 +47,22 @@ foreach ($broadcasts as $b) {
         continue;
     }
 
+    // Phase 31: broadcast quota auto-suspend. Free / paid plans that
+    // have exhausted their monthly recipient allowance get their
+    // running broadcasts paused, with a note so operators know why.
+    // PAYG plans have unlimited remaining and skip this branch entirely.
+    $quota = broadcast_quota_for_workspace($companyId);
+    if (!$quota['unlimited'] && $quota['remaining'] <= 0) {
+        echo "  bcast=$bid  workspace quota exhausted (" . $quota['used']
+           . " / " . $quota['limit'] . "), pausing\n";
+        $db->prepare(
+            'UPDATE broadcasts SET status = "paused" WHERE id = ? AND status = "running"'
+        )->execute([$bid]);
+        log_activity($companyId, null, 'broadcast_auto_paused', 'broadcast', $bid,
+            'quota_exhausted used=' . $quota['used'] . ' limit=' . $quota['limit']);
+        continue;
+    }
+
     // ATOMIC CLAIM: stamp last_batch_at up front so an overlapping cron
     // tick (Hostinger routinely overlaps runs when a batch takes 30+ s)
     // is fenced out of this broadcast until the next interval opens.

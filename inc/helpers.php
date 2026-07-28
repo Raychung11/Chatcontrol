@@ -426,32 +426,47 @@ function plan_seat_limit(string $plan): int
  * Broadcast quota / usage for a workspace this calendar month.
  *
  * Returns:
- *   plan      : 'free' | 'paid'
- *   limit     : int - monthly recipient allowance for that plan
- *   used      : int - recipients sent so far this month (from broadcast_recipients.sent_at)
- *   remaining : int - max(limit - used, 0)
- *   price     : float - monthly price of the paid plan (for upgrade CTA)
+ *   plan             : 'free' | 'paid' | 'payg'
+ *   billing_cycle    : 'monthly' | 'yearly'  (only meaningful for paid)
+ *   limit            : int - monthly recipient allowance (PAYG = PHP_INT_MAX)
+ *   used             : int - recipients sent so far this month
+ *   remaining        : int - max(limit - used, 0)  (PAYG = PHP_INT_MAX)
+ *   price            : float - the paid plan's monthly price
+ *   yearly_price     : float - paid plan's yearly price after discount
+ *   yearly_discount  : int - discount % applied to yearly billing
+ *   payg_rate        : float - per-recipient PAYG rate
+ *   payg_accrued     : float - accrued PAYG cost this month for PAYG workspaces
+ *   currency, free_limit, paid_limit, unlimited (bool)
  *
- * "Used" counts every broadcast_recipients row with sent_at inside the
- * current calendar month. Failed sends still count against quota — this
- * matches how most SMS/WA pricing works (the API call was made). If you
- * want to change that policy just add "AND status = 'sent'" to the query.
+ * PAYG note: workspaces on the payg plan are treated as unlimited (no
+ * quota block, no auto-suspend). `payg_accrued` = used × payg_rate, for
+ * display. Actual invoicing happens out-of-band.
  */
 function broadcast_quota_for_workspace(int $companyId): array
 {
-    $freeLimit  = (int)platform_setting('broadcast_free_limit', '1000');
-    $paidLimit  = (int)platform_setting('broadcast_paid_limit', '10000');
-    $paidPrice  = (float)platform_setting('broadcast_paid_price', '480');
-    $currency   = platform_setting('pricing_currency', 'RM');
+    $freeLimit    = (int)platform_setting('broadcast_free_limit', '1000');
+    $paidLimit    = (int)platform_setting('broadcast_paid_limit', '10000');
+    $paidPrice    = (float)platform_setting('broadcast_paid_price', '480');
+    $paygRate     = (float)platform_setting('broadcast_payg_per_recipient', '0.05');
+    $yearlyDisc   = max(0, min(100, (int)platform_setting('broadcast_yearly_discount_pct', '20')));
+    $currency     = platform_setting('pricing_currency', 'RM');
 
-    $plan = 'free';
+    $plan  = 'free';
+    $cycle = 'monthly';
     try {
-        $s = aiserve_db()->prepare('SELECT broadcast_plan FROM companies WHERE id = ? LIMIT 1');
+        $s = aiserve_db()->prepare('SELECT broadcast_plan, broadcast_billing_cycle FROM companies WHERE id = ? LIMIT 1');
         $s->execute([$companyId]);
-        $plan = (string)($s->fetchColumn() ?: 'free');
+        $row = $s->fetch();
+        if ($row) {
+            $plan  = (string)($row['broadcast_plan']          ?? 'free');
+            $cycle = (string)($row['broadcast_billing_cycle'] ?? 'monthly');
+        }
     } catch (Throwable $e) { /* column missing = fall through to 'free' */ }
 
-    $limit = $plan === 'paid' ? $paidLimit : $freeLimit;
+    $unlimited = ($plan === 'payg');
+    $limit     = $unlimited
+        ? PHP_INT_MAX
+        : ($plan === 'paid' ? $paidLimit : $freeLimit);
 
     $used = 0;
     try {
@@ -466,15 +481,23 @@ function broadcast_quota_for_workspace(int $companyId): array
         $used = (int)$s->fetchColumn();
     } catch (Throwable $e) { /* ok */ }
 
+    $yearlyEffective = $paidPrice * 12 * (1 - ($yearlyDisc / 100));
+
     return [
-        'plan'      => $plan,
-        'limit'     => $limit,
-        'used'      => $used,
-        'remaining' => max($limit - $used, 0),
-        'price'     => $paidPrice,
-        'currency'  => $currency,
-        'free_limit'=> $freeLimit,
-        'paid_limit'=> $paidLimit,
+        'plan'            => $plan,
+        'billing_cycle'   => $cycle,
+        'limit'           => $limit,
+        'used'            => $used,
+        'remaining'       => $unlimited ? PHP_INT_MAX : max($limit - $used, 0),
+        'unlimited'       => $unlimited,
+        'price'           => $paidPrice,
+        'yearly_price'    => $yearlyEffective,
+        'yearly_discount' => $yearlyDisc,
+        'payg_rate'       => $paygRate,
+        'payg_accrued'    => $plan === 'payg' ? $used * $paygRate : 0.0,
+        'currency'        => $currency,
+        'free_limit'      => $freeLimit,
+        'paid_limit'      => $paidLimit,
     ];
 }
 

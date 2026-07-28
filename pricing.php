@@ -131,6 +131,67 @@ $exampleTotalF = fmt_price($exampleTotal, $cur);
   </div>
 </section>
 
+<?php
+  // Broadcast tier settings for the public section below.
+  $bcastFreeLimit  = (int)platform_setting('broadcast_free_limit', '1000');
+  $bcastPaidLimit  = (int)platform_setting('broadcast_paid_limit', '10000');
+  $bcastPaidPrice  = (float)platform_setting('broadcast_paid_price', '480');
+  $bcastYearlyPct  = max(0, min(100, (int)platform_setting('broadcast_yearly_discount_pct', '20')));
+  $bcastPaygRate   = (float)platform_setting('broadcast_payg_per_recipient', '0.05');
+  $bcastPaidYearly = $bcastPaidPrice * 12 * (1 - ($bcastYearlyPct / 100));
+  $fmt = fn($v) => rtrim(rtrim(number_format($v, 2), '0'), '.');
+?>
+<section class="landing-section">
+  <h2 class="landing-h2">Broadcast pricing</h2>
+  <p class="landing-sub">
+    Send announcements, promos, and reminders to many customers in one go.
+    One send = one recipient. Every workspace starts on the free tier —
+    upgrade only when you need more volume.
+  </p>
+
+  <div class="landing-grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));">
+    <div class="feature-card" style="border: 2px solid var(--c-border, #e3e8ee);">
+      <h3>Free</h3>
+      <p style="font-size: 28px; font-weight: 700; margin: 4px 0;"><?= e($cur) ?> 0<span class="muted small" style="font-weight: normal;">/month</span></p>
+      <p><strong><?= number_format($bcastFreeLimit) ?></strong> recipient sends per month</p>
+      <ul class="muted small" style="margin: 8px 0 0 18px; line-height: 1.7;">
+        <li>Included with every workspace</li>
+        <li>Attach up to 4 images per blast</li>
+        <li>Trickle sending at your pace</li>
+      </ul>
+    </div>
+
+    <div class="feature-card" style="border: 2px solid #25D366; position: relative;">
+      <div style="position: absolute; top: -10px; right: 12px; background: #25D366; color: #fff; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 600;">POPULAR</div>
+      <h3>Paid</h3>
+      <p style="font-size: 28px; font-weight: 700; margin: 4px 0;">
+        <?= e($cur) ?> <?= e($fmt($bcastPaidPrice)) ?><span class="muted small" style="font-weight: normal;">/month</span>
+      </p>
+      <p><strong><?= number_format($bcastPaidLimit) ?></strong> recipient sends per month</p>
+      <ul class="muted small" style="margin: 8px 0 0 18px; line-height: 1.7;">
+        <li><?= e($cur) ?> <?= e($fmt($bcastPaidPrice / max($bcastPaidLimit, 1))) ?> per recipient at cap</li>
+        <li>All free-tier features included</li>
+        <?php if ($bcastYearlyPct > 0): ?>
+          <li><strong>Save <?= (int)$bcastYearlyPct ?>%</strong> with yearly billing: <?= e($cur) ?> <?= e($fmt($bcastPaidYearly)) ?>/year</li>
+        <?php endif; ?>
+      </ul>
+    </div>
+
+    <div class="feature-card" style="border: 2px solid #0891B2;">
+      <h3>Pay-as-you-go</h3>
+      <p style="font-size: 28px; font-weight: 700; margin: 4px 0;">
+        <?= e($cur) ?> <?= e($fmt($bcastPaygRate)) ?><span class="muted small" style="font-weight: normal;">/recipient</span>
+      </p>
+      <p><strong>Unlimited</strong> sends, billed monthly by usage</p>
+      <ul class="muted small" style="margin: 8px 0 0 18px; line-height: 1.7;">
+        <li>No monthly commitment</li>
+        <li>No cap, no auto-suspend</li>
+        <li>Ideal for seasonal / burst usage</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
 <section class="landing-section landing-alt">
   <h2 class="landing-h2">Frequently asked</h2>
   <div class="landing-grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">

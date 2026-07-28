@@ -85,6 +85,18 @@ $fields = [
         'hint'  => 'Flat monthly price for the paid broadcast plan. In the same currency as the seat pricing above.',
         'step'  => '0.01',
     ],
+    'broadcast_yearly_discount_pct' => [
+        'label' => 'Yearly billing discount (%)',
+        'type'  => 'number',
+        'hint'  => 'Discount applied when a workspace picks yearly billing. e.g. 20 means 12 months for the price of 9.6. Display-only — actual billing happens out-of-band.',
+        'step'  => '1',
+    ],
+    'broadcast_payg_per_recipient' => [
+        'label' => 'Pay-as-you-go: price per recipient',
+        'type'  => 'number',
+        'hint'  => 'Rate charged per recipient send on the PAYG plan. No monthly cap. Displayed in the same currency as above.',
+        'step'  => '0.01',
+    ],
 ];
 
 if (is_post()) {

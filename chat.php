@@ -93,11 +93,15 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
 }
 .wc-composer textarea:focus { outline: 2px solid <?= e($brand) ?>; outline-offset: -1px; }
 .wc-composer button {
-  width: 40px; height: 40px; border-radius: 50%; border: none;
+  width: 44px; height: 44px; border-radius: 50%; border: none;
   background: <?= e($brand) ?>; color: #fff; font-size: 20px;
   cursor: pointer; flex-shrink: 0;
+  /* Ensure the tap target is above anything, and touch works reliably on iOS */
+  -webkit-tap-highlight-color: rgba(0,0,0,.15);
+  touch-action: manipulation;
 }
-.wc-composer button:disabled { opacity: .5; cursor: default; }
+.wc-composer button.busy { background: #9ca3af; }
+.wc-composer button:active { transform: scale(0.94); }
 
 .wc-loading {
   text-align: center; color: #667; font-size: 12px;
@@ -128,7 +132,7 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
 <div class="wc-composer">
   <textarea id="wc-input" placeholder="Type a message…" rows="1"
             onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();wcSend();}"></textarea>
-  <button id="wc-btn" onclick="wcSend()" disabled>➤</button>
+  <button id="wc-btn" type="button" onclick="wcSend()">➤</button>
 </div>
 
 <script>
@@ -149,8 +153,12 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
   const status = document.getElementById('wc-status');
   const loader = document.getElementById('wc-loading');
 
-  function ready() { btn.disabled = !(sessionToken && input.value.trim()); }
-  input.addEventListener('input', ready);
+  // Visual only — the button stays always-clickable so a mistap can't
+  // leave the customer unable to send. We show a "busy" tint during
+  // an in-flight send instead of disabling.
+  function markBusy(on) {
+    if (on) btn.classList.add('busy'); else btn.classList.remove('busy');
+  }
 
   function pad(n) { return n < 10 ? '0' + n : n; }
   function hhmm(dstr) {
@@ -199,18 +207,31 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
       } else if (GREETING) {
         renderBubble(GREETING, 'outgoing', new Date().toISOString().replace('T', ' ').slice(0, 19), false);
       }
-      ready();
       startPolling();
     } catch (err) {
-      status.textContent = 'Offline — reload to reconnect';
-      if (loader) loader.textContent = 'Could not connect. Reload the page.';
+      status.textContent = 'Offline — tap Send to retry';
+      if (loader) loader.textContent = 'Could not connect. Tap the send button to retry.';
     }
   }
 
   async function wcSend() {
     const text = input.value.trim();
-    if (!text || !sessionToken) return;
-    btn.disabled = true;
+    if (!text) {
+      input.focus();
+      return;
+    }
+    // If the initial handshake never completed (or failed), retry it
+    // right here so the customer doesn't get stuck with a dead widget.
+    if (!sessionToken) {
+      status.textContent = 'Connecting…';
+      await widgetStart();
+      if (!sessionToken) {
+        status.textContent = 'Still offline — try again in a moment';
+        return;
+      }
+      status.textContent = 'Online';
+    }
+    markBusy(true);
     // Optimistic render
     const now = new Date();
     renderBubble(text, 'incoming', now.toISOString().replace('T', ' ').slice(0, 19), false);
@@ -224,14 +245,13 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
       const res = await fetch('/api/widget_send.php', { method: 'POST', body: fd });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || 'send failed');
-      // Bump our lastMsgId so we don't re-render our own message on next poll
       if (data.message_id) lastMsgId = Math.max(lastMsgId, data.message_id);
       // Immediately poll so any bot reply lands fast
       pollOnce();
     } catch (err) {
-      status.textContent = 'Message failed — reload';
+      status.textContent = 'Message failed — try again';
     } finally {
-      ready();
+      markBusy(false);
     }
   }
 

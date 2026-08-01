@@ -106,20 +106,21 @@ function fnb_render_cart(array $cart, string $currency): string
     if (!$cart) return "🛒 Your cart is empty.";
     $lines = ["🛒 *Your order so far:*", ''];
     $subtotal = 0.0;
-    foreach ($cart as $it) {
+    foreach ($cart as $i => $it) {
+        $num   = $i + 1;
         $q     = (int)($it['quantity'] ?? 1);
         $name  = (string)($it['product_name'] ?? '');
         $lt    = (float)($it['line_total'] ?? 0);
         $subtotal += $lt;
-        $lines[] = sprintf("• %dx %s — %s %s", $q, $name, $currency, number_format($lt, 2));
+        $lines[] = sprintf("*%d.* %dx %s — %s %s", $num, $q, $name, $currency, number_format($lt, 2));
         foreach ((array)($it['variants'] ?? []) as $v) {
-            $lines[] = "   ◦ " . (string)($v['group'] ?? '') . ": " . (string)($v['name'] ?? '');
+            $lines[] = "     ◦ " . (string)($v['group'] ?? '') . ": " . (string)($v['name'] ?? '');
         }
         foreach ((array)($it['addons'] ?? []) as $a) {
-            $lines[] = "   + " . (string)($a['name'] ?? '');
+            $lines[] = "     + " . (string)($a['name'] ?? '');
         }
         if (!empty($it['instructions'])) {
-            $lines[] = "   _📝 " . (string)$it['instructions'] . "_";
+            $lines[] = "     _📝 " . (string)$it['instructions'] . "_";
         }
     }
     $lines[] = '';
@@ -128,26 +129,44 @@ function fnb_render_cart(array $cart, string $currency): string
 }
 
 /**
- * Call Claude to parse a free-text order like "2 chicken rice, 1 nasi
- * lemak less spicy" against the current menu. Returns:
- *   { ok, items: [ {product_id, quantity, variants_pick:[ids], addons_pick:[ids], instructions} ],
- *     unmatched: [...], clarification: str|null, error: str|null }
+ * Call Claude to parse a customer's free-text message against the
+ * current menu AND the running cart. Detects intent so a single node
+ * type handles both "2 chicken rice" (add) and "remove item 2" / "take
+ * out the nasi lemak" (remove) / "clear cart" (clear).
+ *
+ * $currentCart = 1-based numbered list from state.cart (as rendered)
+ * so the AI can map "item 2" to a cart index.
+ *
+ * Returns:
+ *   { ok, intent, items, remove_line_numbers, clarification, error }
+ *
+ * intent:
+ *   'add'    - customer added items (items[] populated)
+ *   'remove' - customer wants to remove cart lines (remove_line_numbers populated)
+ *   'clear'  - customer wants to start over (empty the cart)
+ *   'none'   - couldn't determine intent (clarification usually set)
  *
  * Fails gracefully if the AI provider isn't configured — caller can
  * fall back to asking the customer to be more specific.
  */
-function fnb_parse_order_ai(array $company, string $customerMessage, array $menu): array
+function fnb_parse_order_ai(array $company, string $customerMessage, array $menu, array $currentCart = []): array
 {
     require_once __DIR__ . '/ai_api.php';
 
+    // Every early-return shape stays consistent so callers don't have to
+    // branch on partial responses.
+    $empty = [
+        'ok' => false, 'intent' => 'none', 'items' => [],
+        'remove_line_numbers' => [], 'unmatched' => [],
+        'clarification' => null, 'error' => null,
+    ];
+
     if (!ai_is_configured($company)) {
-        return ['ok' => false, 'items' => [], 'unmatched' => [], 'clarification' => null,
-                'error' => 'AI is not configured for this workspace.'];
+        return array_merge($empty, ['error' => 'AI is not configured for this workspace.']);
     }
     $apiKey = ai_api_key($company);
     if ($apiKey === '') {
-        return ['ok' => false, 'items' => [], 'unmatched' => [], 'clarification' => null,
-                'error' => 'No Anthropic API key.'];
+        return array_merge($empty, ['error' => 'No Anthropic API key.']);
     }
     $model = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
 
@@ -170,34 +189,58 @@ function fnb_parse_order_ai(array $company, string $customerMessage, array $menu
         $menuLines[] = $line;
     }
 
+    // Render the current cart with 1-based numbering so the AI can map
+    // "item 2" or "the chicken rice" to a specific cart index.
+    $cartLines = [];
+    foreach ($currentCart as $i => $ln) {
+        $q  = (int)($ln['quantity']     ?? 1);
+        $nm = (string)($ln['product_name'] ?? '');
+        $bits = ["#" . ($i + 1) . " {$q}x {$nm}"];
+        foreach ((array)($ln['variants'] ?? []) as $v) {
+            $bits[] = "(" . ($v['group'] ?? '') . ": " . ($v['name'] ?? '') . ")";
+        }
+        foreach ((array)($ln['addons'] ?? []) as $a) {
+            $bits[] = "+ " . ($a['name'] ?? '');
+        }
+        $cartLines[] = implode(' ', $bits);
+    }
+    $cartText = $cartLines ? implode("\n", $cartLines) : "(cart is empty)";
+
     $systemPrompt =
-        "You extract structured cart items from a restaurant customer's WhatsApp "
-      . "order text against a fixed menu. Return ONLY a single JSON object, no "
-      . "markdown fences, no preamble.\n\n"
+        "You interpret a restaurant customer's WhatsApp message about their order. "
+      . "You decide if they want to ADD items, REMOVE items from the current cart, "
+      . "CLEAR the cart entirely, or if the intent is unclear (NONE). Return ONLY a "
+      . "single JSON object, no markdown fences, no preamble.\n\n"
       . "Schema:\n"
       . "{\n"
-      . "  \"items\": [\n"
+      . "  \"intent\": \"add\" | \"remove\" | \"clear\" | \"none\",\n"
+      . "  \"items\": [                                // ONLY when intent = add\n"
       . "    {\n"
       . "      \"product_id\": int,\n"
       . "      \"quantity\": int (default 1),\n"
-      . "      \"variants_pick\": [int, int]  // ids from the product's variants list, one per group\n"
-      . "      \"addons_pick\": [int, int]    // ids from the product's addons list\n"
-      . "      \"instructions\": string|null  // free-text notes like \"less spicy\"\n"
+      . "      \"variants_pick\": [int, int],\n"
+      . "      \"addons_pick\": [int, int],\n"
+      . "      \"instructions\": string|null\n"
       . "    }\n"
       . "  ],\n"
-      . "  \"unmatched\": [string]  // customer phrases that don't map to a product\n"
-      . "  \"clarification\": string|null  // one short question to ask if ambiguous, else null\n"
+      . "  \"remove_line_numbers\": [int, int],       // 1-based CART indexes to remove, ONLY when intent = remove\n"
+      . "  \"unmatched\": [string],                    // customer phrases that don't map to menu / cart\n"
+      . "  \"clarification\": string|null              // one short question to ask if ambiguous\n"
       . "}\n\n"
       . "Rules:\n"
-      . "- Match product_id from the menu exactly. Fuzzy-match short names.\n"
-      . "- If a customer specifies size/spice/etc, pick the matching variant id.\n"
-      . "- If a customer doesn't specify a variant, leave variants_pick empty (frontend picks the default).\n"
-      . "- Attach 'less spicy', 'no onion', etc. as instructions on the item.\n"
-      . "- Never invent a product_id or variant_id that isn't in the menu.\n"
-      . "- If nothing matches, items = [] and unmatched lists what the customer said.";
+      . "- ADD intent examples: '2 chicken rice', 'add nasi lemak', 'also 1 lemon tea'.\n"
+      . "- REMOVE intent examples: 'remove item 2', 'take out the nasi lemak', 'cancel #1', 'delete chicken rice'.\n"
+      . "  For remove, populate remove_line_numbers using 1-based indexes from the CURRENT CART shown below.\n"
+      . "  If the customer names a product ('remove the chicken rice'), find its CART index and use that.\n"
+      . "- CLEAR intent examples: 'clear cart', 'start over', 'cancel everything'. Leave arrays empty.\n"
+      . "- Match product_id EXACTLY from the menu. Fuzzy-match short names.\n"
+      . "- Instructions ('less spicy', 'no onion') go on the individual item, not as a separate line.\n"
+      . "- Never invent a product_id, variant_id, addon_id, or cart index that doesn't exist.\n"
+      . "- If nothing matches at all, intent = 'none', clarification set to a short helpful question.";
 
     $userPrompt =
         "MENU:\n" . implode("\n\n", $menuLines) . "\n\n"
+      . "CURRENT CART (1-based indexes):\n" . $cartText . "\n\n"
       . "CUSTOMER MESSAGE:\n" . $customerMessage;
 
     $payload = [
@@ -224,30 +267,34 @@ function fnb_parse_order_ai(array $company, string $customerMessage, array $menu
     $err  = curl_error($ch);
     curl_close($ch);
     if ($resp === false) {
-        return ['ok' => false, 'items' => [], 'unmatched' => [], 'clarification' => null,
-                'error' => 'Network error: ' . $err];
+        return array_merge($empty, ['error' => 'Network error: ' . $err]);
     }
     $data = json_decode($resp, true);
     if (!is_array($data) || empty($data['content'][0]['text'])) {
-        return ['ok' => false, 'items' => [], 'unmatched' => [], 'clarification' => null,
-                'error' => 'AI returned an unexpected shape (HTTP ' . $code . ')'];
+        return array_merge($empty, ['error' => 'AI returned an unexpected shape (HTTP ' . $code . ')']);
     }
     $raw = trim((string)$data['content'][0]['text']);
-    // Strip fenced blocks defensively.
     if (str_starts_with($raw, '```')) {
         $raw = preg_replace('/^```(?:json)?\s*|\s*```$/', '', $raw);
     }
     $parsed = json_decode($raw, true);
     if (!is_array($parsed)) {
-        return ['ok' => false, 'items' => [], 'unmatched' => [], 'clarification' => null,
-                'error' => 'AI did not return valid JSON: ' . mb_substr($raw, 0, 200)];
+        return array_merge($empty, ['error' => 'AI did not return valid JSON: ' . mb_substr($raw, 0, 200)]);
     }
+
+    $intent = (string)($parsed['intent'] ?? 'none');
+    if (!in_array($intent, ['add', 'remove', 'clear', 'none'], true)) $intent = 'none';
+
     return [
-        'ok'            => true,
-        'items'         => (array)($parsed['items']         ?? []),
-        'unmatched'     => (array)($parsed['unmatched']     ?? []),
-        'clarification' => $parsed['clarification'] ?? null,
-        'error'         => null,
+        'ok'                  => true,
+        'intent'              => $intent,
+        'items'               => (array)($parsed['items']               ?? []),
+        'remove_line_numbers' => array_values(array_filter(array_map('intval',
+                                    (array)($parsed['remove_line_numbers'] ?? [])),
+                                    fn($n) => $n > 0)),
+        'unmatched'           => (array)($parsed['unmatched']           ?? []),
+        'clarification'       => $parsed['clarification'] ?? null,
+        'error'               => null,
     ];
 }
 

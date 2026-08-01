@@ -319,10 +319,13 @@ function flow_engine_execute_node(PDO $db, array $inst, array $node): int
             return (int)($node['next_node_id'] ?? 0);
 
         case 'fnb_cart_add':
-            // Calls Claude to parse state.last_reply into structured cart
-            // items, appends to state.cart, sends confirmation. On
-            // parse-failure sends a clarification question and stays put
-            // (customer's next reply gets re-parsed against the same node).
+            // Calls Claude to interpret state.last_reply against the menu
+            // AND the current cart. Handles four intents:
+            //   add    - appends parsed items to state.cart
+            //   remove - drops cart lines by 1-based index the customer named
+            //   clear  - empties the cart entirely
+            //   none   - sends a clarification ask + re-enters wait state
+            //            so the next customer reply resumes here
             require_once __DIR__ . '/fnb_helpers.php';
             require_once __DIR__ . '/whatsapp_api.php';   // for load_company_settings
             $conv    = flow_engine_conversation($db, (int)$inst['conversation_id']);
@@ -333,40 +336,75 @@ function flow_engine_execute_node(PDO $db, array $inst, array $node): int
             $currency = platform_setting('pricing_currency', 'RM');
 
             $lastReply = (string)($state['last_reply'] ?? '');
-            $menu = fnb_active_menu((int)$conv['company_id']);
-            $ai = fnb_parse_order_ai($company, $lastReply, $menu);
+            $menu      = fnb_active_menu((int)$conv['company_id']);
+            $curCart   = (array)($state['cart'] ?? []);
+            $ai        = fnb_parse_order_ai($company, $lastReply, $menu, $curCart);
 
-            if (!$ai['ok'] || (!$ai['items'] && !$ai['unmatched'])) {
-                // Fallback: ask customer to be more specific.
-                $askMsg = "Sorry, I didn't catch that. Could you tell me which items and quantities you'd like?";
+            // Apply intent to the cart.
+            $intent = (string)($ai['intent'] ?? 'none');
+            $emptyResult = !$ai['ok']
+                || ($intent === 'add'    && !$ai['items'])
+                || ($intent === 'remove' && !$ai['remove_line_numbers']);
+
+            if ($intent === 'none' || $emptyResult) {
+                // Fallback: send AI's clarification (or a generic ask) +
+                // re-enter waiting state so the next reply resumes here.
+                $askMsg = trim((string)($ai['clarification'] ?? ''))
+                    ?: "Sorry, I didn't catch that. Please tell me what to add (e.g. \"2 chicken rice\"), what to remove (e.g. \"remove item 2\"), or say \"clear\" to start over.";
                 $r = provider_send_text($channel, (string)$conv['wa_id'], $askMsg);
                 flow_engine_log_outgoing_message($db, $conv, $askMsg, $r);
-                // Set instance back to waiting so the next customer reply
-                // resumes here — same as wait_reply.
                 $db->prepare('UPDATE flow_instances SET status = "waiting", waiting_since = NOW() WHERE id = ?')
                    ->execute([(int)$inst['id']]);
                 return -1;
             }
 
-            $newLines = fnb_cart_lines_from_ai($ai['items'], $menu);
-            $state['cart'] = array_merge((array)($state['cart'] ?? []), $newLines);
-            // Persist cart state before sending the confirmation (better
-            // to have cart saved even if the outbound send fails).
+            $actionSummary = '';
+            if ($intent === 'add') {
+                $newLines = fnb_cart_lines_from_ai($ai['items'], $menu);
+                $curCart = array_merge($curCart, $newLines);
+                $addedCount = count($newLines);
+                if ($addedCount > 0) {
+                    $actionSummary = "✓ Added " . $addedCount . " item" . ($addedCount === 1 ? '' : 's') . " to your cart.";
+                }
+            } elseif ($intent === 'remove') {
+                // remove_line_numbers is 1-based. Sort desc so removing
+                // by index doesn't shift the remaining indexes we still
+                // need to remove.
+                $removedNames = [];
+                $ids = $ai['remove_line_numbers'];
+                rsort($ids);
+                foreach ($ids as $oneBased) {
+                    $idx = $oneBased - 1;
+                    if (isset($curCart[$idx])) {
+                        $removedNames[] = (string)($curCart[$idx]['product_name'] ?? '?');
+                        array_splice($curCart, $idx, 1);
+                    }
+                }
+                if ($removedNames) {
+                    $actionSummary = "✓ Removed: " . implode(', ', array_reverse($removedNames));
+                } else {
+                    $actionSummary = "I couldn't find those items in your cart.";
+                }
+            } elseif ($intent === 'clear') {
+                $curCart = [];
+                $actionSummary = "🗑️ Cart cleared. Tell me what you'd like to order.";
+            }
+
+            $state['cart'] = $curCart;
             $db->prepare('UPDATE flow_instances SET state = ? WHERE id = ?')
                ->execute([json_encode($state, JSON_UNESCAPED_UNICODE), (int)$inst['id']]);
-            $inst['state'] = $db->query('SELECT state FROM flow_instances WHERE id = ' . (int)$inst['id'])->fetchColumn();
 
-            // Send confirmation.
-            $confirm = fnb_render_cart($state['cart'], $currency);
+            // Build the reply. Add-intent shows the current cart; remove/
+            // clear also show it so the customer sees the new state.
             $extra = '';
             if (!empty($ai['unmatched'])) {
                 $extra .= "\n\n⚠️ I couldn't find: " . implode(', ', array_map('strval', $ai['unmatched']));
             }
-            if (!empty($ai['clarification'])) {
-                $extra .= "\n\n❓ " . $ai['clarification'];
-            }
-            $confirm .= "\n\nWould you like to add anything else? Reply 'done' when finished.";
-            if ($extra) $confirm = $extra . "\n\n" . $confirm;
+            $cartMsg = $curCart
+                ? fnb_render_cart($curCart, $currency)
+                  . "\n\nAnything else? Say \"done\" when finished, or \"remove #N\" to drop a line."
+                : "🛒 Your cart is empty. Tell me what you'd like to order.";
+            $confirm = trim($actionSummary . $extra . "\n\n" . $cartMsg);
             $r = provider_send_text($channel, (string)$conv['wa_id'], $confirm);
             flow_engine_log_outgoing_message($db, $conv, $confirm, $r);
 

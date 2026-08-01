@@ -309,13 +309,19 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
 
           <?php case 'fnb_cart_add': ?>
             <div class="muted small">
-              Uses Claude to parse the customer's last reply (e.g.
-              <em>"2 chicken rice, 1 nasi lemak less spicy"</em>) into
-              structured cart items, adds them to the running cart, and
-              sends a confirmation message. Requires the workspace's
-              Anthropic API key in <a href="/admin/ai_settings.php">AI settings</a>.
-              If Claude can't match anything, the node re-enters "wait
-              for reply" so the customer can clarify.
+              Uses Claude to interpret the customer's last reply against
+              the current menu AND the running cart. Detects intent and
+              acts:
+              <ul style="margin: 6px 0 0 20px;">
+                <li><strong>Add</strong> — <em>"2 chicken rice, 1 nasi lemak less spicy"</em> → appends items</li>
+                <li><strong>Remove</strong> — <em>"remove item 2"</em> / <em>"take out the nasi lemak"</em> → drops those cart lines</li>
+                <li><strong>Clear</strong> — <em>"clear cart"</em> / <em>"start over"</em> → empties the cart</li>
+                <li><strong>Unclear</strong> → asks a clarification and re-enters wait state</li>
+              </ul>
+              Requires the workspace's Anthropic API key in
+              <a href="/admin/ai_settings.php">AI settings</a>. Cart lines are
+              rendered with 1-based numbers so the customer can reference
+              them (<em>"remove #3"</em>).
             </div>
             <?php break; ?>
 

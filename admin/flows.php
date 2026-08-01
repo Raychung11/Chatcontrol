@@ -70,7 +70,10 @@ if (is_post()) {
             };
 
             $nWelcome    = $node('send_message',     'Welcome greeting',
-                ['text' => "Welcome! 🍽️ Would you like *delivery* or *pickup*?"]);
+                ['text' => "Welcome! 🍽️ How would you like your order?\n\n"
+                         . "1. Delivery\n"
+                         . "2. Self-pickup\n\n"
+                         . "_Reply with 1 or 2 — or just tap the button below._"]);
             $nWaitType   = $node('wait_reply',       'Wait for order type',
                 ['var_name' => 'order_type']);
             $nSendMenu   = $node('fnb_send_menu',    'Send menu');

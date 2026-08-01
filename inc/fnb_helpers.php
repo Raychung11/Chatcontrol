@@ -381,8 +381,14 @@ function fnb_create_order_from_flow_state(array $state, int $conversationId, int
     $vars = (array)($state['vars'] ?? []);
     if (!$cart) return ['ok' => false, 'error' => 'Empty cart.'];
 
-    $orderType = (string)($vars['order_type'] ?? 'delivery');
-    if (!in_array($orderType, ['delivery','pickup'], true)) $orderType = 'delivery';
+    // Normalize order type — customer may have typed "delivery" / "pickup"
+    // or tapped a numbered choice ("1" / "2") from a quick-reply pill.
+    $rawOrderType = mb_strtolower(trim((string)($vars['order_type'] ?? 'delivery')));
+    $orderType = match (true) {
+        in_array($rawOrderType, ['1', 'd', 'delivery', 'deliver'], true) => 'delivery',
+        in_array($rawOrderType, ['2', 'p', 'pickup', 'self-pickup', 'take away', 'takeaway', 'self pickup'], true) => 'pickup',
+        default => 'delivery',
+    };
 
     $db = aiserve_db();
     // Look up the conversation for contact_id + contact.wa_id fallback.

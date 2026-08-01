@@ -113,6 +113,21 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
   border: 1px solid #FCA5A5; word-break: break-word;
 }
 .wc-error strong { display: block; margin-bottom: 3px; }
+
+/* Quick-reply pills rendered under bot messages that contain a numbered
+   list. Tap = auto-send that option's number. Bypasses the keyboard/
+   send-button entirely so a customer can order without typing at all. */
+.wc-quick {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 6px 0 4px; align-self: flex-start; max-width: 90%;
+}
+.wc-quick button {
+  background: #fff; color: #0a5c2a; border: 1px solid <?= e($brand) ?>;
+  padding: 8px 14px; border-radius: 999px; font-size: 13.5px;
+  font-weight: 600; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.06);
+  -webkit-tap-highlight-color: rgba(0,0,0,.1); touch-action: manipulation;
+}
+.wc-quick button:active { transform: scale(0.94); background: #f0fdf4; }
 </style>
 </head>
 <body>
@@ -202,6 +217,95 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
     }
     if (prepend) stream.insertBefore(bub, stream.firstChild);
     else         stream.appendChild(bub);
+
+    // For bot / agent messages, auto-detect numbered options like:
+    //   1. Chicken Rice
+    //   2. Nasi Lemak
+    // Render each as a tap-to-reply pill so customers can order without
+    // typing. Only shows for the most recent bot message.
+    if (direction !== 'incoming' && !prepend) {
+      // Strip any prior quick-reply rows so only the newest bot message
+      // shows options (avoids stale pills stacking up).
+      stream.querySelectorAll('.wc-quick').forEach(el => el.remove());
+      const opts = detectQuickReplies(text);
+      if (opts.length) renderQuickReplies(opts);
+    }
+  }
+
+  function detectQuickReplies(text) {
+    // Match lines starting with "N." or "N)" — 1-9 to keep tap targets
+    // sane on mobile. Skip anything more than 8 options to avoid a wall
+    // of buttons.
+    const opts = [];
+    const seenNums = new Set();
+    for (const raw of String(text).split('\n')) {
+      const m = raw.trim().match(/^\*?(\d{1,2})[\.)]\s+(.+?)\*?$/);
+      if (!m) continue;
+      const num = parseInt(m[1], 10);
+      if (num < 1 || num > 20 || seenNums.has(num)) continue;
+      seenNums.add(num);
+      // Strip a trailing "— RM 9.90" price if present (keeps the pill
+      // label short + focuses on the item name).
+      let label = m[2].replace(/[—–-]\s*RM\s*\d+(\.\d+)?\s*$/i, '').trim();
+      if (label.length > 30) label = label.slice(0, 28) + '…';
+      opts.push({ num, label });
+      if (opts.length >= 8) break;
+    }
+    return opts;
+  }
+
+  function renderQuickReplies(opts) {
+    const row = document.createElement('div');
+    row.className = 'wc-quick';
+    for (const o of opts) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = o.num + ' · ' + o.label;
+      b.onclick = () => sendMessage(String(o.num));
+      row.appendChild(b);
+    }
+    stream.appendChild(row);
+    scrollBottom();
+  }
+
+  // Extracted the actual send so both wcSend() (button/enter) and quick
+  // replies use the same code path.
+  async function sendMessage(text) {
+    text = String(text || '').trim();
+    if (!text) return;
+    if (!sessionToken) {
+      status.textContent = 'Connecting…';
+      await widgetStart();
+      if (!sessionToken) { status.textContent = 'Still offline — try again'; return; }
+      status.textContent = 'Online';
+    }
+    markBusy(true);
+    const now = new Date();
+    renderBubble(text, 'incoming', now.toISOString().replace('T', ' ').slice(0, 19), false);
+    // Remove any lingering quick-reply row after customer replies.
+    stream.querySelectorAll('.wc-quick').forEach(el => el.remove());
+    scrollBottom();
+
+    const fd = new FormData();
+    fd.append('session_token', sessionToken);
+    fd.append('text', text);
+    try {
+      const res = await fetch('/api/widget_send.php', { method: 'POST', body: fd });
+      let data;
+      try { data = await res.json(); }
+      catch (parseErr) {
+        const raw = await res.text().catch(() => '(no body)');
+        throw new Error('Server error (HTTP ' + res.status + '): ' + raw.substring(0, 300));
+      }
+      if (!data.ok) throw new Error(data.error || ('send failed (HTTP ' + res.status + ')'));
+      if (data.message_id) lastMsgId = Math.max(lastMsgId, data.message_id);
+      pollOnce();
+    } catch (err) {
+      status.textContent = 'Message failed';
+      showError('Message failed to send', err && err.message ? err.message : String(err));
+    } finally {
+      markBusy(false);
+    }
   }
 
   async function widgetStart() {
@@ -243,57 +347,19 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
     }
   }
 
+  // Thin wrapper for the send button + Enter key — actual send logic
+  // lives in sendMessage() so quick-reply buttons share the exact
+  // same path.
   async function wcSend() {
     const text = input.value.trim();
-    if (!text) {
-      input.focus();
-      return;
-    }
-    // If the initial handshake never completed (or failed), retry it
-    // right here so the customer doesn't get stuck with a dead widget.
-    if (!sessionToken) {
-      status.textContent = 'Connecting…';
-      await widgetStart();
-      if (!sessionToken) {
-        status.textContent = 'Still offline — try again in a moment';
-        return;
-      }
-      status.textContent = 'Online';
-    }
-    markBusy(true);
-    // Optimistic render
-    const now = new Date();
-    renderBubble(text, 'incoming', now.toISOString().replace('T', ' ').slice(0, 19), false);
+    if (!text) { input.focus(); return; }
     input.value = '';
-    scrollBottom();
-
-    const fd = new FormData();
-    fd.append('session_token', sessionToken);
-    fd.append('text', text);
-    try {
-      const res = await fetch('/api/widget_send.php', { method: 'POST', body: fd });
-      // Try to parse JSON. If the server crashed with an HTML error page,
-      // res.json() throws — surface the raw text so we know what died.
-      let data;
-      try { data = await res.json(); }
-      catch (parseErr) {
-        const raw = await res.text().catch(() => '(no body)');
-        throw new Error('Server error (HTTP ' + res.status + '): '
-                      + raw.substring(0, 300));
-      }
-      if (!data.ok) {
-        throw new Error(data.error || ('send failed (HTTP ' + res.status + ')'));
-      }
-      if (data.message_id) lastMsgId = Math.max(lastMsgId, data.message_id);
-      // Immediately poll so any bot reply lands fast
-      pollOnce();
-    } catch (err) {
-      status.textContent = 'Message failed';
-      showError('Message failed to send', err && err.message ? err.message : String(err));
-    } finally {
-      markBusy(false);
-    }
+    await sendMessage(text);
   }
+
+  // iOS Safari: onclick can be swallowed when the keyboard was open.
+  // Bind touchend AND click for defense-in-depth.
+  btn.addEventListener('touchend', function (e) { e.preventDefault(); wcSend(); }, { passive: false });
 
   async function pollOnce() {
     if (polling || !sessionToken) return;

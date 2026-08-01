@@ -411,6 +411,25 @@ function status_badge(string $status): string
 }
 
 // -------------------- Multi-tenant helpers --------------------
+/**
+ * True when the given workspace has the F&B module enabled.
+ * Used to gate sidebar links + admin routes. Falls back to false if the
+ * fnb_plan column doesn't exist yet (partial migration).
+ */
+function fnb_module_active(int $companyId): bool
+{
+    static $cache = [];
+    if (array_key_exists($companyId, $cache)) return $cache[$companyId];
+    try {
+        $s = aiserve_db()->prepare('SELECT fnb_plan FROM companies WHERE id = ? LIMIT 1');
+        $s->execute([$companyId]);
+        $plan = (string)($s->fetchColumn() ?: 'none');
+        return $cache[$companyId] = in_array($plan, ['active', 'paid'], true);
+    } catch (Throwable $e) {
+        return $cache[$companyId] = false;
+    }
+}
+
 function plan_seat_limit(string $plan): int
 {
     $p = pricing_get();

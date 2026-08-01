@@ -98,6 +98,28 @@ if ($action === 'change_plan') {
     ));
 }
 
+if ($action === 'toggle_fnb') {
+    // Flip a workspace's F&B module on/off (none <-> active). Once
+    // active, the sidebar shows the Menu link and /admin/fnb_menu.php
+    // becomes reachable. Reserved 'paid' state is set manually in DB
+    // for now — Layer 3 will surface it in this endpoint too.
+    $stmt = $db->prepare('SELECT id, name, fnb_plan FROM companies WHERE id = ? LIMIT 1');
+    $stmt->execute([$companyId]);
+    $company = $stmt->fetch();
+    if (!$company) { http_response_code(404); exit('Workspace not found.'); }
+
+    $newFnb = $company['fnb_plan'] === 'active' ? 'none' : 'active';
+    $db->prepare('UPDATE companies SET fnb_plan = ? WHERE id = ? LIMIT 1')->execute([$newFnb, $companyId]);
+    log_activity(
+        $companyId, (int)$user['id'], 'workspace_fnb_toggled',
+        'company', $companyId,
+        'from=' . ($company['fnb_plan'] ?? 'none') . ' to=' . $newFnb
+    );
+    redirect('/admin/workspaces.php?plan_changed=' . rawurlencode(
+        $company['name'] . ' F&B module → ' . ($newFnb === 'active' ? 'enabled' : 'disabled')
+    ));
+}
+
 if ($action === 'change_broadcast_plan') {
     // Flip a workspace between free / paid / payg. Also accepts an
     // optional billing_cycle=monthly|yearly (only meaningful for paid).

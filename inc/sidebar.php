@@ -94,6 +94,10 @@ if ($sb_companyId > 0) {
       <a href="/admin/channels.php" class="<?= $active === 'channels' ? 'active' : '' ?>">Channels</a>
       <a href="/admin/settings.php" class="<?= $active === 'settings' ? 'active' : '' ?>">Settings</a>
       <a href="/admin/ai_settings.php" class="<?= $active === 'ai_settings' ? 'active' : '' ?>">AI Settings</a>
+      <?php if (fnb_module_active((int)($current_user['company_id'] ?? 0))): ?>
+        <div class="sidebar-section" style="margin-top: 12px;">F&amp;B module</div>
+        <a href="/admin/fnb_menu.php" class="<?= $active === 'fnb_menu' ? 'active' : '' ?>">🍜 Menu</a>
+      <?php endif; ?>
       <?php if (is_platform_admin()): ?>
         <a href="/admin/evolution_connect.php" class="<?= $active === 'evolution_connect' ? 'active' : '' ?>">Connect WhatsApp</a>
         <a href="/admin/webhook_log.php" class="<?= $active === 'webhook_log' ? 'active' : '' ?>">Webhook log</a>

@@ -20,7 +20,7 @@ $db = aiserve_db();
 // stayed at whatever companies.provider was seeded to on register.
 // Fallback if no channel exists yet: show "(no channel)".
 $stmt = $db->query(
-    'SELECT c.id, c.name, c.slug, c.plan, c.broadcast_plan, c.broadcast_billing_cycle, c.created_at,
+    'SELECT c.id, c.name, c.slug, c.plan, c.broadcast_plan, c.broadcast_billing_cycle, c.fnb_plan, c.created_at,
             (SELECT provider FROM channels
               WHERE company_id = c.id AND is_default = 1 LIMIT 1)
               AS provider,
@@ -156,6 +156,16 @@ layout_start($current_user, 'Workspaces', 'workspaces');
           <td class="muted small"><?= e(fmt_dt($r['last_message_at']) ?: '—') ?></td>
           <td class="muted small"><?= e(fmt_dt($r['created_at'])) ?></td>
           <td class="actions">
+            <?php $fnbActive = ($r['fnb_plan'] ?? 'none') === 'active' || ($r['fnb_plan'] ?? 'none') === 'paid'; ?>
+            <form method="post" action="/api/workspace_action.php" style="display:inline"
+                  onsubmit="return confirm('<?= $fnbActive ? 'Disable' : 'Enable' ?> F&amp;B module for &quot;<?= e(addslashes((string)$r['name'])) ?>&quot;?');">
+              <?= csrf_field() ?>
+              <input type="hidden" name="action" value="toggle_fnb">
+              <input type="hidden" name="company_id" value="<?= (int)$r['id'] ?>">
+              <button class="btn btn-sm" type="submit" title="<?= $fnbActive ? 'F&B module is on for this workspace' : 'F&B module is off' ?>">
+                <?= $fnbActive ? '🍜 F&B on' : '+ F&B' ?>
+              </button>
+            </form>
             <?php if ((int)$r['id'] !== (int)$current_user['company_id']): ?>
               <form method="post" action="/api/impersonate.php" style="display:inline">
                 <?= csrf_field() ?>

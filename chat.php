@@ -107,6 +107,12 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
   text-align: center; color: #667; font-size: 12px;
   padding: 8px; opacity: .6;
 }
+.wc-error {
+  background: #FEE2E2; color: #7F1D1D; padding: 10px 14px;
+  margin: 8px 0; border-radius: 8px; font-size: 13px;
+  border: 1px solid #FCA5A5; word-break: break-word;
+}
+.wc-error strong { display: block; margin-bottom: 3px; }
 </style>
 </head>
 <body>
@@ -153,6 +159,22 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
   const status = document.getElementById('wc-status');
   const loader = document.getElementById('wc-loading');
 
+  // Visible error banner inside the chat stream so the customer / tester
+  // can see what actually broke without opening dev tools.
+  function showError(title, detail) {
+    const box = document.createElement('div');
+    box.className = 'wc-error';
+    box.innerHTML = '<strong>' + escapeHtml(title) + '</strong>'
+                  + (detail ? escapeHtml(detail) : '');
+    stream.appendChild(box);
+    stream.scrollTop = stream.scrollHeight;
+  }
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    })[c]);
+  }
+
   // Visual only — the button stays always-clickable so a mistap can't
   // leave the customer unable to send. We show a "busy" tint during
   // an in-flight send instead of disabling.
@@ -192,8 +214,14 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
     if (CONTEXT)  fd.append('context', CONTEXT);
     try {
       const res = await fetch('/api/widget_start.php', { method: 'POST', body: fd });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'start failed');
+      let data;
+      try { data = await res.json(); }
+      catch (parseErr) {
+        const raw = await res.text().catch(() => '(no body)');
+        throw new Error('Server error (HTTP ' + res.status + '): '
+                      + raw.substring(0, 300));
+      }
+      if (!data.ok) throw new Error(data.error || ('start failed (HTTP ' + res.status + ')'));
       sessionToken = data.session_token;
       lastMsgId    = data.last_msg_id || 0;
       try { localStorage.setItem(STORAGE_KEY, sessionToken); } catch (e) {}
@@ -211,6 +239,7 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
     } catch (err) {
       status.textContent = 'Offline — tap Send to retry';
       if (loader) loader.textContent = 'Could not connect. Tap the send button to retry.';
+      showError('Could not start chat', err && err.message ? err.message : String(err));
     }
   }
 
@@ -243,13 +272,24 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
     fd.append('text', text);
     try {
       const res = await fetch('/api/widget_send.php', { method: 'POST', body: fd });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'send failed');
+      // Try to parse JSON. If the server crashed with an HTML error page,
+      // res.json() throws — surface the raw text so we know what died.
+      let data;
+      try { data = await res.json(); }
+      catch (parseErr) {
+        const raw = await res.text().catch(() => '(no body)');
+        throw new Error('Server error (HTTP ' + res.status + '): '
+                      + raw.substring(0, 300));
+      }
+      if (!data.ok) {
+        throw new Error(data.error || ('send failed (HTTP ' + res.status + ')'));
+      }
       if (data.message_id) lastMsgId = Math.max(lastMsgId, data.message_id);
       // Immediately poll so any bot reply lands fast
       pollOnce();
     } catch (err) {
-      status.textContent = 'Message failed — try again';
+      status.textContent = 'Message failed';
+      showError('Message failed to send', err && err.message ? err.message : String(err));
     } finally {
       markBusy(false);
     }

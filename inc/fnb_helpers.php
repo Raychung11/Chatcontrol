@@ -1,9 +1,475 @@
 <?php
 /**
- * F&B module shared helpers — order number, line total, status labels.
+ * F&B module shared helpers — order number, line total, status labels,
+ * plus Layer 3 helpers used by the flow engine's F&B node handlers
+ * (menu rendering, Claude-based cart parser, cart materialization).
  */
 
 require_once __DIR__ . '/helpers.php';
+
+/**
+ * Load all active products with their variants + addons for the AI
+ * parser + the render-menu helper. Returns:
+ *   [ { id, name, price, category, variants:[{group,name,price_delta}], addons:[...] }, ... ]
+ * sorted by category sort_order then product sort_order.
+ */
+function fnb_active_menu(int $companyId): array
+{
+    $db = aiserve_db();
+    $ps = $db->prepare(
+        'SELECT p.*, c.name AS category_name, c.sort_order AS cat_sort
+         FROM fnb_products p
+         LEFT JOIN fnb_categories c ON c.id = p.category_id
+         WHERE p.company_id = ? AND p.status = "active"
+         ORDER BY COALESCE(c.sort_order, 999), c.name, p.sort_order, p.name'
+    );
+    $ps->execute([$companyId]);
+    $rows = $ps->fetchAll();
+    if (!$rows) return [];
+
+    $ids = array_map('intval', array_column($rows, 'id'));
+    $ph  = implode(',', array_fill(0, count($ids), '?'));
+
+    $vs = $db->prepare("SELECT * FROM fnb_variants WHERE product_id IN ($ph) ORDER BY group_name, sort_order");
+    $vs->execute($ids);
+    $varByProduct = [];
+    foreach ($vs->fetchAll() as $v) $varByProduct[(int)$v['product_id']][] = $v;
+
+    $as = $db->prepare("SELECT * FROM fnb_addons WHERE product_id IN ($ph) ORDER BY sort_order");
+    $as->execute($ids);
+    $addByProduct = [];
+    foreach ($as->fetchAll() as $a) $addByProduct[(int)$a['product_id']][] = $a;
+
+    $out = [];
+    foreach ($rows as $p) {
+        $pid = (int)$p['id'];
+        $out[] = [
+            'id'          => $pid,
+            'name'        => (string)$p['name'],
+            'description' => (string)($p['description'] ?? ''),
+            'price'       => (float)$p['price'],
+            'category'    => (string)($p['category_name'] ?? 'Uncategorized'),
+            'variants'    => array_map(fn($v) => [
+                'id'          => (int)$v['id'],
+                'group'       => (string)$v['group_name'],
+                'name'        => (string)$v['name'],
+                'price_delta' => (float)$v['price_delta'],
+                'is_default'  => (int)$v['is_default'] === 1,
+            ], $varByProduct[$pid] ?? []),
+            'addons'      => array_map(fn($a) => [
+                'id'          => (int)$a['id'],
+                'name'        => (string)$a['name'],
+                'price_delta' => (float)$a['price_delta'],
+            ], $addByProduct[$pid] ?? []),
+        ];
+    }
+    return $out;
+}
+
+/**
+ * Format the active menu as a WhatsApp-friendly text block, grouped by
+ * category, with numbered items so the customer can reply "2 of #1".
+ * Returns '' when the menu is empty (caller should handle).
+ */
+function fnb_render_menu_message(int $companyId, string $currency): string
+{
+    $menu = fnb_active_menu($companyId);
+    if (!$menu) return '';
+    $lines = ["🍽️ *Our Menu*", ''];
+    $lastCat = null;
+    $n = 0;
+    foreach ($menu as $p) {
+        if ($p['category'] !== $lastCat) {
+            if ($lastCat !== null) $lines[] = '';
+            $lines[] = '📌 *' . mb_strtoupper($p['category']) . '*';
+            $lastCat = $p['category'];
+        }
+        $n++;
+        $priceStr = $currency . ' ' . number_format($p['price'], 2);
+        $lines[] = sprintf("%d. %s — %s", $n, $p['name'], $priceStr);
+        if (!empty($p['description'])) {
+            $lines[] = '   _' . mb_strimwidth($p['description'], 0, 100, '…') . '_';
+        }
+    }
+    $lines[] = '';
+    $lines[] = "Reply with what you'd like (e.g. \"2 chicken rice, 1 nasi lemak less spicy\").";
+    return implode("\n", $lines);
+}
+
+/**
+ * Format the current cart contents for a customer-facing confirmation.
+ * Cart shape (from flow_instances.state.cart):
+ *   [ { product_id, product_name, quantity, unit_price, variants:[], addons:[], instructions, line_total }, ... ]
+ */
+function fnb_render_cart(array $cart, string $currency): string
+{
+    if (!$cart) return "🛒 Your cart is empty.";
+    $lines = ["🛒 *Your order so far:*", ''];
+    $subtotal = 0.0;
+    foreach ($cart as $it) {
+        $q     = (int)($it['quantity'] ?? 1);
+        $name  = (string)($it['product_name'] ?? '');
+        $lt    = (float)($it['line_total'] ?? 0);
+        $subtotal += $lt;
+        $lines[] = sprintf("• %dx %s — %s %s", $q, $name, $currency, number_format($lt, 2));
+        foreach ((array)($it['variants'] ?? []) as $v) {
+            $lines[] = "   ◦ " . (string)($v['group'] ?? '') . ": " . (string)($v['name'] ?? '');
+        }
+        foreach ((array)($it['addons'] ?? []) as $a) {
+            $lines[] = "   + " . (string)($a['name'] ?? '');
+        }
+        if (!empty($it['instructions'])) {
+            $lines[] = "   _📝 " . (string)$it['instructions'] . "_";
+        }
+    }
+    $lines[] = '';
+    $lines[] = "Subtotal: *" . $currency . ' ' . number_format($subtotal, 2) . "*";
+    return implode("\n", $lines);
+}
+
+/**
+ * Call Claude to parse a free-text order like "2 chicken rice, 1 nasi
+ * lemak less spicy" against the current menu. Returns:
+ *   { ok, items: [ {product_id, quantity, variants_pick:[ids], addons_pick:[ids], instructions} ],
+ *     unmatched: [...], clarification: str|null, error: str|null }
+ *
+ * Fails gracefully if the AI provider isn't configured — caller can
+ * fall back to asking the customer to be more specific.
+ */
+function fnb_parse_order_ai(array $company, string $customerMessage, array $menu): array
+{
+    require_once __DIR__ . '/ai_api.php';
+
+    if (!ai_is_configured($company)) {
+        return ['ok' => false, 'items' => [], 'unmatched' => [], 'clarification' => null,
+                'error' => 'AI is not configured for this workspace.'];
+    }
+    $apiKey = ai_api_key($company);
+    if ($apiKey === '') {
+        return ['ok' => false, 'items' => [], 'unmatched' => [], 'clarification' => null,
+                'error' => 'No Anthropic API key.'];
+    }
+    $model = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
+
+    // Minimal menu context for the model. Variants/addons kept lean.
+    $menuLines = [];
+    foreach ($menu as $p) {
+        $line = "id={$p['id']}  {$p['name']}  ({$p['category']})  price={$p['price']}";
+        $vGroups = [];
+        foreach ($p['variants'] as $v) {
+            $vGroups[$v['group']][] = "vid={$v['id']} \"{$v['name']}\" +{$v['price_delta']}";
+        }
+        foreach ($vGroups as $g => $opts) {
+            $line .= "\n   variants[{$g}]: " . implode(' | ', $opts);
+        }
+        if ($p['addons']) {
+            $addonBits = [];
+            foreach ($p['addons'] as $a) $addonBits[] = "aid={$a['id']} \"{$a['name']}\" +{$a['price_delta']}";
+            $line .= "\n   addons: " . implode(' | ', $addonBits);
+        }
+        $menuLines[] = $line;
+    }
+
+    $systemPrompt =
+        "You extract structured cart items from a restaurant customer's WhatsApp "
+      . "order text against a fixed menu. Return ONLY a single JSON object, no "
+      . "markdown fences, no preamble.\n\n"
+      . "Schema:\n"
+      . "{\n"
+      . "  \"items\": [\n"
+      . "    {\n"
+      . "      \"product_id\": int,\n"
+      . "      \"quantity\": int (default 1),\n"
+      . "      \"variants_pick\": [int, int]  // ids from the product's variants list, one per group\n"
+      . "      \"addons_pick\": [int, int]    // ids from the product's addons list\n"
+      . "      \"instructions\": string|null  // free-text notes like \"less spicy\"\n"
+      . "    }\n"
+      . "  ],\n"
+      . "  \"unmatched\": [string]  // customer phrases that don't map to a product\n"
+      . "  \"clarification\": string|null  // one short question to ask if ambiguous, else null\n"
+      . "}\n\n"
+      . "Rules:\n"
+      . "- Match product_id from the menu exactly. Fuzzy-match short names.\n"
+      . "- If a customer specifies size/spice/etc, pick the matching variant id.\n"
+      . "- If a customer doesn't specify a variant, leave variants_pick empty (frontend picks the default).\n"
+      . "- Attach 'less spicy', 'no onion', etc. as instructions on the item.\n"
+      . "- Never invent a product_id or variant_id that isn't in the menu.\n"
+      . "- If nothing matches, items = [] and unmatched lists what the customer said.";
+
+    $userPrompt =
+        "MENU:\n" . implode("\n\n", $menuLines) . "\n\n"
+      . "CUSTOMER MESSAGE:\n" . $customerMessage;
+
+    $payload = [
+        'model'      => $model,
+        'max_tokens' => 800,
+        'system'     => [['type' => 'text', 'text' => $systemPrompt, 'cache_control' => ['type' => 'ephemeral']]],
+        'messages'   => [['role' => 'user', 'content' => $userPrompt]],
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_HTTPHEADER => [
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: 2023-06-01',
+            'Content-Type: application/json',
+        ],
+        CURLOPT_POSTFIELDS => json_encode($payload),
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+    if ($resp === false) {
+        return ['ok' => false, 'items' => [], 'unmatched' => [], 'clarification' => null,
+                'error' => 'Network error: ' . $err];
+    }
+    $data = json_decode($resp, true);
+    if (!is_array($data) || empty($data['content'][0]['text'])) {
+        return ['ok' => false, 'items' => [], 'unmatched' => [], 'clarification' => null,
+                'error' => 'AI returned an unexpected shape (HTTP ' . $code . ')'];
+    }
+    $raw = trim((string)$data['content'][0]['text']);
+    // Strip fenced blocks defensively.
+    if (str_starts_with($raw, '```')) {
+        $raw = preg_replace('/^```(?:json)?\s*|\s*```$/', '', $raw);
+    }
+    $parsed = json_decode($raw, true);
+    if (!is_array($parsed)) {
+        return ['ok' => false, 'items' => [], 'unmatched' => [], 'clarification' => null,
+                'error' => 'AI did not return valid JSON: ' . mb_substr($raw, 0, 200)];
+    }
+    return [
+        'ok'            => true,
+        'items'         => (array)($parsed['items']         ?? []),
+        'unmatched'     => (array)($parsed['unmatched']     ?? []),
+        'clarification' => $parsed['clarification'] ?? null,
+        'error'         => null,
+    ];
+}
+
+/**
+ * Turn a list of AI-parsed items + the menu snapshot into cart lines
+ * with hydrated price info + line totals. Called from the fnb_cart_add
+ * flow node. Filters out any product_ids that aren't in the menu.
+ */
+function fnb_cart_lines_from_ai(array $aiItems, array $menu): array
+{
+    $byId = [];
+    foreach ($menu as $p) $byId[(int)$p['id']] = $p;
+    $lines = [];
+    foreach ($aiItems as $it) {
+        $pid = (int)($it['product_id'] ?? 0);
+        if (!isset($byId[$pid])) continue;
+        $p = $byId[$pid];
+        $qty = max(1, (int)($it['quantity'] ?? 1));
+
+        // Pick variants: use AI's chosen ids, else defaults.
+        $vIds  = array_map('intval', (array)($it['variants_pick'] ?? []));
+        $vHave = [];
+        foreach ($p['variants'] as $v) {
+            if (in_array((int)$v['id'], $vIds, true)) $vHave[] = $v;
+        }
+        if (!$vHave) {
+            // No pick - insert defaults per group.
+            $seenGroups = [];
+            foreach ($p['variants'] as $v) {
+                if (!empty($v['is_default']) && !isset($seenGroups[$v['group']])) {
+                    $vHave[] = $v;
+                    $seenGroups[$v['group']] = true;
+                }
+            }
+        }
+        $variants = array_map(fn($v) => [
+            'id' => (int)$v['id'], 'group' => (string)$v['group'],
+            'name' => (string)$v['name'], 'price_delta' => (float)$v['price_delta'],
+        ], $vHave);
+
+        $aIds = array_map('intval', (array)($it['addons_pick'] ?? []));
+        $addons = [];
+        foreach ($p['addons'] as $a) {
+            if (in_array((int)$a['id'], $aIds, true)) {
+                $addons[] = ['id' => (int)$a['id'], 'name' => (string)$a['name'],
+                             'price_delta' => (float)$a['price_delta']];
+            }
+        }
+
+        $lineTotal = fnb_line_total((float)$p['price'], $variants, $addons, $qty);
+        $lines[] = [
+            'product_id'   => $pid,
+            'product_name' => (string)$p['name'],
+            'quantity'     => $qty,
+            'unit_price'   => (float)$p['price'],
+            'variants'     => $variants,
+            'addons'       => $addons,
+            'instructions' => (string)($it['instructions'] ?? ''),
+            'line_total'   => $lineTotal,
+        ];
+    }
+    return $lines;
+}
+
+/**
+ * Materialize a completed cart + captured customer vars into fnb_orders +
+ * fnb_order_items. Links the source conversation + contact so the order
+ * detail page can "→ Open conversation" back to WhatsApp.
+ *
+ * Reads from state:
+ *   state.cart                      - list of cart lines
+ *   state.vars.order_type           - delivery|pickup
+ *   state.vars.customer_name
+ *   state.vars.customer_phone       - falls back to contact.wa_id if empty
+ *   state.vars.delivery_address
+ *   state.vars.delivery_notes
+ *   state.vars.pickup_time
+ *
+ * Returns the created order id + human number, or ['ok' => false, ...] on error.
+ */
+function fnb_create_order_from_flow_state(array $state, int $conversationId, int $companyId): array
+{
+    $cart = (array)($state['cart'] ?? []);
+    $vars = (array)($state['vars'] ?? []);
+    if (!$cart) return ['ok' => false, 'error' => 'Empty cart.'];
+
+    $orderType = (string)($vars['order_type'] ?? 'delivery');
+    if (!in_array($orderType, ['delivery','pickup'], true)) $orderType = 'delivery';
+
+    $db = aiserve_db();
+    // Look up the conversation for contact_id + contact.wa_id fallback.
+    $cs = $db->prepare(
+        'SELECT c.contact_id, ct.wa_id
+         FROM conversations c
+         INNER JOIN contacts ct ON ct.id = c.contact_id
+         WHERE c.id = ? AND c.company_id = ? LIMIT 1'
+    );
+    $cs->execute([$conversationId, $companyId]);
+    $convRow = $cs->fetch();
+    if (!$convRow) return ['ok' => false, 'error' => 'Conversation not found.'];
+
+    $custName  = trim((string)($vars['customer_name']    ?? ''));
+    $custPhone = trim((string)($vars['customer_phone']   ?? '')) ?: (string)$convRow['wa_id'];
+    $address   = trim((string)($vars['delivery_address'] ?? ''));
+    $notes     = trim((string)($vars['delivery_notes']   ?? ''));
+    $pickup    = trim((string)($vars['pickup_time']      ?? ''));
+
+    $subtotal = 0.0;
+    foreach ($cart as $ln) $subtotal += (float)($ln['line_total'] ?? 0);
+    $deliveryFee = (float)($vars['delivery_fee'] ?? 0);
+    $total       = round($subtotal + $deliveryFee, 2);
+
+    try {
+        $db->beginTransaction();
+        $ins = $db->prepare(
+            'INSERT INTO fnb_orders
+                (company_id, conversation_id, contact_id, order_type,
+                 customer_name, customer_phone, delivery_address, delivery_notes, pickup_time,
+                 subtotal, delivery_fee, total, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "new")'
+        );
+        $ins->execute([
+            $companyId, $conversationId, (int)$convRow['contact_id'], $orderType,
+            $custName ?: '(unknown)', $custPhone ?: null,
+            $orderType === 'delivery' ? ($address ?: null) : null,
+            $notes ?: null,
+            $orderType === 'pickup' && $pickup ? $pickup : null,
+            $subtotal, $deliveryFee, $total,
+        ]);
+        $orderId = (int)$db->lastInsertId();
+        $orderNum = fnb_order_number_from_id($orderId);
+        $db->prepare('UPDATE fnb_orders SET order_number = ? WHERE id = ?')->execute([$orderNum, $orderId]);
+
+        $iIns = $db->prepare(
+            'INSERT INTO fnb_order_items
+                (order_id, product_id, product_name, quantity, unit_price,
+                 variants_json, addons_json, instructions, line_total, sort_order)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        foreach ($cart as $i => $ln) {
+            $iIns->execute([
+                $orderId,
+                (int)($ln['product_id'] ?? 0) ?: null,
+                (string)($ln['product_name'] ?? '(unknown)'),
+                (int)($ln['quantity'] ?? 1),
+                (float)($ln['unit_price'] ?? 0),
+                !empty($ln['variants']) ? json_encode($ln['variants'], JSON_UNESCAPED_UNICODE) : null,
+                !empty($ln['addons'])   ? json_encode($ln['addons'],   JSON_UNESCAPED_UNICODE) : null,
+                trim((string)($ln['instructions'] ?? '')) ?: null,
+                (float)($ln['line_total'] ?? 0),
+                10 * ($i + 1),
+            ]);
+        }
+        $db->commit();
+
+        log_activity($companyId, null, 'fnb_order_created_via_flow', 'fnb_order', $orderId, $orderNum);
+
+        // Best-effort staff notification email — same recipients pattern
+        // as the broadcast quota cron. Non-fatal on failure.
+        try {
+            fnb_notify_staff_on_new_order($companyId, $orderId, $orderNum, $custName, $total);
+        } catch (Throwable $e) {
+            error_log('[AiServe fnb_notify] ' . $e->getMessage());
+        }
+
+        return ['ok' => true, 'order_id' => $orderId, 'order_number' => $orderNum, 'total' => $total];
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        error_log('[AiServe fnb_create_order_from_flow_state] ' . $e->getMessage());
+        return ['ok' => false, 'error' => 'DB error: ' . $e->getMessage()];
+    }
+}
+
+/**
+ * Fire an email to workspace admins when a new order lands via a flow.
+ * Reuses the alert_email + super_admin pattern from the broadcast quota
+ * cron. mail() failures are best-effort — the order is already saved.
+ */
+function fnb_notify_staff_on_new_order(int $companyId, int $orderId, string $orderNum, string $custName, float $total): void
+{
+    $db = aiserve_db();
+    $c = $db->prepare('SELECT name, alert_email FROM companies WHERE id = ?');
+    $c->execute([$companyId]);
+    $co = $c->fetch();
+    if (!$co) return;
+
+    $recipients = [];
+    if (!empty($co['alert_email']) && filter_var((string)$co['alert_email'], FILTER_VALIDATE_EMAIL)) {
+        $recipients[] = (string)$co['alert_email'];
+    }
+    $u = $db->prepare("SELECT email FROM users WHERE company_id = ? AND status = 'active' AND role = 'super_admin'");
+    $u->execute([$companyId]);
+    foreach ($u->fetchAll() as $r) {
+        if (filter_var((string)$r['email'], FILTER_VALIDATE_EMAIL)) $recipients[] = (string)$r['email'];
+    }
+    $recipients = array_values(array_unique($recipients));
+    if (!$recipients) return;
+
+    $currency = platform_setting('pricing_currency', 'RM');
+    $base = defined('APP_BASE_URL') && APP_BASE_URL !== ''
+        ? rtrim((string)APP_BASE_URL, '/')
+        : ((!empty($_SERVER['HTTPS']) ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? ''));
+    $url = $base . '/admin/fnb_order_view.php?id=' . $orderId;
+
+    $subject = "[{$co['name']}] New order $orderNum from " . $custName;
+    $body =
+        "A new WhatsApp order just came in.\n\n"
+      . "Order:    $orderNum\n"
+      . "Customer: " . ($custName ?: '(unknown)') . "\n"
+      . "Total:    $currency " . number_format($total, 2) . "\n\n"
+      . "Open the order: $url\n\n"
+      . "— AiServe Inbox\n";
+
+    $headers = [
+        'From: AiServe Inbox <noreply@' . preg_replace('/^https?:\\/\\//', '', (string)platform_setting('operator_email', 'noreply@aiserve.my')) . '>',
+        'MIME-Version: 1.0',
+        'Content-Type: text/plain; charset=UTF-8',
+    ];
+    foreach ($recipients as $to) {
+        @mail($to, $subject, $body, implode("\r\n", $headers));
+    }
+}
 
 /**
  * Formatted human-facing order number from a row's numeric id.

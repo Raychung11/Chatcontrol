@@ -63,7 +63,8 @@ if (is_post()) {
         $type   = (string)($_POST['node_type'] ?? 'send_message');
         $label  = trim((string)($_POST['label'] ?? '')) ?: null;
         $nextId = (int)($_POST['next_node_id'] ?? 0);
-        if (!in_array($type, ['send_message','wait_reply','branch','assign_dept','save_note','end'], true)) {
+        if (!in_array($type, ['send_message','wait_reply','branch','assign_dept','save_note','end',
+                               'fnb_send_menu','fnb_cart_add','fnb_cart_show','fnb_create_order'], true)) {
             $type = 'send_message';
         }
         $cfg = flow_edit_pack_config($type, $_POST);
@@ -228,6 +229,18 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
                 ] as $k => $v): ?>
                   <option value="<?= $k ?>" <?= $n['node_type'] === $k ? 'selected' : '' ?>><?= e($v) ?></option>
                 <?php endforeach; ?>
+                <?php if (fnb_module_active($companyId)): ?>
+                  <optgroup label="F&amp;B order-taking">
+                    <?php foreach ([
+                      'fnb_send_menu'    => 'Send menu to customer',
+                      'fnb_cart_add'     => 'AI: parse reply into cart',
+                      'fnb_cart_show'    => 'Send current cart',
+                      'fnb_create_order' => 'Create the order',
+                    ] as $k => $v): ?>
+                      <option value="<?= $k ?>" <?= $n['node_type'] === $k ? 'selected' : '' ?>><?= e($v) ?></option>
+                    <?php endforeach; ?>
+                  </optgroup>
+                <?php endif; ?>
               </select>
             </label>
           </div>
@@ -283,6 +296,47 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
 
           <?php case 'end': ?>
             <div class="muted small">End marks the instance completed.</div>
+            <?php break; ?>
+
+          <?php case 'fnb_send_menu': ?>
+            <div class="muted small">
+              Sends the workspace's active menu as a WhatsApp text
+              message (grouped by category, numbered items). Advances
+              automatically. Configure the menu itself at
+              <a href="/admin/fnb_menu.php">F&amp;B → Menu</a>.
+            </div>
+            <?php break; ?>
+
+          <?php case 'fnb_cart_add': ?>
+            <div class="muted small">
+              Uses Claude to parse the customer's last reply (e.g.
+              <em>"2 chicken rice, 1 nasi lemak less spicy"</em>) into
+              structured cart items, adds them to the running cart, and
+              sends a confirmation message. Requires the workspace's
+              Anthropic API key in <a href="/admin/ai_settings.php">AI settings</a>.
+              If Claude can't match anything, the node re-enters "wait
+              for reply" so the customer can clarify.
+            </div>
+            <?php break; ?>
+
+          <?php case 'fnb_cart_show': ?>
+            <div class="muted small">
+              Sends the current cart contents back to the customer as a
+              summary message. No config.
+            </div>
+            <?php break; ?>
+
+          <?php case 'fnb_create_order': ?>
+            <div class="muted small">
+              Materializes the cart + captured vars into an F&amp;B order
+              row (visible on the <a href="/admin/fnb_orders.php">kanban dashboard</a>),
+              stamps the order number, links this conversation as the source,
+              and sends a "🎉 Order confirmed" reply with the number.<br>
+              Expects these vars to have been captured earlier:
+              <code>order_type</code> (delivery/pickup),
+              <code>customer_name</code>, <code>delivery_address</code>
+              (if delivery), <code>pickup_time</code> (if pickup).
+            </div>
             <?php break; ?>
         <?php endswitch; ?>
 
@@ -364,12 +418,16 @@ function flow_edit_node_label(array $n): string
     $lbl = trim((string)($n['label'] ?? ''));
     if ($lbl !== '') return $lbl;
     $map = [
-        'send_message' => 'Send message',
-        'wait_reply'   => 'Wait for reply',
-        'branch'       => 'Branch',
-        'assign_dept'  => 'Assign to dept',
-        'save_note'    => 'Save note',
-        'end'          => 'End',
+        'send_message'     => 'Send message',
+        'wait_reply'       => 'Wait for reply',
+        'branch'           => 'Branch',
+        'assign_dept'      => 'Assign to dept',
+        'save_note'        => 'Save note',
+        'end'              => 'End',
+        'fnb_send_menu'    => 'F&B · Send menu',
+        'fnb_cart_add'     => 'F&B · AI add to cart',
+        'fnb_cart_show'    => 'F&B · Show cart',
+        'fnb_create_order' => 'F&B · Create order',
     ];
     return $map[$n['node_type']] ?? (string)$n['node_type'];
 }

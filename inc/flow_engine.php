@@ -301,6 +301,113 @@ function flow_engine_execute_node(PDO $db, array $inst, array $node): int
             }
             return (int)($node['next_node_id'] ?? 0);
 
+        // ============ F&B module (phase 34) ============
+
+        case 'fnb_send_menu':
+            // Renders active menu as a WhatsApp message and sends it.
+            $conv    = flow_engine_conversation($db, (int)$inst['conversation_id']);
+            $channel = $conv ? channel_by_id((int)($conv['channel_id'] ?? 0)) : null;
+            if ($conv && $channel) {
+                $currency = platform_setting('pricing_currency', 'RM');
+                require_once __DIR__ . '/fnb_helpers.php';
+                $menuMsg = fnb_render_menu_message((int)$conv['company_id'], $currency);
+                if ($menuMsg !== '') {
+                    $result = provider_send_text($channel, (string)$conv['wa_id'], $menuMsg);
+                    flow_engine_log_outgoing_message($db, $conv, $menuMsg, $result);
+                }
+            }
+            return (int)($node['next_node_id'] ?? 0);
+
+        case 'fnb_cart_add':
+            // Calls Claude to parse state.last_reply into structured cart
+            // items, appends to state.cart, sends confirmation. On
+            // parse-failure sends a clarification question and stays put
+            // (customer's next reply gets re-parsed against the same node).
+            require_once __DIR__ . '/fnb_helpers.php';
+            require_once __DIR__ . '/whatsapp_api.php';   // for load_company_settings
+            $conv    = flow_engine_conversation($db, (int)$inst['conversation_id']);
+            $channel = $conv ? channel_by_id((int)($conv['channel_id'] ?? 0)) : null;
+            if (!$conv || !$channel) return (int)($node['next_node_id'] ?? 0);
+            $company = load_company_settings((int)$conv['company_id']);
+            if (!$company) return (int)($node['next_node_id'] ?? 0);
+            $currency = platform_setting('pricing_currency', 'RM');
+
+            $lastReply = (string)($state['last_reply'] ?? '');
+            $menu = fnb_active_menu((int)$conv['company_id']);
+            $ai = fnb_parse_order_ai($company, $lastReply, $menu);
+
+            if (!$ai['ok'] || (!$ai['items'] && !$ai['unmatched'])) {
+                // Fallback: ask customer to be more specific.
+                $askMsg = "Sorry, I didn't catch that. Could you tell me which items and quantities you'd like?";
+                $r = provider_send_text($channel, (string)$conv['wa_id'], $askMsg);
+                flow_engine_log_outgoing_message($db, $conv, $askMsg, $r);
+                // Set instance back to waiting so the next customer reply
+                // resumes here — same as wait_reply.
+                $db->prepare('UPDATE flow_instances SET status = "waiting", waiting_since = NOW() WHERE id = ?')
+                   ->execute([(int)$inst['id']]);
+                return -1;
+            }
+
+            $newLines = fnb_cart_lines_from_ai($ai['items'], $menu);
+            $state['cart'] = array_merge((array)($state['cart'] ?? []), $newLines);
+            // Persist cart state before sending the confirmation (better
+            // to have cart saved even if the outbound send fails).
+            $db->prepare('UPDATE flow_instances SET state = ? WHERE id = ?')
+               ->execute([json_encode($state, JSON_UNESCAPED_UNICODE), (int)$inst['id']]);
+            $inst['state'] = $db->query('SELECT state FROM flow_instances WHERE id = ' . (int)$inst['id'])->fetchColumn();
+
+            // Send confirmation.
+            $confirm = fnb_render_cart($state['cart'], $currency);
+            $extra = '';
+            if (!empty($ai['unmatched'])) {
+                $extra .= "\n\n⚠️ I couldn't find: " . implode(', ', array_map('strval', $ai['unmatched']));
+            }
+            if (!empty($ai['clarification'])) {
+                $extra .= "\n\n❓ " . $ai['clarification'];
+            }
+            $confirm .= "\n\nWould you like to add anything else? Reply 'done' when finished.";
+            if ($extra) $confirm = $extra . "\n\n" . $confirm;
+            $r = provider_send_text($channel, (string)$conv['wa_id'], $confirm);
+            flow_engine_log_outgoing_message($db, $conv, $confirm, $r);
+
+            return (int)($node['next_node_id'] ?? 0);
+
+        case 'fnb_cart_show':
+            require_once __DIR__ . '/fnb_helpers.php';
+            $conv    = flow_engine_conversation($db, (int)$inst['conversation_id']);
+            $channel = $conv ? channel_by_id((int)($conv['channel_id'] ?? 0)) : null;
+            if ($conv && $channel) {
+                $currency = platform_setting('pricing_currency', 'RM');
+                $cart = (array)($state['cart'] ?? []);
+                $msg  = fnb_render_cart($cart, $currency);
+                $r = provider_send_text($channel, (string)$conv['wa_id'], $msg);
+                flow_engine_log_outgoing_message($db, $conv, $msg, $r);
+            }
+            return (int)($node['next_node_id'] ?? 0);
+
+        case 'fnb_create_order':
+            require_once __DIR__ . '/fnb_helpers.php';
+            $conv    = flow_engine_conversation($db, (int)$inst['conversation_id']);
+            $channel = $conv ? channel_by_id((int)($conv['channel_id'] ?? 0)) : null;
+            if ($conv && $channel) {
+                $result = fnb_create_order_from_flow_state($state, (int)$conv['id'], (int)$conv['company_id']);
+                if ($result['ok']) {
+                    $currency = platform_setting('pricing_currency', 'RM');
+                    $msg = "🎉 Order confirmed!\n\n"
+                         . "Your order number: *{$result['order_number']}*\n"
+                         . "Total: $currency " . number_format($result['total'], 2) . "\n\n"
+                         . "Our team will process it and confirm shortly. Thank you!";
+                    $r = provider_send_text($channel, (string)$conv['wa_id'], $msg);
+                    flow_engine_log_outgoing_message($db, $conv, $msg, $r);
+                } else {
+                    $errMsg = "Sorry, something went wrong saving your order. An agent will follow up shortly.";
+                    $r = provider_send_text($channel, (string)$conv['wa_id'], $errMsg);
+                    flow_engine_log_outgoing_message($db, $conv, $errMsg, $r);
+                    error_log('[AiServe flow_engine fnb_create_order] ' . ($result['error'] ?? 'unknown'));
+                }
+            }
+            return (int)($node['next_node_id'] ?? 0);
+
         case 'end':
         default:
             return 0;

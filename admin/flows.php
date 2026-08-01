@@ -49,6 +49,83 @@ if (is_post()) {
            ->execute([$flowId, $companyId]);
         log_activity($companyId, (int)$current_user['id'], 'flow_deleted', 'flow', $flowId);
         $msg = 'Flow deleted.';
+    } elseif ($action === 'seed_fnb' && fnb_module_active($companyId)) {
+        // Seed a working F&B order-taking flow with all nodes wired up.
+        // Operator can then flip trigger_type + status and go live.
+        try {
+            $db->beginTransaction();
+            $db->prepare(
+                'INSERT INTO flows (company_id, name, trigger_type, trigger_keywords, status, created_by_user_id)
+                 VALUES (?, "F&B order taking (starter)", "keyword", "order,menu,food,makan", "draft", ?)'
+            )->execute([$companyId, (int)$current_user['id']]);
+            $fid = (int)$db->lastInsertId();
+
+            // Insert nodes one by one, capturing ids so we can chain them.
+            $nins = $db->prepare(
+                'INSERT INTO flow_nodes (flow_id, node_type, label, config) VALUES (?, ?, ?, ?)'
+            );
+            $node = function (string $type, string $label, array $config = []) use ($nins, $fid) {
+                $nins->execute([$fid, $type, $label, json_encode($config, JSON_UNESCAPED_UNICODE)]);
+                return (int)aiserve_db()->lastInsertId();
+            };
+
+            $nWelcome    = $node('send_message',     'Welcome greeting',
+                ['text' => "Welcome! 🍽️ Would you like *delivery* or *pickup*?"]);
+            $nWaitType   = $node('wait_reply',       'Wait for order type',
+                ['var_name' => 'order_type']);
+            $nSendMenu   = $node('fnb_send_menu',    'Send menu');
+            $nWaitOrder  = $node('wait_reply',       'Wait for order details',
+                ['var_name' => 'raw_order']);
+            $nCart       = $node('fnb_cart_add',     'AI: parse into cart');
+            $nWaitDone   = $node('wait_reply',       'Wait for "done" or more items',
+                ['var_name' => 'more_items']);
+            $nBranchDone = $node('branch',           'Done or add more?');
+            $nAskName    = $node('send_message',     'Ask for customer name',
+                ['text' => "Got it. What name should we put on the order?"]);
+            $nWaitName   = $node('wait_reply',       'Wait for name',
+                ['var_name' => 'customer_name']);
+            $nAskAddr    = $node('send_message',     'Ask for address / pickup time',
+                ['text' => "Please share your *delivery address* (or *pickup time* if picking up)."]);
+            $nWaitAddr   = $node('wait_reply',       'Wait for address',
+                ['var_name' => 'delivery_address']);
+            $nCreate     = $node('fnb_create_order', 'Create the order');
+            $nEnd        = $node('end',              'End');
+
+            // Wire next_node_id — linear default; branch has its own edges.
+            $nextMap = [
+                $nWelcome    => $nWaitType,
+                $nWaitType   => $nSendMenu,
+                $nSendMenu   => $nWaitOrder,
+                $nWaitOrder  => $nCart,
+                $nCart       => $nWaitDone,
+                $nWaitDone   => $nBranchDone,
+                // branch has no default next; edges below
+                $nAskName    => $nWaitName,
+                $nWaitName   => $nAskAddr,
+                $nAskAddr    => $nWaitAddr,
+                $nWaitAddr   => $nCreate,
+                $nCreate     => $nEnd,
+            ];
+            $upd = $db->prepare('UPDATE flow_nodes SET next_node_id = ? WHERE id = ?');
+            foreach ($nextMap as $from => $to) $upd->execute([$to, $from]);
+
+            // Branch edges: if reply contains "done" → go to Ask name.
+            // Any other reply → back to fnb_cart_add (append more items).
+            $eIns = $db->prepare(
+                'INSERT INTO flow_edges (flow_id, from_node_id, to_node_id, condition_type, condition_value, sort_order)
+                 VALUES (?, ?, ?, ?, ?, ?)'
+            );
+            $eIns->execute([$fid, $nBranchDone, $nAskName, 'keyword', 'done', 1]);
+            $eIns->execute([$fid, $nBranchDone, $nCart,    'default', null,   2]);
+
+            $db->prepare('UPDATE flows SET entry_node_id = ? WHERE id = ?')->execute([$nWelcome, $fid]);
+            $db->commit();
+            log_activity($companyId, (int)$current_user['id'], 'flow_fnb_seeded', 'flow', $fid);
+            redirect('/admin/flow_edit.php?id=' . $fid);
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            $err = 'Could not seed the F&B flow: ' . $e->getMessage();
+        }
     }
 }
 
@@ -82,13 +159,25 @@ layout_start($current_user, 'Message flows', 'flows');
   <?php if ($msg): ?><div class="alert alert-success"><?= e($msg) ?></div><?php endif; ?>
   <?php if ($err): ?><div class="alert alert-error"><?= e($err) ?></div><?php endif; ?>
 
-  <form method="post" style="display:flex; gap:8px; margin-bottom:14px;">
+  <form method="post" style="display:flex; gap:8px; margin-bottom:8px;">
     <?= csrf_field() ?>
     <input type="hidden" name="action" value="create">
     <input type="text" name="name" placeholder="New flow name (e.g. Lead qualification)"
            required maxlength="150" style="flex:1; min-width:220px;">
     <button class="btn btn-primary" type="submit">Create</button>
   </form>
+  <?php if (fnb_module_active($companyId)): ?>
+    <form method="post" style="margin-bottom: 14px;">
+      <?= csrf_field() ?>
+      <input type="hidden" name="action" value="seed_fnb">
+      <button class="btn" type="submit" title="Create a pre-wired F&B order-taking flow (greeting → menu → cart → address → order)">
+        🍜 Seed a starter F&amp;B ordering flow
+      </button>
+      <span class="muted small">
+        · Creates a working 13-node flow, triggered by keywords "order / menu / food / makan". Edit + activate after.
+      </span>
+    </form>
+  <?php endif; ?>
 
   <table class="data-table">
     <thead>

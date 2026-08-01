@@ -193,8 +193,12 @@ layout_start($current_user, 'F&B · Menu', 'fnb_menu');
 
   <!-- ============ Categories ============ -->
   <div class="fnb-card">
-    <h2>
-      Categories <small class="muted">(<?= count($categories) ?>)</small>
+    <h2 style="display:flex; justify-content:space-between; align-items:center;">
+      <span>Categories <small class="muted">(<?= count($categories) ?>)</small></span>
+      <?php if (!$categories): ?>
+        <a class="btn btn-sm" href="/admin/fnb_demo_seed.php"
+           title="Quickly populate a Malaysian-style demo menu">🍜 Seed demo data</a>
+      <?php endif; ?>
     </h2>
 
     <form method="post" style="display:flex; gap:6px; margin-bottom:12px;">

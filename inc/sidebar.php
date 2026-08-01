@@ -92,6 +92,7 @@ if ($sb_companyId > 0) {
       <a href="/admin/routing.php" class="<?= $active === 'routing' ? 'active' : '' ?>">Routing rules</a>
       <a href="/admin/flows.php" class="<?= $active === 'flows' ? 'active' : '' ?>">Message flows</a>
       <a href="/admin/channels.php" class="<?= $active === 'channels' ? 'active' : '' ?>">Channels</a>
+      <a href="/admin/webchat.php"  class="<?= $active === 'webchat'  ? 'active' : '' ?>">💬 Web chat widget</a>
       <a href="/admin/settings.php" class="<?= $active === 'settings' ? 'active' : '' ?>">Settings</a>
       <a href="/admin/ai_settings.php" class="<?= $active === 'ai_settings' ? 'active' : '' ?>">AI Settings</a>
       <?php if (fnb_module_active((int)($current_user['company_id'] ?? 0))): ?>

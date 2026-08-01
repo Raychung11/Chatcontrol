@@ -42,8 +42,24 @@ function provider_send_text(array $company, string $waId, string $text): array
     return match (provider_name($company)) {
         'evolution'       => evolution_send_text($company, $waId, $text),
         'aiserve_chatbot' => chatbot_send_text($company, $waId, $text),
+        'web_chat'        => web_chat_send_text($company, $waId, $text),
         default           => whatsapp_send_text($company, $waId, $text),
     };
+}
+
+/**
+ * "Send" for the web_chat provider is a no-op — the message row is
+ * already inserted by the caller (send_message.php / flow engine /
+ * broadcast worker). The widget picks it up via the poll endpoint on
+ * its next tick. We just return success + a synthetic message id.
+ */
+function web_chat_send_text(array $company, string $waId, string $text): array
+{
+    return [
+        'ok'            => true,
+        'wa_message_id' => 'wc_' . bin2hex(random_bytes(8)),
+        'error'         => null,
+    ];
 }
 
 /**
@@ -56,6 +72,7 @@ function provider_send_media(array $company, string $waId, string $kind, string 
     return match (provider_name($company)) {
         'evolution'       => evolution_send_media($company, $waId, $kind, $mediaRef, $caption, $filename, $mime),
         'aiserve_chatbot' => chatbot_send_media($company, $waId, $kind, $mediaRef, $caption, $filename, $mime),
+        'web_chat'        => web_chat_send_text($company, $waId, (string)($caption ?? '[media]')),
         default           => whatsapp_send_media($company, $waId, $kind, $mediaRef, $caption, $filename),
     };
 }

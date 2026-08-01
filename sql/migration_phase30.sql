@@ -26,8 +26,7 @@ BEGIN
       AND COLUMN_NAME = 'broadcast_plan'
   ) THEN
     ALTER TABLE companies
-      ADD COLUMN broadcast_plan ENUM('free','paid') NOT NULL DEFAULT 'free'
-        AFTER plan;
+      ADD COLUMN broadcast_plan ENUM('free','paid') NOT NULL DEFAULT 'free';
   END IF;
 END//
 DELIMITER ;

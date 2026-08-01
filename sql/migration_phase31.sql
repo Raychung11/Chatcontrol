@@ -25,7 +25,7 @@ BEGIN
   ) THEN
     ALTER TABLE companies
       ADD COLUMN broadcast_billing_cycle ENUM('monthly','yearly')
-        NOT NULL DEFAULT 'monthly' AFTER broadcast_plan;
+        NOT NULL DEFAULT 'monthly';
   END IF;
 
   IF NOT EXISTS (
@@ -37,8 +37,7 @@ BEGIN
     -- about crossing 80% of their quota. Prevents re-emailing every day
     -- once the threshold has been crossed.
     ALTER TABLE companies
-      ADD COLUMN broadcast_quota_alert_month VARCHAR(7) DEFAULT NULL
-        AFTER broadcast_billing_cycle;
+      ADD COLUMN broadcast_quota_alert_month VARCHAR(7) DEFAULT NULL;
   END IF;
 END//
 DELIMITER ;

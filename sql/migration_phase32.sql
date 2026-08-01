@@ -33,9 +33,12 @@ BEGIN
     -- 'none'   : F&B module not available for this workspace (sidebar link hidden)
     -- 'active' : F&B module available (menu editing, later: order dashboard)
     -- 'paid'   : Reserved for the paid tier when we ship Layer 3 pricing.
+    -- No AFTER clause: column order is cosmetic in MySQL, and depending
+    -- on a specific prior column here made this migration fail whenever
+    -- a workspace hadn't run phase 31 yet. The column lands at the end
+    -- of the row layout — same behavior in every other regard.
     ALTER TABLE companies
-      ADD COLUMN fnb_plan ENUM('none','active','paid') NOT NULL DEFAULT 'none'
-        AFTER broadcast_quota_alert_month;
+      ADD COLUMN fnb_plan ENUM('none','active','paid') NOT NULL DEFAULT 'none';
   END IF;
 END//
 DELIMITER ;

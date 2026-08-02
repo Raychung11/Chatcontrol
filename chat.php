@@ -156,9 +156,8 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
 </div>
 
 <div class="wc-composer">
-  <textarea id="wc-input" placeholder="Type a message…" rows="1"
-            onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();wcSend();}"></textarea>
-  <button id="wc-btn" type="button" onclick="wcSend()">➤</button>
+  <textarea id="wc-input" placeholder="Type a message…" rows="1"></textarea>
+  <button id="wc-btn" type="button">➤</button>
 </div>
 
 <script>
@@ -362,9 +361,15 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
     await sendMessage(text);
   }
 
-  // iOS Safari: onclick can be swallowed when the keyboard was open.
-  // Bind touchend AND click for defense-in-depth.
+  // Bind BOTH click (desktop) and touchend (iOS Safari) inside the IIFE.
+  // Previously the button used inline onclick="wcSend()" but wcSend lives
+  // inside this IIFE, not window — so desktop clicks silently threw
+  // "wcSend is not defined" and no message ever left the widget.
+  btn.addEventListener('click', function (e) { e.preventDefault(); wcSend(); });
   btn.addEventListener('touchend', function (e) { e.preventDefault(); wcSend(); }, { passive: false });
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); wcSend(); }
+  });
 
   async function pollOnce() {
     if (polling || !sessionToken) return;

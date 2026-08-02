@@ -149,7 +149,7 @@ function fnb_render_cart(array $cart, string $currency): string
  * Fails gracefully if the AI provider isn't configured — caller can
  * fall back to asking the customer to be more specific.
  */
-function fnb_parse_order_ai(array $company, string $customerMessage, array $menu, array $currentCart = []): array
+function fnb_parse_order_ai(array $company, string $customerMessage, array $menu, array $currentCart = [], string $lastBotAsk = ''): array
 {
     require_once __DIR__ . '/ai_api.php';
 
@@ -233,14 +233,30 @@ function fnb_parse_order_ai(array $company, string $customerMessage, array $menu
       . "  For remove, populate remove_line_numbers using 1-based indexes from the CURRENT CART shown below.\n"
       . "  If the customer names a product ('remove the chicken rice'), find its CART index and use that.\n"
       . "- CLEAR intent examples: 'clear cart', 'start over', 'cancel everything'. Leave arrays empty.\n"
-      . "- Match product_id EXACTLY from the menu. Fuzzy-match short names.\n"
+      . "- Match product_id EXACTLY from the menu. Fuzzy-match names generously, including typos "
+      . "(e.g. 'nasi gorend' == 'nasi goreng'), abbreviations, and language variants.\n"
+      . "- '#N', 'item #N', 'item N', 'no N', or just a bare integer N ALWAYS refers to menu item at that "
+      . "1-based position in the MENU list below. Treat that as an unambiguous product identifier and "
+      . "add quantity=1 unless a quantity is explicitly given.\n"
+      . "- PREFER ACTING OVER ASKING. If you can identify the product with reasonable confidence, add it "
+      . "with quantity=1 (or the stated quantity) and set clarification=null. Only fall back to "
+      . "intent=none + clarification if you truly cannot pick any product from the menu.\n"
+      . "- If the PRIOR BOT QUESTION (below) already asked to disambiguate a specific item, and the "
+      . "customer's message can plausibly be read as confirming that item ('yes', 'yes please', 'ok', "
+      . "the item name, 'that one', a number), COMMIT to that item — do not re-ask.\n"
       . "- Instructions ('less spicy', 'no onion') go on the individual item, not as a separate line.\n"
       . "- Never invent a product_id, variant_id, addon_id, or cart index that doesn't exist.\n"
       . "- If nothing matches at all, intent = 'none', clarification set to a short helpful question.";
 
+    $priorAsk = trim($lastBotAsk) !== ''
+        ? "PRIOR BOT QUESTION (the bot just sent this to the customer — interpret the customer's "
+        . "message as their answer):\n" . trim($lastBotAsk) . "\n\n"
+        : '';
+
     $userPrompt =
         "MENU:\n" . implode("\n\n", $menuLines) . "\n\n"
       . "CURRENT CART (1-based indexes):\n" . $cartText . "\n\n"
+      . $priorAsk
       . "CUSTOMER MESSAGE:\n" . $customerMessage;
 
     $payload = [

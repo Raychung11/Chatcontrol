@@ -335,10 +335,11 @@ function flow_engine_execute_node(PDO $db, array $inst, array $node): int
             if (!$company) return (int)($node['next_node_id'] ?? 0);
             $currency = platform_setting('pricing_currency', 'RM');
 
-            $lastReply = (string)($state['last_reply'] ?? '');
-            $menu      = fnb_active_menu((int)$conv['company_id']);
-            $curCart   = (array)($state['cart'] ?? []);
-            $ai        = fnb_parse_order_ai($company, $lastReply, $menu, $curCart);
+            $lastReply  = (string)($state['last_reply']   ?? '');
+            $lastBotAsk = (string)($state['last_bot_ask'] ?? '');
+            $menu       = fnb_active_menu((int)$conv['company_id']);
+            $curCart    = (array)($state['cart'] ?? []);
+            $ai         = fnb_parse_order_ai($company, $lastReply, $menu, $curCart, $lastBotAsk);
 
             // Apply intent to the cart.
             $intent = (string)($ai['intent'] ?? 'none');
@@ -349,14 +350,23 @@ function flow_engine_execute_node(PDO $db, array $inst, array $node): int
             if ($intent === 'none' || $emptyResult) {
                 // Fallback: send AI's clarification (or a generic ask) +
                 // re-enter waiting state so the next reply resumes here.
+                // Persist the ask so the NEXT turn's AI call sees it and
+                // can commit on a confirmation ("yes" / item name / #N).
                 $askMsg = trim((string)($ai['clarification'] ?? ''))
                     ?: "Sorry, I didn't catch that. Please tell me what to add (e.g. \"2 chicken rice\"), what to remove (e.g. \"remove item 2\"), or say \"clear\" to start over.";
+                $state['last_bot_ask'] = $askMsg;
+                $db->prepare('UPDATE flow_instances SET state = ? WHERE id = ?')
+                   ->execute([json_encode($state, JSON_UNESCAPED_UNICODE), (int)$inst['id']]);
                 $r = provider_send_text($channel, (string)$conv['wa_id'], $askMsg);
                 flow_engine_log_outgoing_message($db, $conv, $askMsg, $r);
                 $db->prepare('UPDATE flow_instances SET status = "waiting", waiting_since = NOW() WHERE id = ?')
                    ->execute([(int)$inst['id']]);
                 return -1;
             }
+
+            // Committed to an action — clear the stale bot-ask so it
+            // doesn't leak into future turns as false context.
+            $state['last_bot_ask'] = '';
 
             $actionSummary = '';
             if ($intent === 'add') {

@@ -15,6 +15,7 @@
 
 require_once __DIR__ . '/../inc/layout.php';
 require_once __DIR__ . '/../inc/channels.php';
+require_once __DIR__ . '/../inc/fnb_helpers.php';
 
 $current_user = require_role(['super_admin']);
 $companyId    = (int)$current_user['company_id'];
@@ -63,8 +64,21 @@ if (is_post()) {
         $db->prepare('DELETE FROM channels WHERE id = ? AND company_id = ? AND provider = "web_chat"')
            ->execute([$chId, $companyId]);
         redirect('/admin/webchat.php?flash=' . rawurlencode('Widget deleted.'));
+    } elseif ($action === 'quick_setup_bot' && fnb_module_active($companyId)) {
+        // One-click: seed the F&B starter flow AND ship it live with a
+        // new_conversation trigger. After this, the widget replies on
+        // the customer's very first message.
+        try {
+            $fid = fnb_seed_starter_flow($db, $companyId, (int)$current_user['id'], true);
+            log_activity($companyId, (int)$current_user['id'], 'widget_quick_setup', 'flow', $fid);
+            redirect('/admin/webchat.php?flash=' . rawurlencode('✅ Bot is live — scan a QR to test.'));
+        } catch (Throwable $e) {
+            $err = 'Quick-setup failed: ' . $e->getMessage();
+        }
     }
 }
+
+$botLive = fnb_has_reachable_active_flow($db, $companyId);
 
 if (!$msg) $msg = (string)($_GET['flash'] ?? '');
 
@@ -124,6 +138,45 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
 <div style="text-align: right; margin-bottom: 12px;">
   <a class="btn btn-sm" href="/admin/webchat_debug.php" title="Run a full health check on the widget stack">🩺 Health check</a>
 </div>
+
+<?php if ($botLive): ?>
+  <div class="wc-card" style="border-color:#c8f0d6; background:#f2fbf5;">
+    <div style="display:flex; align-items:center; gap:8px;">
+      <span style="font-size:18px;">✅</span>
+      <div>
+        <strong>Bot is live.</strong>
+        <span class="muted small">At least one active flow will reply to widget messages.
+          <a href="/admin/flows.php">Manage flows →</a></span>
+      </div>
+    </div>
+  </div>
+<?php else: ?>
+  <div class="wc-card" style="border-color:#f4c9b0; background:#fff7f0;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+      <div style="display:flex; gap:10px; align-items:flex-start;">
+        <span style="font-size:20px;">⚠️</span>
+        <div>
+          <strong>No bot is answering yet.</strong>
+          <div class="muted small">
+            Messages will land in the inbox, but nothing will reply.
+            <?php if (fnb_module_active($companyId)): ?>
+              One click below seeds a working F&amp;B ordering flow and ships it live.
+            <?php else: ?>
+              Enable the F&amp;B module or build a flow at <a href="/admin/flows.php">Message flows</a>.
+            <?php endif; ?>
+          </div>
+        </div>
+      </div>
+      <?php if (fnb_module_active($companyId)): ?>
+        <form method="post" onsubmit="return confirm('Seed a starter F&B ordering flow AND set it live now?');">
+          <?= csrf_field() ?>
+          <input type="hidden" name="action" value="quick_setup_bot">
+          <button class="btn btn-primary" type="submit">🚀 One-click bot setup</button>
+        </form>
+      <?php endif; ?>
+    </div>
+  </div>
+<?php endif; ?>
 
 <div class="wc-card">
   <h2>+ Create a new widget</h2>

@@ -587,3 +587,117 @@ function fnb_next_status(string $status): ?array
         default      => null,
     };
 }
+
+/**
+ * Seed a working F&B ordering flow: welcome → ask type → menu → parse
+ * cart loop → collect name + address → materialize order.
+ *
+ * When $goLive is true (widget quick-setup default), the flow ships as
+ * status=active with a new_conversation trigger so the very first
+ * message on any new channel — WhatsApp, web widget — fires it.
+ *
+ * When false (the historic "seed for editing" path from admin/flows.php),
+ * ships as status=draft with a keyword trigger so the operator can
+ * review + tweak before flipping live.
+ *
+ * Returns the new flow id. Wraps everything in a transaction — a
+ * mid-seed failure leaves no orphans.
+ */
+function fnb_seed_starter_flow(PDO $db, int $companyId, int $userId, bool $goLive = true): int
+{
+    $status  = $goLive ? 'active'           : 'draft';
+    $trigger = $goLive ? 'new_conversation' : 'keyword';
+    $kw      = $goLive ? null               : 'order,menu,food,makan';
+
+    $db->beginTransaction();
+    try {
+        $db->prepare(
+            'INSERT INTO flows (company_id, name, trigger_type, trigger_keywords, status, created_by_user_id)
+             VALUES (?, "F&B order taking (starter)", ?, ?, ?, ?)'
+        )->execute([$companyId, $trigger, $kw, $status, $userId]);
+        $fid = (int)$db->lastInsertId();
+
+        $nins = $db->prepare(
+            'INSERT INTO flow_nodes (flow_id, node_type, label, config) VALUES (?, ?, ?, ?)'
+        );
+        $node = function (string $type, string $label, array $config = []) use ($nins, $fid, $db) {
+            $nins->execute([$fid, $type, $label, json_encode($config, JSON_UNESCAPED_UNICODE)]);
+            return (int)$db->lastInsertId();
+        };
+
+        $nWelcome    = $node('send_message',     'Welcome greeting',
+            ['text' => "Welcome! 🍽️ How would you like your order?\n\n"
+                     . "1. Delivery\n"
+                     . "2. Self-pickup\n\n"
+                     . "_Reply with 1 or 2 — or just tap the button below._"]);
+        $nWaitType   = $node('wait_reply',       'Wait for order type',
+            ['var_name' => 'order_type']);
+        $nSendMenu   = $node('fnb_send_menu',    'Send menu');
+        $nWaitOrder  = $node('wait_reply',       'Wait for order details',
+            ['var_name' => 'raw_order']);
+        $nCart       = $node('fnb_cart_add',     'AI: parse into cart');
+        $nWaitDone   = $node('wait_reply',       'Wait for "done" or more items',
+            ['var_name' => 'more_items']);
+        $nBranchDone = $node('branch',           'Done or add more?');
+        $nAskName    = $node('send_message',     'Ask for customer name',
+            ['text' => "Got it. What name should we put on the order?"]);
+        $nWaitName   = $node('wait_reply',       'Wait for name',
+            ['var_name' => 'customer_name']);
+        $nAskAddr    = $node('send_message',     'Ask for address / pickup time',
+            ['text' => "Please share your *delivery address* (or *pickup time* if picking up)."]);
+        $nWaitAddr   = $node('wait_reply',       'Wait for address',
+            ['var_name' => 'delivery_address']);
+        $nCreate     = $node('fnb_create_order', 'Create the order');
+        $nEnd        = $node('end',              'End');
+
+        $nextMap = [
+            $nWelcome    => $nWaitType,
+            $nWaitType   => $nSendMenu,
+            $nSendMenu   => $nWaitOrder,
+            $nWaitOrder  => $nCart,
+            $nCart       => $nWaitDone,
+            $nWaitDone   => $nBranchDone,
+            $nAskName    => $nWaitName,
+            $nWaitName   => $nAskAddr,
+            $nAskAddr    => $nWaitAddr,
+            $nCreate     => $nEnd,
+        ];
+        $upd = $db->prepare('UPDATE flow_nodes SET next_node_id = ? WHERE id = ?');
+        foreach ($nextMap as $from => $to) $upd->execute([$to, $from]);
+
+        $eIns = $db->prepare(
+            'INSERT INTO flow_edges (flow_id, from_node_id, to_node_id, condition_type, condition_value, sort_order)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $eIns->execute([$fid, $nBranchDone, $nAskName, 'keyword', 'done', 1]);
+        $eIns->execute([$fid, $nBranchDone, $nCart,    'default', null,   2]);
+
+        $db->prepare('UPDATE flows SET entry_node_id = ? WHERE id = ?')->execute([$nWelcome, $fid]);
+        $db->commit();
+        return $fid;
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+
+/**
+ * Does this company have at least one active flow whose trigger can
+ * plausibly fire on an inbound message (either new_conversation or a
+ * keyword-configured flow)? Used by admin/webchat.php to warn the
+ * operator that their widget messages will land in the inbox but no
+ * bot will reply.
+ */
+function fnb_has_reachable_active_flow(PDO $db, int $companyId): bool
+{
+    $q = $db->prepare(
+        'SELECT COUNT(*) FROM flows
+         WHERE company_id = ? AND status = "active"
+           AND (
+               trigger_type = "new_conversation"
+               OR (trigger_type = "keyword" AND trigger_keywords IS NOT NULL AND trigger_keywords <> "")
+           )'
+    );
+    $q->execute([$companyId]);
+    return (int)$q->fetchColumn() > 0;
+}

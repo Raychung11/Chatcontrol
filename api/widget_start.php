@@ -122,7 +122,7 @@ try {
     if ($db->inTransaction()) $db->rollBack();
     error_log('[AiServe widget_start] ' . $e->getMessage());
     http_response_code(500);
-    exit(json_encode(['ok' => false, 'error' => 'Could not start session']));
+    exit(json_encode(['ok' => false, 'error' => 'Server error: ' . $e->getMessage()]));
 }
 
 echo json_encode([

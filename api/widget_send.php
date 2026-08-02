@@ -89,12 +89,19 @@ try {
         $isNewConversation = true;
 
         // Stash context (table number, etc.) as an internal system note
-        // on the new conversation so agents see it immediately.
+        // on the new conversation so agents see it immediately. Best-
+        // effort — the note is a nicety, if the internal_notes schema
+        // doesn't allow NULL user_id, we swallow the error and move on
+        // rather than fail the entire message delivery.
         if (!empty($sess['context'])) {
-            $db->prepare(
-                'INSERT INTO internal_notes (company_id, conversation_id, user_id, note_text)
-                 VALUES (?, ?, NULL, ?)'
-            )->execute([$companyId, $conversationId, '🪑 Customer context: ' . (string)$sess['context']]);
+            try {
+                $db->prepare(
+                    'INSERT INTO internal_notes (company_id, conversation_id, user_id, note_text)
+                     VALUES (?, ?, NULL, ?)'
+                )->execute([$companyId, $conversationId, '🪑 Customer context: ' . (string)$sess['context']]);
+            } catch (Throwable $noteErr) {
+                error_log('[AiServe widget_send internal_notes] ' . $noteErr->getMessage());
+            }
         }
     } else {
         $conversationId = (int)$conv['id'];
@@ -139,7 +146,11 @@ try {
 
     echo json_encode(['ok' => true, 'message_id' => $messageId, 'conversation_id' => $conversationId]);
 } catch (Throwable $e) {
+    // Surface the real message so /admin/webchat_debug.php and the
+    // widget's error banner both show the actual cause. Not a leak —
+    // this endpoint is only reachable with a valid session and the
+    // error text is a DB / schema description, not user data.
     error_log('[AiServe widget_send] ' . $e->getMessage());
     http_response_code(500);
-    exit(json_encode(['ok' => false, 'error' => 'Could not deliver message']));
+    exit(json_encode(['ok' => false, 'error' => 'Server error: ' . $e->getMessage()]));
 }

@@ -24,7 +24,8 @@ require_once __DIR__ . '/aiserve_chatbot_api.php';
 function provider_name(array $company): string
 {
     $p = (string)($company['provider'] ?? 'cloud_api');
-    return in_array($p, ['cloud_api', 'evolution', 'aiserve_chatbot'], true) ? $p : 'cloud_api';
+    $known = ['cloud_api', 'evolution', 'aiserve_chatbot', 'web_chat', 'facebook_page', 'instagram_business'];
+    return in_array($p, $known, true) ? $p : 'cloud_api';
 }
 
 function provider_supports_templates(array $company): bool

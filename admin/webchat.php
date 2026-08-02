@@ -121,6 +121,10 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
 <?php if ($msg): ?><div class="alert alert-success"><?= e($msg) ?></div><?php endif; ?>
 <?php if ($err): ?><div class="alert alert-error"><?= e($err) ?></div><?php endif; ?>
 
+<div style="text-align: right; margin-bottom: 12px;">
+  <a class="btn btn-sm" href="/admin/webchat_debug.php" title="Run a full health check on the widget stack">🩺 Health check</a>
+</div>
+
 <div class="wc-card">
   <h2>+ Create a new widget</h2>
   <p class="muted small">

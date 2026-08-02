@@ -370,9 +370,11 @@ function live_endpoint_test(PDO $db, int $companyId, int $channelId): string
     $sessionToken = (string)$startData['session_token'];
     $out[] = "  ✓ session_token = " . mb_substr($sessionToken, 0, 16) . "…";
 
-    // 2. widget_send.php
-    $out[] = "\n[2] POST /api/widget_send.php";
-    $testText = '[debug ping ' . date('H:i:s') . ']';
+    // 2. widget_send.php — send "menu" so keyword-triggered flows fire.
+    //    A ping-style text would leave the operator guessing whether the
+    //    flow was silent because it didn't match or because it broke.
+    $out[] = "\n[2] POST /api/widget_send.php (text = \"menu\")";
+    $testText = 'menu';
     $r = live_curl($base . '/api/widget_send.php', ['session_token' => $sessionToken, 'text' => $testText]);
     $out[] = "    HTTP " . $r['code'] . " · body: " . mb_substr($r['body'], 0, 200);
     $sendData = json_decode($r['body'], true);
@@ -380,7 +382,8 @@ function live_endpoint_test(PDO $db, int $companyId, int $channelId): string
         $out[] = "  ✗ FAIL — widget_send did not accept the message.";
         return implode("\n", $out);
     }
-    $out[] = "  ✓ message id " . (int)$sendData['message_id'] . " · conversation " . (int)($sendData['conversation_id'] ?? 0);
+    $convId = (int)($sendData['conversation_id'] ?? 0);
+    $out[] = "  ✓ message id " . (int)$sendData['message_id'] . " · conversation " . $convId;
 
     // Give flows a moment to react (they run inline on widget_send).
     usleep(500000);
@@ -397,17 +400,68 @@ function live_endpoint_test(PDO $db, int $companyId, int $channelId): string
         foreach (($pollData['messages'] ?? []) as $m) {
             $out[] = "     · #" . (int)$m['id'] . " " . mb_substr((string)$m['text'], 0, 80);
         }
-        if (empty($pollData['messages'])) {
-            $out[] = "  ⚠ Widget got no reply. This is expected if no flow is active.";
+    }
+
+    // 4. Flow instance introspection — the smoking-gun report.
+    $out[] = "\n[4] Flow-engine state for conversation #$convId";
+    if ($convId > 0) {
+        try {
+            $fis = $db->prepare(
+                'SELECT fi.id, fi.flow_id, fi.status, fi.current_node_id, fi.last_error,
+                        f.name AS flow_name, f.trigger_type,
+                        n.node_type AS current_node_type, n.label AS current_node_label
+                 FROM flow_instances fi
+                 LEFT JOIN flows f      ON f.id = fi.flow_id
+                 LEFT JOIN flow_nodes n ON n.id = fi.current_node_id
+                 WHERE fi.conversation_id = ? ORDER BY fi.id DESC'
+            );
+            $fis->execute([$convId]);
+            $rows = $fis->fetchAll();
+            if (!$rows) {
+                $out[] = "  ⚠ No flow_instance was created. Possible causes:";
+                $out[] = "     - no active flow whose keyword matched \"menu\"";
+                $out[] = "     - trigger_type on your flow isn't keyword or new_conversation";
+                $out[] = "     - flow's entry_node_id is NULL (seed was interrupted)";
+            } else {
+                foreach ($rows as $fi) {
+                    $out[] = "  · instance #" . (int)$fi['id']
+                           . " flow=\"" . (string)$fi['flow_name'] . "\""
+                           . " trigger=" . (string)$fi['trigger_type']
+                           . " status=" . (string)$fi['status']
+                           . " node=" . (string)($fi['current_node_label'] ?? '(none)')
+                           . " (" . (string)($fi['current_node_type'] ?? '') . ")";
+                    if (!empty($fi['last_error'])) {
+                        $out[] = "     ✗ last_error: " . (string)$fi['last_error'];
+                    }
+                }
+            }
+
+            // Show every outgoing row the flow inserted for this conv.
+            $ms = $db->prepare(
+                'SELECT id, sender_type, message_text, status, created_at
+                 FROM messages
+                 WHERE conversation_id = ? AND direction = "outgoing"
+                 ORDER BY id ASC'
+            );
+            $ms->execute([$convId]);
+            $om = $ms->fetchAll();
+            $out[] = "  · outgoing messages in DB: " . count($om);
+            foreach ($om as $m) {
+                $out[] = "     - #" . (int)$m['id']
+                       . " [" . (string)$m['sender_type'] . "/" . (string)$m['status'] . "] "
+                       . mb_substr((string)$m['message_text'], 0, 80);
+            }
+        } catch (Throwable $e) {
+            $out[] = "  ✗ Introspection query failed: " . $e->getMessage();
         }
     }
 
-    // 4. Clean up test session (messages stay for auditability).
+    // 5. Clean up test session (messages stay for auditability).
     try {
         $db->prepare('DELETE FROM web_chat_sessions WHERE session_token = ?')->execute([$sessionToken]);
-        $out[] = "\n[4] Test session deleted. Test messages remain in the inbox for review.";
+        $out[] = "\n[5] Test session deleted. Test messages remain in the inbox for review.";
     } catch (Throwable $e) {
-        $out[] = "\n[4] Cleanup failed: " . $e->getMessage();
+        $out[] = "\n[5] Cleanup failed: " . $e->getMessage();
     }
 
     $out[] = "\n=== Done ===";

@@ -144,6 +144,11 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
     <div class="n"><?= e($title) ?></div>
     <div class="s"><span id="wc-status">Online</span></div>
   </div>
+  <button id="wc-restart" type="button" title="Start a fresh chat"
+          style="margin-left:auto; background:transparent; border:1px solid rgba(255,255,255,0.35);
+                 color:#fff; padding:6px 10px; border-radius:8px; font-size:12px; cursor:pointer;">
+    Restart
+  </button>
 </div>
 
 <div class="wc-stream" id="wc-stream">
@@ -385,6 +390,16 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
       if (!document.hidden) pollOnce();
     });
   }
+
+  // "Restart" — clear localStorage session + wipe the on-screen stream,
+  // then reload. The next widgetStart() mints a fresh session and a
+  // fresh conversation, so flows with a new_conversation trigger fire
+  // again and any stale/completed flow_instance no longer blocks a
+  // re-trigger. Essential for testing.
+  document.getElementById('wc-restart').addEventListener('click', function () {
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+    location.reload();
+  });
 
   widgetStart();
 })();

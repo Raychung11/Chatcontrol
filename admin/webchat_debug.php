@@ -407,7 +407,7 @@ function live_endpoint_test(PDO $db, int $companyId, int $channelId): string
     if ($convId > 0) {
         try {
             $fis = $db->prepare(
-                'SELECT fi.id, fi.flow_id, fi.status, fi.current_node_id, fi.last_error,
+                'SELECT fi.id, fi.flow_id, fi.status, fi.current_node_id, fi.error_message,
                         f.name AS flow_name, f.trigger_type,
                         n.node_type AS current_node_type, n.label AS current_node_label
                  FROM flow_instances fi
@@ -430,8 +430,8 @@ function live_endpoint_test(PDO $db, int $companyId, int $channelId): string
                            . " status=" . (string)$fi['status']
                            . " node=" . (string)($fi['current_node_label'] ?? '(none)')
                            . " (" . (string)($fi['current_node_type'] ?? '') . ")";
-                    if (!empty($fi['last_error'])) {
-                        $out[] = "     ✗ last_error: " . (string)$fi['last_error'];
+                    if (!empty($fi['error_message'])) {
+                        $out[] = "     ✗ error_message: " . (string)$fi['error_message'];
                     }
                 }
             }

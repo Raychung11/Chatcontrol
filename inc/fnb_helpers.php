@@ -407,16 +407,24 @@ function fnb_create_order_from_flow_state(array $state, int $conversationId, int
     };
 
     $db = aiserve_db();
-    // Look up the conversation for contact_id + contact.wa_id fallback.
+    // Look up the conversation for contact_id, contact.wa_id fallback,
+    // and the channel's branch_id so the order snapshots its location.
+    // COALESCE prefers the channel's branch (a QR sitting on a counter is
+    // the most authoritative signal); falls back to the contact's branch
+    // if the channel isn't tagged yet.
     $cs = $db->prepare(
-        'SELECT c.contact_id, ct.wa_id
+        'SELECT c.contact_id, c.channel_id,
+                ct.wa_id,
+                COALESCE(ch.branch_id, ct.branch_id) AS branch_id
          FROM conversations c
-         INNER JOIN contacts ct ON ct.id = c.contact_id
+         INNER JOIN contacts  ct ON ct.id = c.contact_id
+         LEFT  JOIN channels  ch ON ch.id = c.channel_id
          WHERE c.id = ? AND c.company_id = ? LIMIT 1'
     );
     $cs->execute([$conversationId, $companyId]);
     $convRow = $cs->fetch();
     if (!$convRow) return ['ok' => false, 'error' => 'Conversation not found.'];
+    $branchId = (int)($convRow['branch_id'] ?? 0) ?: null;
 
     $custName  = trim((string)($vars['customer_name']    ?? ''));
     $custPhone = trim((string)($vars['customer_phone']   ?? '')) ?: (string)$convRow['wa_id'];
@@ -433,13 +441,13 @@ function fnb_create_order_from_flow_state(array $state, int $conversationId, int
         $db->beginTransaction();
         $ins = $db->prepare(
             'INSERT INTO fnb_orders
-                (company_id, conversation_id, contact_id, order_type,
+                (company_id, conversation_id, contact_id, branch_id, order_type,
                  customer_name, customer_phone, delivery_address, delivery_notes, pickup_time,
                  subtotal, delivery_fee, total, status)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "new")'
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "new")'
         );
         $ins->execute([
-            $companyId, $conversationId, (int)$convRow['contact_id'], $orderType,
+            $companyId, $conversationId, (int)$convRow['contact_id'], $branchId, $orderType,
             $custName ?: '(unknown)', $custPhone ?: null,
             $orderType === 'delivery' ? ($address ?: null) : null,
             $notes ?: null,

@@ -29,29 +29,33 @@ if (is_post()) {
     $chId   = (int)($_POST['channel_id'] ?? 0);
 
     if ($action === 'create') {
-        $name    = trim((string)($_POST['name']    ?? ''));
-        $title   = trim((string)($_POST['title']   ?? ''));
-        $greet   = trim((string)($_POST['greeting']?? ''));
+        $name     = trim((string)($_POST['name']     ?? ''));
+        $title    = trim((string)($_POST['title']    ?? ''));
+        $greet    = trim((string)($_POST['greeting'] ?? ''));
+        $branchId = (int)($_POST['branch_id']         ?? 0);
+        if ($branchId <= 0) $branchId = null;
         if ($name === '') { $err = 'Channel name is required.'; }
         else {
             $token = channel_generate_webhook_token();
             $db->prepare(
                 'INSERT INTO channels
-                    (company_id, name, provider, webhook_token, web_chat_title, web_chat_greeting, is_default, status)
-                 VALUES (?, ?, "web_chat", ?, ?, ?, 0, "active")'
-            )->execute([$companyId, $name, $token, $title ?: null, $greet ?: null]);
+                    (company_id, name, provider, webhook_token, web_chat_title, web_chat_greeting, branch_id, is_default, status)
+                 VALUES (?, ?, "web_chat", ?, ?, ?, ?, 0, "active")'
+            )->execute([$companyId, $name, $token, $title ?: null, $greet ?: null, $branchId]);
             $newId = (int)$db->lastInsertId();
             log_activity($companyId, (int)$current_user['id'], 'web_chat_channel_created', 'channel', $newId, $name);
             redirect('/admin/webchat.php?flash=' . rawurlencode('Web chat channel created.'));
         }
     } elseif ($action === 'update' && $chId > 0) {
-        $title = trim((string)($_POST['title']    ?? ''));
-        $greet = trim((string)($_POST['greeting'] ?? ''));
+        $title    = trim((string)($_POST['title']    ?? ''));
+        $greet    = trim((string)($_POST['greeting'] ?? ''));
+        $branchId = (int)($_POST['branch_id']         ?? 0);
+        if ($branchId <= 0) $branchId = null;
         $db->prepare(
             'UPDATE channels
-             SET web_chat_title = ?, web_chat_greeting = ?
+             SET web_chat_title = ?, web_chat_greeting = ?, branch_id = ?
              WHERE id = ? AND company_id = ? AND provider = "web_chat"'
-        )->execute([$title ?: null, $greet ?: null, $chId, $companyId]);
+        )->execute([$title ?: null, $greet ?: null, $branchId, $chId, $companyId]);
         redirect('/admin/webchat.php?flash=' . rawurlencode('Widget updated.'));
     } elseif ($action === 'toggle' && $chId > 0) {
         $db->prepare(
@@ -84,14 +88,25 @@ if (!$msg) $msg = (string)($_GET['flash'] ?? '');
 
 $channels = $db->prepare(
     'SELECT c.*,
+            b.name AS branch_name,
             (SELECT COUNT(*) FROM web_chat_sessions WHERE channel_id = c.id) AS session_count,
             (SELECT COUNT(*) FROM conversations WHERE channel_id = c.id) AS conv_count
      FROM channels c
+     LEFT JOIN branches b ON b.id = c.branch_id
      WHERE c.company_id = ? AND c.provider = "web_chat"
      ORDER BY c.id DESC'
 );
 $channels->execute([$companyId]);
 $channels = $channels->fetchAll();
+
+// Branches for the create + edit dropdowns.
+$branches = $db->prepare(
+    'SELECT id, name FROM branches
+     WHERE company_id = ? AND status = "active"
+     ORDER BY name'
+);
+$branches->execute([$companyId]);
+$branches = $branches->fetchAll();
 
 $base = defined('APP_BASE_URL') && APP_BASE_URL !== ''
     ? rtrim((string)APP_BASE_URL, '/')
@@ -199,10 +214,25 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
                placeholder="e.g. Vicky's Nasi Lemak">
       </label>
     </div>
-    <label>Welcome message <small class="muted">(first thing the customer sees)</small>
-      <textarea name="greeting" rows="2" maxlength="500"
-                placeholder="Hi 👋 Welcome! Type 'menu' to see what we're serving today."></textarea>
-    </label>
+    <div style="display:grid; gap:8px; grid-template-columns: 1fr 1fr;">
+      <label>Welcome message <small class="muted">(first thing the customer sees)</small>
+        <textarea name="greeting" rows="2" maxlength="500"
+                  placeholder="Hi 👋 Welcome! Type 'menu' to see what we're serving today."></textarea>
+      </label>
+      <label>Branch / location <small class="muted">(for analytics)</small>
+        <?php if ($branches): ?>
+          <select name="branch_id">
+            <option value="">— None —</option>
+            <?php foreach ($branches as $b): ?>
+              <option value="<?= (int)$b['id'] ?>"><?= e($b['name']) ?></option>
+            <?php endforeach; ?>
+          </select>
+        <?php else: ?>
+          <select disabled><option>— No branches yet —</option></select>
+          <div class="muted small" style="margin-top:4px;">Add branches in <a href="/admin/branches.php">Admin → Branches</a> first.</div>
+        <?php endif; ?>
+      </label>
+    </div>
     <button class="btn btn-primary" type="submit">Create widget</button>
   </form>
 </div>
@@ -223,6 +253,11 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
       <div>
         <span class="n"><?= e($c['name']) ?></span>
         <?= status_badge($c['status']) ?>
+        <?php if (!empty($c['branch_name'])): ?>
+          <span class="muted small" style="margin-left:6px; padding:2px 8px; border-radius:999px; background:#eef2ff; color:#3730a3;">
+            🏢 <?= e((string)$c['branch_name']) ?>
+          </span>
+        <?php endif; ?>
         <span class="muted small" style="margin-left:8px;">
           · <?= (int)$c['session_count'] ?> session(s)
           · <?= (int)$c['conv_count'] ?> conversation(s)
@@ -272,12 +307,23 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
           <?= csrf_field() ?>
           <input type="hidden" name="action" value="update">
           <input type="hidden" name="channel_id" value="<?= (int)$c['id'] ?>">
-          <div style="display:grid; gap:8px; grid-template-columns: 1fr 1fr;">
+          <div style="display:grid; gap:8px; grid-template-columns: 1fr 1fr 1fr;">
             <label>Widget title
               <input type="text" name="title" maxlength="120" value="<?= e((string)($c['web_chat_title'] ?? '')) ?>">
             </label>
             <label>Greeting
               <input type="text" name="greeting" maxlength="500" value="<?= e((string)($c['web_chat_greeting'] ?? '')) ?>">
+            </label>
+            <label>Branch
+              <?php $currentBranch = (int)($c['branch_id'] ?? 0); ?>
+              <select name="branch_id">
+                <option value="">— None —</option>
+                <?php foreach ($branches as $b): ?>
+                  <option value="<?= (int)$b['id'] ?>" <?= (int)$b['id'] === $currentBranch ? 'selected' : '' ?>>
+                    <?= e($b['name']) ?>
+                  </option>
+                <?php endforeach; ?>
+              </select>
             </label>
           </div>
           <button class="btn btn-sm" type="submit">Save changes</button>

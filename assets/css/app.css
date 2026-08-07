@@ -683,6 +683,21 @@ textarea { resize: vertical; }
 .summary-meta { margin-top: 8px; font-size: 11px; }
 .summary-actions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
 
+/* "AI is handling this — Take over" banner above the chat stream.
+   Purple gradient matches the ai-draft panel + the 🤖 sender chip so
+   agents can pattern-match "purple = AI" at a glance. */
+.ai-takeover-banner {
+  display: flex; align-items: center; gap: 10px;
+  background: linear-gradient(180deg, #f7f3ff 0%, #efe9ff 100%);
+  border: 1px solid #d6c8f5; border-radius: 8px;
+  padding: 10px 14px; margin: 0 0 8px;
+}
+.ai-takeover-banner .ai-takeover-icon { font-size: 22px; line-height: 1; }
+.ai-takeover-banner .ai-takeover-text { flex: 1; color: #5a2eaa; font-size: 13px; }
+.ai-takeover-banner .ai-takeover-text strong { color: #4a1e94; }
+.ai-takeover-banner .ai-takeover-text .muted { display: block; margin-top: 2px; color: #7c60c4; }
+.ai-takeover-banner button { white-space: nowrap; }
+
 /* AI draft panel above the composer */
 .ai-draft {
   background: linear-gradient(180deg, #f7f3ff 0%, #efe9ff 100%);

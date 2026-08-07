@@ -150,6 +150,47 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
       </div>
     </header>
 
+    <?php
+      // "🤖 AI is handling this — Take over" banner.
+      // Shows only when AI is actually active for THIS conversation:
+      //   - workspace has AI enabled
+      //   - a mode that can auto-reply is on (always_on OR first_touch)
+      //   - conversation is open (not closed)
+      //   - no agent is assigned yet
+      //   - at least one AI-sent message already exists (so we don't
+      //     surface the banner on a brand-new chat where the AI hasn't
+      //     actually stepped in — avoids false alarms on manual chats
+      //     inside an AI-enabled workspace)
+      $aiActive = !empty($company['ai_enabled'])
+               && (!empty($company['ai_always_on']) || !empty($company['ai_first_touch']))
+               && empty($conv['assigned_user_id'])
+               && $conv['status'] !== 'closed';
+      $aiHasReplied = false;
+      if ($aiActive) {
+          foreach ($messages as $m) {
+              if (($m['sender_type'] ?? '') === 'ai') { $aiHasReplied = true; break; }
+          }
+      }
+    ?>
+    <?php if ($aiActive && $aiHasReplied): ?>
+      <div class="ai-takeover-banner" id="ai-takeover-banner">
+        <div class="ai-takeover-icon">🤖</div>
+        <div class="ai-takeover-text">
+          <strong>AI is handling this conversation.</strong>
+          <span class="muted small">
+            Click <em>Take over</em> to stop the AI and reply yourself — it won't touch this thread again until you unassign it.
+          </span>
+        </div>
+        <form method="post" action="/api/conversation_action.php" style="margin:0;">
+          <?= csrf_field() ?>
+          <input type="hidden" name="action"           value="assign">
+          <input type="hidden" name="conversation_id"  value="<?= (int)$conv['id'] ?>">
+          <input type="hidden" name="assigned_user_id" value="<?= (int)$current_user['id'] ?>">
+          <button class="btn btn-primary btn-sm" type="submit">✋ Take over</button>
+        </form>
+      </div>
+    <?php endif; ?>
+
     <?php $lastMsgId = $messages ? (int)end($messages)['id'] : 0; ?>
     <div class="chat-stream" id="chat-stream" data-last-msg-id="<?= $lastMsgId ?>">
       <?php foreach ($messages as $m): ?>

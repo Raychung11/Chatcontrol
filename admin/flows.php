@@ -10,6 +10,7 @@
 
 require_once __DIR__ . '/../inc/layout.php';
 require_once __DIR__ . '/../inc/fnb_helpers.php';
+require_once __DIR__ . '/../inc/flow_templates.php';
 
 $current_user = require_role(['super_admin', 'manager']);
 $companyId    = (int)$current_user['company_id'];
@@ -51,10 +52,8 @@ if (is_post()) {
         log_activity($companyId, (int)$current_user['id'], 'flow_deleted', 'flow', $flowId);
         $msg = 'Flow deleted.';
     } elseif ($action === 'seed_fnb' && fnb_module_active($companyId)) {
-        // Seed a working F&B order-taking flow with all nodes wired up.
-        // Default: draft + keyword trigger — operator reviews and flips
-        // live from flow_edit.php. Pass go_live=1 for a widget-ready
-        // active/new_conversation flow (webchat.php quick-setup does this).
+        // Legacy — kept for backward compat with the webchat quick-setup.
+        // New callers should use action=apply_template with template=fnb_ordering.
         $goLive = !empty($_POST['go_live']);
         try {
             $fid = fnb_seed_starter_flow($db, $companyId, (int)$current_user['id'], $goLive);
@@ -62,6 +61,28 @@ if (is_post()) {
             redirect('/admin/flow_edit.php?id=' . $fid);
         } catch (Throwable $e) {
             $err = 'Could not seed the F&B flow: ' . $e->getMessage();
+        }
+    } elseif ($action === 'apply_template') {
+        // Apply a flow template from the gallery. $goLive comes from a
+        // "Ship it live now" checkbox on the confirm dialog; default is
+        // false so the flow lands as draft the operator can review.
+        $key = (string)($_POST['template'] ?? '');
+        $tpl = flow_templates_lookup($key);
+        $goLive = !empty($_POST['go_live']);
+        if (!$tpl) {
+            $err = 'Unknown template.';
+        } elseif (!empty($tpl['requires_fnb']) && !fnb_module_active($companyId)) {
+            $err = 'This template needs the F&B module enabled.';
+        } elseif (!is_callable($tpl['builder'])) {
+            $err = 'Template is missing its builder.';
+        } else {
+            try {
+                $fid = call_user_func($tpl['builder'], $db, $companyId, (int)$current_user['id'], $goLive);
+                log_activity($companyId, (int)$current_user['id'], 'flow_template_applied', 'flow', $fid, $key);
+                redirect('/admin/flow_edit.php?id=' . $fid);
+            } catch (Throwable $e) {
+                $err = 'Could not apply template: ' . $e->getMessage();
+            }
         }
     }
 }
@@ -103,18 +124,56 @@ layout_start($current_user, 'Message flows', 'flows');
            required maxlength="150" style="flex:1; min-width:220px;">
     <button class="btn btn-primary" type="submit">Create</button>
   </form>
-  <?php if (fnb_module_active($companyId)): ?>
-    <form method="post" style="margin-bottom: 14px;">
-      <?= csrf_field() ?>
-      <input type="hidden" name="action" value="seed_fnb">
-      <button class="btn" type="submit" title="Create a pre-wired F&B order-taking flow (greeting → menu → cart → address → order)">
-        🍜 Seed a starter F&amp;B ordering flow
-      </button>
-      <span class="muted small">
-        · Creates a working 13-node flow, triggered by keywords "order / menu / food / makan". Edit + activate after.
-      </span>
-    </form>
-  <?php endif; ?>
+  <!-- =====================================================
+       TEMPLATE GALLERY - pre-wired starter flows
+       ===================================================== -->
+  <div style="margin: 14px 0 18px; padding: 14px; background:#faf5ff; border:1px solid #e9d5ff; border-radius:10px;">
+    <div style="font-size:14px; font-weight:600; color:#6b21a8; margin-bottom:4px;">🎨 Start from a template</div>
+    <p class="muted small" style="margin: 0 0 12px;">
+      Pick a pre-wired flow that matches your business — nodes, wording, and branch logic are already
+      set up. Ships as <strong>draft</strong> by default so you can review and tweak before flipping
+      live. Tick "ship it live now" to skip review and go straight to production.
+    </p>
+    <div style="display:grid; gap:10px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+      <?php foreach (flow_templates_registry() as $tpl):
+        $disabled = !empty($tpl['requires_fnb']) && !fnb_module_active($companyId);
+      ?>
+        <form method="post"
+              onsubmit="return confirm('Apply the &quot;<?= e($tpl['name']) ?>&quot; template?<?= '\n\n' ?>' + (this.go_live.checked ? '✅ Will ship LIVE immediately with a new-conversation trigger.' : '📝 Will land as DRAFT with a keyword trigger — you review and activate.'));"
+              style="background:#fff; border:1px solid #e3e8ee; border-radius:10px; padding:12px 14px; margin:0;">
+          <?= csrf_field() ?>
+          <input type="hidden" name="action" value="apply_template">
+          <input type="hidden" name="template" value="<?= e($tpl['key']) ?>">
+
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+            <div style="font-size:26px;"><?= $tpl['icon'] ?></div>
+            <div style="flex:1;">
+              <div style="font-weight:700; font-size:13.5px; color:#0f172a;"><?= e($tpl['name']) ?></div>
+              <div style="font-size:11px; color:#64748b;"><?= e($tpl['category']) ?></div>
+            </div>
+          </div>
+          <p style="font-size:12.5px; color:#334155; line-height:1.4; margin:6px 0 10px; min-height:52px;">
+            <?= e($tpl['description']) ?>
+          </p>
+          <?php if ($disabled): ?>
+            <div class="muted small" style="margin-bottom:6px; color:#94a3b8;">
+              Requires F&B module — enable in Admin → Workspaces (platform side).
+            </div>
+            <button class="btn btn-sm" type="submit" disabled style="width:100%; opacity:0.5; cursor:not-allowed;">
+              Locked
+            </button>
+          <?php else: ?>
+            <label style="display:flex; align-items:center; gap:6px; font-size:11.5px; color:#64748b; margin-bottom:8px;">
+              <input type="checkbox" name="go_live" value="1"> Ship it LIVE now (skip draft review)
+            </label>
+            <button class="btn btn-primary btn-sm" type="submit" style="width:100%;">
+              ✨ Apply this template
+            </button>
+          <?php endif; ?>
+        </form>
+      <?php endforeach; ?>
+    </div>
+  </div>
 
   <table class="data-table">
     <thead>

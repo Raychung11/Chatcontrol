@@ -69,6 +69,51 @@ function flow_templates_registry(): array
             'requires_fnb' => false,
             'builder'      => 'flow_template_lead_qualifier',
         ],
+        [
+            'key'          => 'feedback_survey',
+            'name'         => 'Feedback survey',
+            'category'     => 'Support',
+            'icon'         => '⭐',
+            'description'  => 'Ask for a 1-5 star rating + optional comment. Low scores (1-2) auto-route to support so a human can recover the customer.',
+            'requires_fnb' => false,
+            'builder'      => 'flow_template_feedback_survey',
+        ],
+        [
+            'key'          => 'order_status_lookup',
+            'name'         => 'Order status lookup',
+            'category'     => 'Support',
+            'icon'         => '📦',
+            'description'  => 'Customer sends an order number; the flow collects it, saves a lookup note, and routes to staff who reply with the current status.',
+            'requires_fnb' => false,
+            'builder'      => 'flow_template_order_status_lookup',
+        ],
+        [
+            'key'          => 'delivery_tracking',
+            'name'         => 'Delivery tracking',
+            'category'     => 'Logistics',
+            'icon'         => '🚚',
+            'description'  => 'Ask for the tracking or order number + best contact time, save note, and hand off to logistics for a status update.',
+            'requires_fnb' => false,
+            'builder'      => 'flow_template_delivery_tracking',
+        ],
+        [
+            'key'          => 'birthday_optin',
+            'name'         => 'Birthday reminder opt-in',
+            'category'     => 'Marketing',
+            'icon'         => '🎂',
+            'description'  => 'Collect the customer\'s name + birthday (day/month) for future promo campaigns. Saves an internal note tagged for the marketing list.',
+            'requires_fnb' => false,
+            'builder'      => 'flow_template_birthday_optin',
+        ],
+        [
+            'key'          => 'refund_request',
+            'name'         => 'Refund request',
+            'category'     => 'Support',
+            'icon'         => '💸',
+            'description'  => 'Ask order number, purchase date, reason, and refund method; save the full case as a note and hand off to support / finance.',
+            'requires_fnb' => false,
+            'builder'      => 'flow_template_refund_request',
+        ],
     ];
 }
 
@@ -311,6 +356,28 @@ function flow_template_faq_triage(PDO $db, int $companyId, int $userId, bool $go
 }
 
 /**
+ * Pick the best-fit active department for this template, ranked by a
+ * priority list of common names. Returns 0 if none match — assign_dept
+ * nodes no-op safely on 0, so this is always safe to call.
+ */
+function flow_template_pick_dept(PDO $db, int $companyId, array $priorityNames): int
+{
+    if (!$priorityNames) return 0;
+    // Build a MySQL FIELD() ordering that prefers earlier names.
+    $quoted = array_map(fn($n) => "'" . str_replace("'", "\\'", mb_strtolower($n)) . "'", $priorityNames);
+    $order  = 'FIELD(LOWER(name),' . implode(',', $quoted) . ')';
+    try {
+        $s = $db->prepare(
+            "SELECT id FROM departments
+             WHERE company_id = ? AND status = 'active'
+             ORDER BY {$order} DESC, id ASC LIMIT 1"
+        );
+        $s->execute([$companyId]);
+        return (int)($s->fetchColumn() ?: 0);
+    } catch (Throwable $e) { return 0; }
+}
+
+/**
  * Lead qualifier — collect 4 qualification fields, route to Sales dept.
  */
 function flow_template_lead_qualifier(PDO $db, int $companyId, int $userId, bool $goLive): int
@@ -362,6 +429,248 @@ function flow_template_lead_qualifier(PDO $db, int $companyId, int $userId, bool
         ]);
         flow_template_finalize($db, $fid, $nHello);
 
+        $db->commit();
+        return $fid;
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+
+/**
+ * Feedback survey — 1-5 star rating + optional comment. Low scores
+ * (1 or 2) branch to human handoff so support can recover the customer;
+ * high scores get a quick thank-you and end.
+ */
+function flow_template_feedback_survey(PDO $db, int $companyId, int $userId, bool $goLive): int
+{
+    $db->beginTransaction();
+    try {
+        [$fid, $node, $wire] = flow_template_bootstrap(
+            $db, $companyId, $userId, 'Feedback survey (starter)', $goLive, 'feedback,review,rating,how was'
+        );
+        $deptId = flow_template_pick_dept($db, $companyId, ['support','customer service','success','experience']);
+
+        $nAsk     = $node('send_message', 'Ask for rating',
+            ['text' => "Thanks for choosing us! ⭐\n\nHow was your experience? Reply with a number 1–5:\n\n1 · terrible\n2 · not great\n3 · ok\n4 · good\n5 · amazing"]);
+        $nWRate   = $node('wait_reply',   'Wait for rating',       ['var_name' => 'rating']);
+        $nBranch  = $node('branch',       'Score branch');
+
+        // Low-score path — apologise, ask what went wrong, route to support.
+        $nSorry   = $node('send_message', 'Low score: apologise',
+            ['text' => "Really sorry to hear that. 😔 Would you mind telling me in a sentence or two what went wrong? A human from our team will read it and follow up personally."]);
+        $nWReason = $node('wait_reply',   'Wait for reason',       ['var_name' => 'complaint']);
+        $nNoteLow = $node('save_note',    'Save complaint note',
+            ['template' => "⚠️ NEGATIVE feedback ({{rating}}★)\nReason: {{complaint}}"]);
+        $nAssign  = $node('assign_dept',  'Route to support',
+            $deptId > 0 ? ['department_id' => $deptId] : []);
+        $nByeLow  = $node('send_message', 'Confirm human follow-up',
+            ['text' => "Thank you for sharing. Our team has been notified — someone will reply here shortly to make this right. 🙏"]);
+
+        // High-score path — thank + ask for optional public review.
+        $nThanks  = $node('send_message', 'High score: thank',
+            ['text' => "Thank you so much! 🙌 If you'd like to leave us a Google review, we'd really appreciate it — it helps a small business a lot. (Reply \"skip\" if you'd rather not.)"]);
+        $nWMaybe  = $node('wait_reply',   'Wait for review reply', ['var_name' => 'review_reply']);
+        $nNoteHi  = $node('save_note',    'Save positive feedback',
+            ['template' => "⭐ Positive feedback ({{rating}}★). Response to review ask: {{review_reply}}"]);
+        $nByeHi   = $node('send_message', 'Sign off',
+            ['text' => "You're the best 💛 — see you next time!"]);
+
+        $nEnd     = $node('end',          'End');
+
+        $wire([
+            $nAsk     => $nWRate,
+            $nWRate   => $nBranch,
+            // low score chain
+            $nSorry   => $nWReason,
+            $nWReason => $nNoteLow,
+            $nNoteLow => $nAssign,
+            $nAssign  => $nByeLow,
+            $nByeLow  => $nEnd,
+            // high score chain
+            $nThanks  => $nWMaybe,
+            $nWMaybe  => $nNoteHi,
+            $nNoteHi  => $nByeHi,
+            $nByeHi   => $nEnd,
+        ]);
+
+        // Branch edges: 1 or 2 → low path, everything else → high path.
+        $eIns = $db->prepare(
+            'INSERT INTO flow_edges (flow_id, from_node_id, to_node_id, condition_type, condition_value, sort_order)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $eIns->execute([$fid, $nBranch, $nSorry,  'keyword', '1',        1]);
+        $eIns->execute([$fid, $nBranch, $nSorry,  'keyword', '2',        2]);
+        $eIns->execute([$fid, $nBranch, $nSorry,  'keyword', 'terrible', 3]);
+        $eIns->execute([$fid, $nBranch, $nSorry,  'keyword', 'bad',      4]);
+        $eIns->execute([$fid, $nBranch, $nThanks, 'default', null,       5]);
+
+        flow_template_finalize($db, $fid, $nAsk);
+        $db->commit();
+        return $fid;
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+
+/**
+ * Order status lookup — customer sends order number, flow saves it as
+ * a lookup note + routes to staff. No DB lookup node yet (would need a
+ * dedicated node type + engine hook); staff manually check the F&B
+ * dashboard and reply. Fast to build, actually useful today.
+ */
+function flow_template_order_status_lookup(PDO $db, int $companyId, int $userId, bool $goLive): int
+{
+    $db->beginTransaction();
+    try {
+        [$fid, $node, $wire] = flow_template_bootstrap(
+            $db, $companyId, $userId, 'Order status lookup (starter)', $goLive, 'order status,where is my order,my order,status'
+        );
+        $deptId = flow_template_pick_dept($db, $companyId, ['support','order status','customer service','operations']);
+
+        $nAsk    = $node('send_message', 'Ask for order number',
+            ['text' => "Sure! Please share your order number so I can check it for you.\n\n(It usually looks like A00123 or similar — check your last confirmation from us.)"]);
+        $nWNum   = $node('wait_reply',   'Wait for order number', ['var_name' => 'order_number']);
+        $nNote   = $node('save_note',    'Save lookup request',
+            ['template' => "📦 Order status lookup requested\nOrder #: {{order_number}}"]);
+        $nAssign = $node('assign_dept',  'Route to staff',
+            $deptId > 0 ? ['department_id' => $deptId] : []);
+        $nBye    = $node('send_message', 'Ack + hand off',
+            ['text' => "Got it — checking on order *{{order_number}}* now. A team member will reply here in a moment with the latest status. 🙏"]);
+        $nEnd    = $node('end',          'End');
+
+        $wire([
+            $nAsk    => $nWNum,   $nWNum  => $nNote,
+            $nNote   => $nAssign, $nAssign=> $nBye,   $nBye => $nEnd,
+        ]);
+        flow_template_finalize($db, $fid, $nAsk);
+        $db->commit();
+        return $fid;
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+
+/**
+ * Delivery tracking — asks tracking number + best contact time so
+ * logistics can call back without playing phone tag.
+ */
+function flow_template_delivery_tracking(PDO $db, int $companyId, int $userId, bool $goLive): int
+{
+    $db->beginTransaction();
+    try {
+        [$fid, $node, $wire] = flow_template_bootstrap(
+            $db, $companyId, $userId, 'Delivery tracking (starter)', $goLive, 'delivery,tracking,where is my delivery,shipment,parcel'
+        );
+        $deptId = flow_template_pick_dept($db, $companyId, ['logistics','delivery','operations','support']);
+
+        $nAsk     = $node('send_message', 'Ask tracking or order #',
+            ['text' => "Happy to help track your delivery. 🚚\n\nWhat's your tracking number or order number?"]);
+        $nWNum    = $node('wait_reply',   'Wait for number',     ['var_name' => 'tracking_number']);
+        $nWhen    = $node('send_message', 'Ask best contact time',
+            ['text' => "Got it. When's a good time for us to update you today? (e.g. \"before 3pm\", \"anytime\", \"after work\")"]);
+        $nWWhen   = $node('wait_reply',   'Wait for contact window', ['var_name' => 'contact_window']);
+        $nNote    = $node('save_note',    'Save tracking request',
+            ['template' => "🚚 Delivery tracking\nNumber: {{tracking_number}}\nCall back window: {{contact_window}}"]);
+        $nAssign  = $node('assign_dept',  'Route to logistics',
+            $deptId > 0 ? ['department_id' => $deptId] : []);
+        $nBye     = $node('send_message', 'Confirm hand off',
+            ['text' => "Thanks! Our logistics team is looking up *{{tracking_number}}* now — you'll get an update by {{contact_window}}. 📦"]);
+        $nEnd     = $node('end',          'End');
+
+        $wire([
+            $nAsk    => $nWNum,   $nWNum  => $nWhen,   $nWhen  => $nWWhen,
+            $nWWhen  => $nNote,   $nNote  => $nAssign, $nAssign=> $nBye, $nBye => $nEnd,
+        ]);
+        flow_template_finalize($db, $fid, $nAsk);
+        $db->commit();
+        return $fid;
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+
+/**
+ * Birthday reminder opt-in — collect day + month (year optional) and
+ * save as a note tagged for the marketing list. Future phase: add a
+ * proper contacts.birthday column + monthly cron to send greetings.
+ */
+function flow_template_birthday_optin(PDO $db, int $companyId, int $userId, bool $goLive): int
+{
+    $db->beginTransaction();
+    try {
+        [$fid, $node, $wire] = flow_template_bootstrap(
+            $db, $companyId, $userId, 'Birthday reminder opt-in (starter)', $goLive, 'birthday,promo,discount,special offer'
+        );
+
+        $nAsk    = $node('send_message', 'Explain + ask name',
+            ['text' => "🎂 We'd love to send you a little birthday surprise every year.\n\nWhat should we call you?"]);
+        $nWName  = $node('wait_reply',   'Wait for name',    ['var_name' => 'contact_name']);
+        $nBday   = $node('send_message', 'Ask birthday',
+            ['text' => "Thanks {{contact_name}}! And what's your birthday? Just day and month is fine (e.g. \"15 August\" or \"15/8\")."]);
+        $nWBday  = $node('wait_reply',   'Wait for birthday',['var_name' => 'birthday']);
+        $nNote   = $node('save_note',    'Save marketing opt-in',
+            ['template' => "🎂 Birthday opt-in\nName: {{contact_name}}\nBirthday: {{birthday}}\n(Add to birthday-promo list)"]);
+        $nBye    = $node('send_message', 'Confirm',
+            ['text' => "You're on the list, {{contact_name}}. 🎉 See you around your birthday — no spam otherwise, promise."]);
+        $nEnd    = $node('end',          'End');
+
+        $wire([
+            $nAsk    => $nWName,  $nWName => $nBday,   $nBday => $nWBday,
+            $nWBday  => $nNote,   $nNote  => $nBye,    $nBye  => $nEnd,
+        ]);
+        flow_template_finalize($db, $fid, $nAsk);
+        $db->commit();
+        return $fid;
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+
+/**
+ * Refund request — collects order #, date, reason, preferred refund
+ * method; hands off to support/finance with a full case note.
+ */
+function flow_template_refund_request(PDO $db, int $companyId, int $userId, bool $goLive): int
+{
+    $db->beginTransaction();
+    try {
+        [$fid, $node, $wire] = flow_template_bootstrap(
+            $db, $companyId, $userId, 'Refund request (starter)', $goLive, 'refund,return,cancel,money back'
+        );
+        $deptId = flow_template_pick_dept($db, $companyId, ['refunds','finance','support','customer service']);
+
+        $nAsk    = $node('send_message', 'Ack + ask order #',
+            ['text' => "Sorry to hear this — happy to help. 💸\n\nCan you share your order number?"]);
+        $nWNum   = $node('wait_reply',   'Wait for order number', ['var_name' => 'order_number']);
+        $nDate   = $node('send_message', 'Ask purchase date',
+            ['text' => "Thanks. When did you place order {{order_number}}? (rough date is fine)"]);
+        $nWDate  = $node('wait_reply',   'Wait for date',         ['var_name' => 'purchase_date']);
+        $nReason = $node('send_message', 'Ask reason',
+            ['text' => "In a sentence or two, what's the reason for the refund?"]);
+        $nWReason= $node('wait_reply',   'Wait for reason',       ['var_name' => 'refund_reason']);
+        $nMethod = $node('send_message', 'Ask refund method',
+            ['text' => "How would you prefer the refund?\n\n1. Back to the original payment card / e-wallet\n2. Bank transfer\n3. Store credit"]);
+        $nWMethod= $node('wait_reply',   'Wait for method',       ['var_name' => 'refund_method']);
+        $nNote   = $node('save_note',    'Save refund case',
+            ['template' => "💸 REFUND REQUEST\nOrder #: {{order_number}}\nPurchase date: {{purchase_date}}\nReason: {{refund_reason}}\nRefund method: {{refund_method}}"]);
+        $nAssign = $node('assign_dept',  'Route to refunds/finance',
+            $deptId > 0 ? ['department_id' => $deptId] : []);
+        $nBye    = $node('send_message', 'Confirm timeline',
+            ['text' => "Got it — your refund case is with our team now. We usually confirm within 1 working day and process within 5–7 working days from confirmation. 🙏"]);
+        $nEnd    = $node('end',          'End');
+
+        $wire([
+            $nAsk    => $nWNum,     $nWNum   => $nDate,   $nDate   => $nWDate,
+            $nWDate  => $nReason,   $nReason => $nWReason,$nWReason=> $nMethod,
+            $nMethod => $nWMethod,  $nWMethod=> $nNote,   $nNote   => $nAssign,
+            $nAssign => $nBye,      $nBye    => $nEnd,
+        ]);
+        flow_template_finalize($db, $fid, $nAsk);
         $db->commit();
         return $fid;
     } catch (Throwable $e) {

@@ -163,6 +163,54 @@ body.impersonating .app-shell { border-top: 0; }
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
   color: #7d8898; padding: 18px 20px 6px;
 }
+
+/* Collapsible sidebar groups (<details>/<summary>) — native, no JS to open/close.
+   Small caret rotates on open. Every child link stays visually nested inside. */
+.sidebar-nav details.nav-group {
+  margin: 4px 0;
+}
+.sidebar-nav details.nav-group > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+  padding: 10px 20px;
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  color: #9aa5b4;
+  user-select: none;
+  border-left: 3px solid transparent;
+}
+.sidebar-nav details.nav-group > summary::-webkit-details-marker { display: none; }
+.sidebar-nav details.nav-group > summary::before {
+  content: '▸';
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 0.15s ease;
+  color: #6c7683;
+}
+.sidebar-nav details.nav-group[open] > summary::before { transform: rotate(90deg); }
+.sidebar-nav details.nav-group > summary:hover { color: #fff; }
+.sidebar-nav details.nav-group > a { padding-left: 40px; }
+/* When a nested link is active, highlight the parent group summary too
+   so the user can tell which group they're currently in. */
+.sidebar-nav details.nav-group:has(> a.active) > summary { color: #fff; }
+
+/* Platform group sits at the bottom with a subtle separator so it feels
+   different from the workspace-scoped ones above. */
+.sidebar-nav details.nav-group-platform {
+  margin-top: 14px; padding-top: 8px; border-top: 1px solid #2c3744;
+}
+
+/* Highlighted top-level link (Quick setup nudge) + the NEW pill. */
+.sidebar-nav .nav-highlight {
+  background: linear-gradient(135deg, #234534 0%, transparent 100%);
+  font-weight: 600;
+}
+.sidebar-nav .nav-badge {
+  background: #25D366; color: #fff;
+  padding: 1px 6px; border-radius: 999px;
+  font-size: 10px; margin-left: 4px;
+}
 .sidebar-footer { padding: 14px 20px; border-top: 1px solid #2c3744; }
 .user-card { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
 .user-avatar {

@@ -118,12 +118,32 @@ if (is_post()) {
             log_activity($companyId, (int)$current_user['id'], 'ai_model_updated', 'company', $companyId, $tier);
             $msg = 'AI model set to ' . ucfirst($tier) . '. It takes effect on the next AI reply.';
         }
+    } elseif ($action === 'save_model_by_feature' && user_can_edit_settings($current_user)) {
+        // Per-feature model override — one dropdown per feature. Empty
+        // value means "fall back to workspace default", stored as
+        // missing key in the JSON.
+        $tierMap = [
+            'haiku'  => 'claude-haiku-4-5',
+            'sonnet' => 'claude-sonnet-5',
+            'opus'   => 'claude-opus-5',
+        ];
+        $features = ['first_touch', 'always_on', 'suggest_reply', 'fnb_cart_parse'];
+        $out = [];
+        foreach ($features as $f) {
+            $t = (string)($_POST['tier_' . $f] ?? '');
+            if (isset($tierMap[$t])) $out[$f] = $tierMap[$t];
+        }
+        $json = $out ? json_encode($out, JSON_UNESCAPED_UNICODE) : null;
+        $db->prepare('UPDATE companies SET ai_model_by_feature = ? WHERE id = ?')
+           ->execute([$json, $companyId]);
+        log_activity($companyId, (int)$current_user['id'], 'ai_model_by_feature_updated', 'company', $companyId);
+        $msg = 'Per-feature model preferences saved.';
     }
 }
 
-// Company state for the toggle panel + AI persona + model tier.
+// Company state for all cards on this page.
 $compStmt = $db->prepare(
-    'SELECT learn_from_history_enabled, ai_persona, ai_model
+    'SELECT learn_from_history_enabled, ai_persona, ai_model, ai_model_by_feature
      FROM companies WHERE id = ? LIMIT 1'
 );
 $compStmt->execute([$companyId]);
@@ -131,12 +151,26 @@ $compRow  = $compStmt->fetch() ?: [];
 $learnOn  = (int)($compRow['learn_from_history_enabled'] ?? 0) === 1;
 $curPersona = (string)($compRow['ai_persona'] ?? '');
 $curModel   = (string)($compRow['ai_model']   ?? 'claude-haiku-4-5');
-// Reverse-map current model id → tier for the radio group.
-$curTier = match (true) {
-    str_contains($curModel, 'opus')                        => 'opus',
-    str_contains($curModel, 'sonnet') || str_contains($curModel, 'fable') => 'sonnet',
-    default                                                 => 'haiku',
+$idToTier = function (string $mid): string {
+    return match (true) {
+        str_contains($mid, 'opus')   => 'opus',
+        str_contains($mid, 'sonnet') || str_contains($mid, 'fable') => 'sonnet',
+        default                      => 'haiku',
+    };
 };
+$curTier = $idToTier($curModel);
+
+// Per-feature current tiers (fall back to workspace default when unset).
+$byFeature = [];
+$rawByFeat = trim((string)($compRow['ai_model_by_feature'] ?? ''));
+if ($rawByFeat !== '') {
+    $decoded = json_decode($rawByFeat, true);
+    if (is_array($decoded)) $byFeature = $decoded;
+}
+$featureTier = [];
+foreach (['first_touch', 'always_on', 'suggest_reply', 'fnb_cart_parse'] as $f) {
+    $featureTier[$f] = isset($byFeature[$f]) ? $idToTier((string)$byFeature[$f]) : '';
+}
 
 $stmt = $db->prepare(
     'SELECT k.*, u.name AS author_name
@@ -252,15 +286,41 @@ layout_start($current_user, 'AI Knowledge base', 'knowledge');
     <?= csrf_field() ?>
     <input type="hidden" name="action" value="save_persona">
     <label class="muted small">Persona (max 1000 characters)</label>
-    <textarea name="ai_persona" rows="4" maxlength="1000"
+    <textarea id="ai-persona-field" name="ai_persona" rows="4" maxlength="1000"
               placeholder="e.g. You are Ali, the friendly server at Vicky's Nasi Lemak. Speak casual Malaysian English with the occasional Bahasa Melayu word (lah, boleh, jom). Warm, helpful, never pushy. Remember our house special is nasi lemak ayam berempah — mention it if the customer asks for recommendations."
               style="width:100%; padding:8px 10px; border:1px solid #d0d7de; border-radius:6px; font-size:13px;"><?= e($curPersona) ?></textarea>
-    <div style="margin-top: 8px; display:flex; gap:8px; align-items:center;">
+    <div style="margin-top: 8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
       <button class="btn btn-primary btn-sm" type="submit">Save persona</button>
+      <a class="btn btn-sm" href="/admin/ai_persona_ab.php">🧪 A/B test two personas →</a>
       <span class="muted small"><?= mb_strlen($curPersona) ?> / 1000 chars</span>
     </div>
   </form>
+
+  <!-- Preset gallery — click a preset to fill the textarea (doesn't save yet). -->
+  <div style="margin-top: 14px; padding-top: 14px; border-top: 1px solid #eef2f7;">
+    <div class="muted small" style="margin-bottom:6px;">
+      <strong>💡 Presets</strong> — click one to load into the textarea above (then edit + save).
+    </div>
+    <div style="display:grid; gap:6px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));">
+      <?php foreach (AI_PERSONA_PRESETS as $key => $preset): ?>
+        <button type="button" onclick="wsApplyPreset(<?= htmlspecialchars(json_encode($preset['text']), ENT_QUOTES) ?>)"
+                style="text-align:left; background:#faf5ff; border:1px solid #e9d5ff; border-radius:8px; padding:8px 10px; cursor:pointer; font-size:12.5px; line-height:1.3;">
+          <div style="font-weight:600; color:#6b21a8; margin-bottom:2px;"><?= e($preset['label']) ?></div>
+          <div style="color:#64748b;"><?= e(mb_substr($preset['text'], 0, 90)) ?>…</div>
+        </button>
+      <?php endforeach; ?>
+    </div>
+  </div>
 </div>
+<script>
+function wsApplyPreset(text) {
+  const el = document.getElementById('ai-persona-field');
+  if (!el) return;
+  el.value = text;
+  el.focus();
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+</script>
 
 <!-- =====================================================
      AI MODEL TIER - speed vs quality vs cost
@@ -306,6 +366,47 @@ layout_start($current_user, 'AI Knowledge base', 'knowledge');
       Click any tier to switch — auto-saves.
     </div>
   </form>
+
+  <!-- =====================================================
+       PER-FEATURE MODEL OVERRIDE
+       ===================================================== -->
+  <div style="margin-top: 18px; padding-top: 14px; border-top: 1px solid #eef2f7;">
+    <div style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">🎛 Per-feature override</div>
+    <p class="muted small" style="margin-bottom: 8px;">
+      Route each AI feature to a different model. Cheap mechanical calls (F&amp;B cart parse)
+      can run on Haiku while customer-facing chat stays on Sonnet. Leave "— default —"
+      to fall back to the workspace-wide model above.
+    </p>
+    <form method="post" style="margin-top: 6px;">
+      <?= csrf_field() ?>
+      <input type="hidden" name="action" value="save_model_by_feature">
+      <?php
+        $featureLabels = [
+          'first_touch'    => ['🤖 First-touch auto-reply',      'AI auto-sends the first reply on new conversations.'],
+          'always_on'      => ['💬 Always-on AI chat',            'AI handles every message until an agent joins.'],
+          'suggest_reply'  => ['✍️ Agent-composer suggest',      'Drafts the AI proposes to agents in the inbox composer.'],
+          'fnb_cart_parse' => ['🍜 F&amp;B AI cart parse',        'Structured extraction — cheapest tier usually fine.'],
+        ];
+      ?>
+      <div style="display: grid; gap: 8px; grid-template-columns: 1fr 1fr;">
+        <?php foreach ($featureLabels as $key => [$label, $desc]):
+          $cur = $featureTier[$key] ?? '';
+        ?>
+          <label style="display:block; padding:10px 12px; border:1px solid #e3e8ee; border-radius:8px; background:#fafbfc;">
+            <div style="font-weight:600; font-size:13px;"><?= $label ?></div>
+            <div class="muted small" style="margin: 3px 0 6px;"><?= $desc ?></div>
+            <select name="tier_<?= $key ?>" style="width:100%; padding:5px 8px; font-size:12.5px; border:1px solid #d0d7de; border-radius:5px;">
+              <option value=""       <?= $cur === ''       ? 'selected' : '' ?>>— use workspace default (<?= e(ucfirst($curTier)) ?>) —</option>
+              <option value="haiku"  <?= $cur === 'haiku'  ? 'selected' : '' ?>>Haiku 4.5 · cheapest</option>
+              <option value="sonnet" <?= $cur === 'sonnet' ? 'selected' : '' ?>>Sonnet 5 · balanced</option>
+              <option value="opus"   <?= $cur === 'opus'   ? 'selected' : '' ?>>Opus 5 · best quality</option>
+            </select>
+          </label>
+        <?php endforeach; ?>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm" style="margin-top: 10px;">Save per-feature overrides</button>
+    </form>
+  </div>
 </div>
 
 <div class="card">

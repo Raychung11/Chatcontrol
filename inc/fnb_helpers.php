@@ -168,7 +168,10 @@ function fnb_parse_order_ai(array $company, string $customerMessage, array $menu
     if ($apiKey === '') {
         return array_merge($empty, ['error' => 'No Anthropic API key.']);
     }
-    $model = (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
+    // Per-feature model — F&B cart parse can run on the cheaper tier
+    // than customer-facing chat since it's a structured extraction call.
+    require_once __DIR__ . '/ai_api.php';
+    $model = ai_model_for_feature($company, 'fnb_cart_parse');
 
     // Minimal menu context for the model. Variants/addons kept lean.
     $menuLines = [];

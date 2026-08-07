@@ -21,6 +21,63 @@ const AI_API_VERSION    = '2023-06-01';
 const AI_MAX_HISTORY    = 20;       // last N messages of context
 const AI_MAX_OUT_TOKENS = 512;
 
+/**
+ * Curated persona presets — one-click starting points for
+ * /admin/knowledge.php. Operators can apply then edit.
+ */
+const AI_PERSONA_PRESETS = [
+    'formal_en' => [
+        'label' => '👔 Formal English',
+        'text'  => 'A polished, professional English-language customer-service voice. Complete sentences, courteous tone, no slang or emojis. Suitable for banking, legal, insurance, or B2B contexts.',
+    ],
+    'warm_ms' => [
+        'label' => '🌸 Warm Malay (BM + English)',
+        'text'  => "Speak casual Malaysian English mixed with the occasional Bahasa Melayu word (lah, boleh, jom, ok tak, sila). Warm, friendly, patient. Address the customer as \"kak\" or \"bang\" when appropriate. Perfect for family businesses and F&B.",
+    ],
+    'playful_bi' => [
+        'label' => '✨ Bilingual playful',
+        'text'  => 'Switch fluidly between English and Bahasa Malaysia depending on how the customer wrote. Light, upbeat, playful — use 1 emoji per reply max. Great for e-commerce, cafes, and beauty brands.',
+    ],
+    'concise_pro' => [
+        'label' => '⚡ Concise professional',
+        'text'  => 'Short, direct, no fluff. 1-2 sentences per reply. Never says "sure!" or "no problem" — just answers. Good for high-volume support where speed matters more than warmth.',
+    ],
+    'fnb_host' => [
+        'label' => '🍜 F&B host',
+        'text'  => "Warm, hospitable F&B host voice. Refer to menu items by name. Suggest the day's special if the customer asks for recommendations. Confirm orders back before creating them. Use food emojis sparingly (🍽️ 🍜) — never more than one per reply.",
+    ],
+    'retail_assist' => [
+        'label' => '🛍 Retail assistant',
+        'text'  => 'Product-focused retail assistant. Ask sizing/color/quantity when relevant. Mention delivery timeline (2–3 working days) if the customer asks about shipping. Suggest similar or complementary products when helpful, never pushy.',
+    ],
+    'clinic_reception' => [
+        'label' => '🩺 Clinic reception',
+        'text'  => 'Calm, empathetic clinic receptionist. Use polite pronouns. Never diagnose or give medical advice — always defer to the doctor. Confirm appointment slot + IC/passport before booking. Follow up with a reminder message the day before if the platform supports it.',
+    ],
+    'salon_stylist' => [
+        'label' => '💇 Salon / beauty',
+        'text'  => 'Beauty & salon voice — chatty, encouraging, style-savvy. Ask for a reference photo when a customer describes a haircut or nail style. Confirm stylist name + slot + service before booking. Suggest add-ons (hair treatment, add-on manicure) once, never twice.',
+    ],
+];
+
+/**
+ * Feature → model resolver. Reads companies.ai_model_by_feature JSON
+ * and falls back to companies.ai_model, then AI_DEFAULT_MODEL. Callers
+ * pass a known feature key: 'first_touch', 'always_on', 'suggest_reply',
+ * 'fnb_cart_parse', 'kb_distill', 'summary', 'topics', 'auto_reply_suggest'.
+ */
+function ai_model_for_feature(array $company, string $feature): string
+{
+    $raw = trim((string)($company['ai_model_by_feature'] ?? ''));
+    if ($raw !== '') {
+        $map = json_decode($raw, true);
+        if (is_array($map) && !empty($map[$feature]) && is_string($map[$feature])) {
+            return (string)$map[$feature];
+        }
+    }
+    return (string)($company['ai_model'] ?? AI_DEFAULT_MODEL) ?: AI_DEFAULT_MODEL;
+}
+
 function ai_is_configured(array $company): bool
 {
     return !empty($company['ai_enabled'])
@@ -817,6 +874,9 @@ function ai_first_touch_handle(array $company, int $conversationId): void
             return;
         }
 
+        // Per-feature model override — resolver falls back to
+        // companies.ai_model then AI_DEFAULT_MODEL when unset.
+        $company['ai_model'] = ai_model_for_feature($company, 'first_touch');
         $decision = ai_first_touch_decide($company, $conv, $customerMessage);
         if (!$decision['ok']) {
             log_activity((int)$company['id'], null, 'ai_first_touch_skipped',
@@ -1119,6 +1179,9 @@ function ai_always_on_handle(array $company, int $conversationId): void
                 'conversation', $conversationId, 'reason=quota_cap_hit');
             return;
         }
+
+        // Per-feature model override for always-on chatbot.
+        $company['ai_model'] = ai_model_for_feature($company, 'always_on');
 
         // Call Claude with the full conversation history (so it has context).
         $r = ai_suggest_reply($company, $conv, $history);

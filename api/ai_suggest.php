@@ -57,6 +57,9 @@ $mstmt = $db->prepare(
 $mstmt->execute([$conversationId]);
 $rows = array_reverse($mstmt->fetchAll());
 
+// Per-feature model override for the agent-composer draft.
+$company['ai_model'] = ai_model_for_feature($company, 'suggest_reply');
+
 $result = ai_suggest_reply($company, $conv, $rows);
 
 if (!$result['ok']) {

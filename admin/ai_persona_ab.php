@@ -28,8 +28,11 @@ $aiOn = !empty($company['ai_enabled']) && ai_api_key($company) !== '';
 
 $results  = null;
 $formErr  = '';
-$personaA = (string)($_POST['persona_a'] ?? (string)($company['ai_persona'] ?? ''));
-$personaB = (string)($_POST['persona_b'] ?? '');
+// Accept ?persona_a=… from the wizard's "A/B test this" link so the
+// operator can compare a freshly-generated persona against the current
+// live one in a single click. GET-side prefill only, POST wins.
+$personaA = (string)($_POST['persona_a'] ?? $_GET['persona_a'] ?? (string)($company['ai_persona'] ?? ''));
+$personaB = (string)($_POST['persona_b'] ?? $_GET['persona_b'] ?? '');
 $tierA    = (string)($_POST['tier_a']    ?? '');
 $tierB    = (string)($_POST['tier_b']    ?? '');
 $testMsg  = (string)($_POST['test_msg']  ?? '');

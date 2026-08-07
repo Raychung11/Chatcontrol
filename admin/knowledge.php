@@ -291,6 +291,7 @@ layout_start($current_user, 'AI Knowledge base', 'knowledge');
               style="width:100%; padding:8px 10px; border:1px solid #d0d7de; border-radius:6px; font-size:13px;"><?= e($curPersona) ?></textarea>
     <div style="margin-top: 8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
       <button class="btn btn-primary btn-sm" type="submit">Save persona</button>
+      <a class="btn btn-primary btn-sm" href="/admin/ai_persona_wizard.php" style="background:#a855f7; border-color:#a855f7;">🪄 Build with wizard</a>
       <a class="btn btn-sm" href="/admin/ai_persona_ab.php">🧪 A/B test two personas →</a>
       <span class="muted small"><?= mb_strlen($curPersona) ?> / 1000 chars</span>
     </div>

@@ -1932,3 +1932,103 @@ function ai_translate_message(array $company, string $text, string $targetLang =
         'usage' => $data['usage'] ?? null,
     ];
 }
+
+/**
+ * Generate a persona from a 5-question wizard's answers. Powers the
+ * client-facing persona builder at /admin/ai_persona_wizard.php.
+ *
+ * @param array $answers Keys:
+ *                       - business_type      (string)
+ *                       - tone               (string)
+ *                       - language           (string)
+ *                       - signature_thing    (string, optional)
+ *                       - avoid              (string, optional)
+ * @return array{ok:bool, persona?:string, error?:string, model?:string, usage?:array}
+ */
+function ai_generate_persona(array $company, array $answers): array
+{
+    if (!ai_is_configured($company)) {
+        return ['ok' => false, 'error' => 'AI is not enabled for this workspace.'];
+    }
+    $apiKey = ai_api_key($company);
+    if ($apiKey === '') {
+        return ['ok' => false, 'error' => 'No Anthropic API key configured.'];
+    }
+    $brand = trim((string)($company['name'] ?? 'this business'));
+    $businessType    = trim((string)($answers['business_type']   ?? ''));
+    $tone            = trim((string)($answers['tone']            ?? ''));
+    $language        = trim((string)($answers['language']        ?? ''));
+    $signatureThing  = trim((string)($answers['signature_thing'] ?? ''));
+    $avoid           = trim((string)($answers['avoid']           ?? ''));
+
+    if ($businessType === '' || $tone === '' || $language === '') {
+        return ['ok' => false, 'error' => 'Business type, tone, and language are required.'];
+    }
+
+    // Use the workspace's chosen model for persona generation, but let
+    // it fall back to a mid-tier default so a Haiku default doesn't
+    // produce a thin persona. We pass the workspace default though so
+    // the operator still controls cost when they've picked Opus.
+    $model = ai_model_for_feature($company, 'persona_wizard');
+
+    $systemPrompt =
+        "You write persona descriptions for AI WhatsApp customer-service bots. "
+      . "Given a short brief from the business owner, produce ONE persona description that:\n"
+      . "- Is 3-6 sentences long, 200-600 characters total.\n"
+      . "- Reads as a direct instruction to the AI (\"You are…\", \"You speak…\", \"Recommend…\").\n"
+      . "- Captures voice, tone, and language usage vividly — a reader should picture a specific type of person.\n"
+      . "- Includes any signature phrase / house special / thing to mention if the owner mentioned one.\n"
+      . "- Includes any explicit 'never do X' rules from the owner.\n"
+      . "- Never uses corporate filler ('leverage', 'engage', 'delight'). Never mentions AI, chatbot, model, or Claude.\n\n"
+      . "Return ONLY the persona text. No markdown, no preamble, no quotes.";
+
+    $userPrompt =
+        "Business name: {$brand}\n"
+      . "Business type: {$businessType}\n"
+      . "Desired tone: {$tone}\n"
+      . "Language usage: {$language}\n"
+      . ($signatureThing !== '' ? "Signature thing to always mention when relevant: {$signatureThing}\n" : '')
+      . ($avoid          !== '' ? "Must NEVER do / say: {$avoid}\n" : '')
+      . "\nWrite the persona now.";
+
+    $payload = [
+        'model'      => $model,
+        'max_tokens' => 600,
+        'system'     => [['type' => 'text', 'text' => $systemPrompt, 'cache_control' => ['type' => 'ephemeral']]],
+        'messages'   => [['role' => 'user', 'content' => $userPrompt]],
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_HTTPHEADER => [
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: ' . AI_API_VERSION,
+            'Content-Type: application/json',
+        ],
+        CURLOPT_POSTFIELDS => json_encode($payload),
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+    if ($resp === false) return ['ok' => false, 'error' => 'Network error: ' . $err];
+
+    $data = json_decode($resp, true);
+    if (!is_array($data) || empty($data['content'][0]['text'])) {
+        return ['ok' => false, 'error' => 'AI returned an unexpected shape (HTTP ' . $code . ')'];
+    }
+    $persona = trim((string)$data['content'][0]['text']);
+    if ($persona === '') return ['ok' => false, 'error' => 'Model returned an empty persona.'];
+    // Trim to the DB column size so it saves cleanly.
+    if (mb_strlen($persona) > 1000) $persona = mb_substr($persona, 0, 1000);
+
+    return [
+        'ok'      => true,
+        'persona' => $persona,
+        'model'   => $model,
+        'usage'   => $data['usage'] ?? null,
+    ];
+}

@@ -171,8 +171,21 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
               if (($m['sender_type'] ?? '') === 'ai') { $aiHasReplied = true; break; }
           }
       }
+
+      // Impersonating platform admins aren't a real user in this
+      // workspace — the assign endpoint would reject their id with
+      // "Target user invalid". Verify the current user actually exists
+      // in this workspace's users table before offering "Take over"; if
+      // not, show a "Pause AI" variant that just unassigns / prompts to
+      // assign a real agent from the sidebar dropdown.
+      $currentUserInWorkspace = false;
+      if ($aiActive && $aiHasReplied) {
+          $chk = $db->prepare('SELECT 1 FROM users WHERE id = ? AND company_id = ? AND status = "active" LIMIT 1');
+          $chk->execute([(int)$current_user['id'], (int)$conv['company_id']]);
+          $currentUserInWorkspace = (bool)$chk->fetchColumn();
+      }
     ?>
-    <?php if ($aiActive && $aiHasReplied): ?>
+    <?php if ($aiActive && $aiHasReplied && $currentUserInWorkspace): ?>
       <div class="ai-takeover-banner" id="ai-takeover-banner">
         <div class="ai-takeover-icon">🤖</div>
         <div class="ai-takeover-text">
@@ -188,6 +201,16 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
           <input type="hidden" name="assigned_user_id" value="<?= (int)$current_user['id'] ?>">
           <button class="btn btn-primary btn-sm" type="submit">✋ Take over</button>
         </form>
+      </div>
+    <?php elseif ($aiActive && $aiHasReplied): ?>
+      <div class="ai-takeover-banner" id="ai-takeover-banner">
+        <div class="ai-takeover-icon">🤖</div>
+        <div class="ai-takeover-text">
+          <strong>AI is handling this conversation.</strong>
+          <span class="muted small">
+            You're viewing as platform admin — use the <em>Assigned</em> dropdown in the sidebar to hand this off to a workspace agent.
+          </span>
+        </div>
       </div>
     <?php endif; ?>
 

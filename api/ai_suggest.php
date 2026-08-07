@@ -65,6 +65,11 @@ if (!$result['ok']) {
     json_response($result, 502);
 }
 
+// Billing: log this agent-composer draft against the workspace.
+require_once __DIR__ . '/../inc/ai_billing.php';
+ai_log_usage((int)$user['company_id'], $conversationId, 'suggest_reply',
+    $result['usage'] ?? null, $result['model'] ?? null);
+
 log_activity((int)$user['company_id'], (int)$user['id'], 'ai_suggest',
     'conversation', $conversationId,
     'model=' . ($result['model'] ?? '?') . ' tokens=' . json_encode($result['usage'] ?? []));

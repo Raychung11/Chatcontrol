@@ -14,6 +14,7 @@
 
 require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/knowledge_base.php';
+require_once __DIR__ . '/ai_billing.php';
 
 const AI_DEFAULT_MODEL  = 'claude-haiku-4-5';
 const AI_API_VERSION    = '2023-06-01';
@@ -797,6 +798,15 @@ function ai_first_touch_handle(array $company, int $conversationId): void
         $customerMessage = (string)($stmt->fetchColumn() ?: '');
         if ($customerMessage === '') return;
 
+        // Billing quota gate — 'paid' tier workspaces that hit the
+        // monthly cap don't get a first-touch reply. 'payg' and 'none'
+        // pass unconditionally.
+        if (!ai_can_spend((int)$company['id'])) {
+            log_activity((int)$company['id'], null, 'ai_first_touch_skipped',
+                'conversation', $conversationId, 'reason=quota_cap_hit');
+            return;
+        }
+
         $decision = ai_first_touch_decide($company, $conv, $customerMessage);
         if (!$decision['ok']) {
             log_activity((int)$company['id'], null, 'ai_first_touch_skipped',
@@ -843,6 +853,10 @@ function ai_first_touch_handle(array $company, int $conversationId): void
         )->execute([mb_substr($reply, 0, 500), $conversationId]);
 
         ai_first_touch_tag_conversation((int)$company['id'], $conversationId);
+
+        // Billing: capture tokens so this client is charged for the call.
+        ai_log_usage((int)$company['id'], $conversationId, 'first_touch',
+            $decision['usage'] ?? null, $decision['model'] ?? null);
 
         log_activity((int)$company['id'], null, 'ai_first_touch_sent',
             'conversation', $conversationId,
@@ -1089,6 +1103,13 @@ function ai_always_on_handle(array $company, int $conversationId): void
             }
         }
 
+        // Monthly billing cap (paid tier). 'payg' + 'none' pass through.
+        if (!ai_can_spend((int)$company['id'])) {
+            log_activity((int)$company['id'], null, 'ai_always_on_skipped',
+                'conversation', $conversationId, 'reason=quota_cap_hit');
+            return;
+        }
+
         // Call Claude with the full conversation history (so it has context).
         $r = ai_suggest_reply($company, $conv, $history);
         if (!$r['ok']) {
@@ -1129,6 +1150,9 @@ function ai_always_on_handle(array $company, int $conversationId): void
         )->execute([mb_substr($reply, 0, 500), $conversationId]);
 
         ai_first_touch_tag_conversation((int)$company['id'], $conversationId);
+
+        ai_log_usage((int)$company['id'], $conversationId, 'always_on',
+            $r['usage'] ?? null, $r['model'] ?? null);
 
         log_activity((int)$company['id'], null, 'ai_always_on_sent',
             'conversation', $conversationId,

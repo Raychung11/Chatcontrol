@@ -14,6 +14,7 @@
  * archive, sign in as super admin) is preserved — just presented tighter.
  */
 require_once __DIR__ . '/../inc/layout.php';
+require_once __DIR__ . '/../inc/ai_billing.php';
 
 $current_user = require_login();
 if (!is_platform_admin()) {
@@ -56,7 +57,8 @@ if ($fFnb === 'on') {
 }
 
 $sql = 'SELECT c.id, c.name, c.slug, c.plan, c.broadcast_plan, c.broadcast_billing_cycle,
-               c.fnb_plan, c.created_at,
+               c.fnb_plan, c.ai_chatbot_plan, c.ai_chatbot_multiplier,
+               c.created_at,
                (SELECT provider FROM channels
                  WHERE company_id = c.id AND is_default = 1 LIMIT 1) AS provider,
                (SELECT COUNT(*) FROM users WHERE company_id = c.id AND status = "active") AS active_users,
@@ -93,6 +95,30 @@ try {
     }
 } catch (Throwable $e) { /* fnb_orders may not exist yet */ }
 
+// Fetch this month's AI raw USD per workspace in ONE query. We compute
+// billed MYR per-row below (needs each workspace's multiplier).
+$aiRawUsd = [];
+try {
+    $g = $db->query(
+        "SELECT company_id,
+                SUM(raw_cost_usd) AS raw_usd,
+                SUM(prompt_tokens + completion_tokens) AS tokens,
+                COUNT(*)          AS calls
+         FROM ai_usage_events
+         WHERE created_at >= DATE_FORMAT(NOW(), '%Y-%m-01')
+         GROUP BY company_id"
+    );
+    foreach ($g->fetchAll() as $row) {
+        $aiRawUsd[(int)$row['company_id']] = [
+            'raw_usd' => (float)$row['raw_usd'],
+            'tokens'  => (int)$row['tokens'],
+            'calls'   => (int)$row['calls'],
+        ];
+    }
+} catch (Throwable $e) { /* ai_usage_events may not exist pre-phase37 */ }
+$aiFx = ai_usd_to_myr();
+$aiDefaultMx = (float)platform_setting('ai_default_multiplier', '5.00');
+
 $enriched = [];
 foreach ($rows as $r) {
     $lastMs = $r['last_message_at'] ? strtotime((string)$r['last_message_at']) : 0;
@@ -117,6 +143,12 @@ foreach ($rows as $r) {
     };
     $fnbRow = $fnbGmv[(int)$r['id']] ?? ['gmv' => 0.0, 'orders' => 0];
 
+    // AI chatbot billing — MTD raw × per-workspace multiplier × FX.
+    $aiRow = $aiRawUsd[(int)$r['id']] ?? ['raw_usd' => 0.0, 'tokens' => 0, 'calls' => 0];
+    $aiMx  = (float)($r['ai_chatbot_multiplier'] ?? 0);
+    if ($aiMx <= 0) $aiMx = $aiDefaultMx;
+    $aiChargeMyr = round($aiRow['raw_usd'] * $aiMx * $aiFx, 2);
+
     $enriched[] = [
         'r'             => $r,
         'health'        => $health,
@@ -128,7 +160,12 @@ foreach ($rows as $r) {
         'bcast_plan'    => (string)$bq['plan'],
         'bcast_cycle'   => (string)$bq['billing_cycle'],
         'bcast'         => $bq,
-        'mrr'           => $planPrice + $bcastMonthly,
+        'ai_charge_myr' => $aiChargeMyr,
+        'ai_tokens'     => (int)$aiRow['tokens'],
+        'ai_calls'      => (int)$aiRow['calls'],
+        'ai_plan'       => (string)($r['ai_chatbot_plan'] ?? 'none'),
+        // MRR now includes AI chatbot billed revenue.
+        'mrr'           => $planPrice + $bcastMonthly + $aiChargeMyr,
         'fnb_gmv'       => (float)$fnbRow['gmv'],
         'fnb_orders'    => (int)$fnbRow['orders'],
     ];
@@ -478,6 +515,12 @@ layout_start($current_user, 'Workspaces', 'workspaces');
                 <td><?= number_format((int)$r['conversations']) ?></td>
                 <td class="ws-mrr">
                     <?= e($currency) ?> <?= number_format($x['mrr'], 0) ?>
+                    <?php if ($x['ai_charge_myr'] > 0): ?>
+                        <div class="muted small" style="font-weight:normal;" title="AI chatbot MTD billed to workspace">
+                            🤖 <?= e($currency) ?> <?= number_format($x['ai_charge_myr'], 0) ?>
+                            · <?= number_format($x['ai_tokens']) ?> tok
+                        </div>
+                    <?php endif; ?>
                     <?php if ($x['fnb_gmv'] > 0): ?>
                         <div class="muted small" style="font-weight:normal;" title="F&amp;B GMV this month (not billed to workspace)">
                             🍜 <?= e($currency) ?> <?= number_format($x['fnb_gmv'], 0) ?>

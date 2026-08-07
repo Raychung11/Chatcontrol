@@ -289,6 +289,15 @@ function fnb_parse_order_ai(array $company, string $customerMessage, array $menu
     if (!is_array($data) || empty($data['content'][0]['text'])) {
         return array_merge($empty, ['error' => 'AI returned an unexpected shape (HTTP ' . $code . ')']);
     }
+
+    // Billing: log the F&B cart-parse call against this workspace so
+    // AI chatbot metering catches it. Best-effort, silent on failure.
+    if (!empty($company['id']) && !empty($data['usage'])) {
+        require_once __DIR__ . '/ai_billing.php';
+        ai_log_usage((int)$company['id'], null, 'fnb_cart_parse',
+            $data['usage'] ?? null, (string)($data['model'] ?? $model));
+    }
+
     $raw = trim((string)$data['content'][0]['text']);
     if (str_starts_with($raw, '```')) {
         $raw = preg_replace('/^```(?:json)?\s*|\s*```$/', '', $raw);

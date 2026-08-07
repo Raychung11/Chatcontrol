@@ -157,6 +157,44 @@ if ($action === 'change_broadcast_plan') {
     ));
 }
 
+if ($action === 'change_ai_chatbot') {
+    // Update companies.ai_chatbot_plan / ai_chatbot_multiplier /
+    // ai_chatbot_monthly_cap via a single field-specific handler so
+    // /admin/ai_billing.php can inline-edit each column without three
+    // separate endpoints.
+    $field  = (string)($_POST['field'] ?? '');
+    $value  = trim((string)($_POST['value'] ?? ''));
+    $back   = '/admin/ai_billing.php';
+
+    if ($field === 'plan') {
+        if (!in_array($value, ['none', 'payg', 'paid'], true)) {
+            http_response_code(400); exit('Invalid plan.');
+        }
+        $db->prepare('UPDATE companies SET ai_chatbot_plan = ? WHERE id = ?')
+           ->execute([$value, $companyId]);
+    } elseif ($field === 'multiplier') {
+        $m = (float)$value;
+        if ($m < 1 || $m > 20) {
+            http_response_code(400); exit('Multiplier must be between 1 and 20.');
+        }
+        $db->prepare('UPDATE companies SET ai_chatbot_multiplier = ? WHERE id = ?')
+           ->execute([$m, $companyId]);
+    } elseif ($field === 'cap') {
+        $c = $value === '' ? null : (float)$value;
+        if ($c !== null && $c < 0) {
+            http_response_code(400); exit('Cap must be positive.');
+        }
+        $db->prepare('UPDATE companies SET ai_chatbot_monthly_cap = ? WHERE id = ?')
+           ->execute([$c, $companyId]);
+    } else {
+        http_response_code(400); exit('Invalid field.');
+    }
+
+    log_activity($companyId, (int)$user['id'], 'ai_chatbot_' . $field . '_change',
+        'company', $companyId, $value);
+    redirect($back);
+}
+
 if ($action === 'archive') {
     $stmt = $db->prepare(
         'SELECT id, name, status FROM companies WHERE id = ? LIMIT 1'

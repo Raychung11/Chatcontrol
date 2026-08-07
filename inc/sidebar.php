@@ -95,6 +95,7 @@ if ($sb_companyId > 0) {
       <a href="/admin/webchat.php"  class="<?= $active === 'webchat'  ? 'active' : '' ?>">💬 Web chat widget</a>
       <a href="/admin/settings.php" class="<?= $active === 'settings' ? 'active' : '' ?>">Settings</a>
       <a href="/admin/ai_settings.php" class="<?= $active === 'ai_settings' ? 'active' : '' ?>">AI Settings</a>
+      <a href="/admin/ai_usage.php"    class="<?= $active === 'ai_usage'    ? 'active' : '' ?>">💰 AI usage</a>
       <?php if (fnb_module_active((int)($current_user['company_id'] ?? 0))): ?>
         <div class="sidebar-section" style="margin-top: 12px;">F&amp;B module</div>
         <a href="/admin/fnb_orders.php"    class="<?= $active === 'fnb_orders'    ? 'active' : '' ?>">📋 Orders</a>
@@ -110,6 +111,7 @@ if ($sb_companyId > 0) {
     <?php if (is_platform_admin() && !is_impersonating()): ?>
       <div class="sidebar-section">Platform</div>
       <a href="/admin/workspaces.php" class="<?= $active === 'workspaces' ? 'active' : '' ?>">Workspaces</a>
+      <a href="/admin/ai_billing.php" class="<?= $active === 'ai_billing' ? 'active' : '' ?>">💰 AI billing</a>
       <a href="/admin/pricing.php" class="<?= $active === 'pricing' ? 'active' : '' ?>">Pricing</a>
       <a href="/admin/legal.php" class="<?= $active === 'legal' ? 'active' : '' ?>">Legal &amp; operator</a>
       <a href="/admin/branding.php" class="<?= $active === 'branding' ? 'active' : '' ?>">Branding &amp; icon</a>

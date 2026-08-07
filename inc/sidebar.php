@@ -111,6 +111,7 @@ if ($sb_companyId > 0) {
     <?php if (is_platform_admin() && !is_impersonating()): ?>
       <div class="sidebar-section">Platform</div>
       <a href="/admin/workspaces.php" class="<?= $active === 'workspaces' ? 'active' : '' ?>">Workspaces</a>
+      <a href="/admin/channels_debug.php" class="<?= $active === 'channels_debug' ? 'active' : '' ?>">🩺 Channels health</a>
       <a href="/admin/ai_billing.php" class="<?= $active === 'ai_billing' ? 'active' : '' ?>">💰 AI billing</a>
       <a href="/admin/pricing.php" class="<?= $active === 'pricing' ? 'active' : '' ?>">Pricing</a>
       <a href="/admin/legal.php" class="<?= $active === 'legal' ? 'active' : '' ?>">Legal &amp; operator</a>

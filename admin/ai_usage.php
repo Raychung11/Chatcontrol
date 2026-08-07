@@ -15,9 +15,19 @@ $current_user = require_role(['super_admin', 'manager']);
 $companyId    = (int)$current_user['company_id'];
 $db           = aiserve_db();
 
-$company = load_company_settings($companyId);
-$plan    = (string)($company['ai_chatbot_plan'] ?? 'none');
-$cap     = (float)($company['ai_chatbot_monthly_cap'] ?? 0);
+// Fetch just what the page needs — chatbot plan + cap. try/catch so a
+// pre-migration DB (no ai_chatbot_* columns yet) still renders zero
+// values instead of 500ing.
+$plan = 'none';
+$cap  = 0.0;
+try {
+    $s = $db->prepare('SELECT ai_chatbot_plan, ai_chatbot_monthly_cap FROM companies WHERE id = ? LIMIT 1');
+    $s->execute([$companyId]);
+    if ($row = $s->fetch()) {
+        $plan = (string)($row['ai_chatbot_plan']         ?? 'none');
+        $cap  = (float)($row['ai_chatbot_monthly_cap']   ?? 0);
+    }
+} catch (Throwable $e) { /* column missing → keep defaults */ }
 
 $mtd      = ai_usage_mtd($companyId);
 $byFeat   = ai_usage_mtd_by_feature($companyId);

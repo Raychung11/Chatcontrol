@@ -92,13 +92,51 @@ if (is_post()) {
         $msg = $on
             ? 'Learn from history enabled. First distillation runs in the next weekly cron.'
             : 'Learn from history disabled. The auto-generated article stays but is no longer refreshed.';
+    } elseif ($action === 'save_persona' && user_can_edit_settings($current_user)) {
+        // Short persona / voice — up to 1000 chars. Injected into every
+        // AI system prompt (first-touch, always-on, suggest, F&B parse).
+        $persona = mb_substr(trim((string)($_POST['ai_persona'] ?? '')), 0, 1000);
+        $db->prepare('UPDATE companies SET ai_persona = ? WHERE id = ?')
+           ->execute([$persona ?: null, $companyId]);
+        log_activity($companyId, (int)$current_user['id'], 'ai_persona_updated', 'company', $companyId);
+        $msg = 'AI persona saved. It takes effect on the next AI reply.';
+    } elseif ($action === 'save_model' && user_can_edit_settings($current_user)) {
+        // Model tier picker. Anthropic's family + specific model IDs
+        // change over time — validate against the tier keys and map
+        // to canonical ids so operators pick "quality" not "SKU".
+        $tier = (string)($_POST['model_tier'] ?? '');
+        $map = [
+            'haiku'  => 'claude-haiku-4-5',    // fastest + cheapest
+            'sonnet' => 'claude-sonnet-5',     // balanced default
+            'opus'   => 'claude-opus-5',       // highest quality
+        ];
+        if (!isset($map[$tier])) {
+            $err = 'Pick Haiku / Sonnet / Opus.';
+        } else {
+            $db->prepare('UPDATE companies SET ai_model = ? WHERE id = ?')
+               ->execute([$map[$tier], $companyId]);
+            log_activity($companyId, (int)$current_user['id'], 'ai_model_updated', 'company', $companyId, $tier);
+            $msg = 'AI model set to ' . ucfirst($tier) . '. It takes effect on the next AI reply.';
+        }
     }
 }
 
-// Company state for the toggle panel.
-$compStmt = $db->prepare('SELECT learn_from_history_enabled FROM companies WHERE id = ?');
+// Company state for the toggle panel + AI persona + model tier.
+$compStmt = $db->prepare(
+    'SELECT learn_from_history_enabled, ai_persona, ai_model
+     FROM companies WHERE id = ? LIMIT 1'
+);
 $compStmt->execute([$companyId]);
-$learnOn = (int)($compStmt->fetchColumn() ?: 0) === 1;
+$compRow  = $compStmt->fetch() ?: [];
+$learnOn  = (int)($compRow['learn_from_history_enabled'] ?? 0) === 1;
+$curPersona = (string)($compRow['ai_persona'] ?? '');
+$curModel   = (string)($compRow['ai_model']   ?? 'claude-haiku-4-5');
+// Reverse-map current model id → tier for the radio group.
+$curTier = match (true) {
+    str_contains($curModel, 'opus')                        => 'opus',
+    str_contains($curModel, 'sonnet') || str_contains($curModel, 'fable') => 'sonnet',
+    default                                                 => 'haiku',
+};
 
 $stmt = $db->prepare(
     'SELECT k.*, u.name AS author_name
@@ -176,6 +214,100 @@ layout_start($current_user, 'AI Knowledge base', 'knowledge');
 <?php endif; ?>
 
 <?php if (user_can_edit_settings($current_user)): ?>
+<!-- =====================================================
+     AI PERSONALITY - short voice / character description
+     ===================================================== -->
+<style>
+.ai-tier-row { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); margin-top: 6px; }
+@media (max-width: 700px) { .ai-tier-row { grid-template-columns: 1fr; } }
+.ai-tier-pill {
+  border: 1px solid #e3e8ee; border-radius: 10px; padding: 12px 14px;
+  cursor: pointer; background: #fff; display: block;
+  transition: all 0.15s ease;
+}
+.ai-tier-pill:hover { border-color: #0072B2; }
+.ai-tier-pill input[type=radio] { position: absolute; opacity: 0; }
+.ai-tier-pill.selected { border-color: #0072B2; background: #eff6ff; box-shadow: 0 0 0 2px #dbeafe; }
+.ai-tier-pill .n     { font-weight: 700; color: #0f172a; }
+.ai-tier-pill .price { font-size: 12px; color: #64748b; margin-top: 4px; }
+.ai-tier-pill .use   { font-size: 12px; color: #475569; margin-top: 6px; }
+.ai-tier-pill .tag {
+  display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 10px;
+  font-weight: 600; margin-left: 6px;
+}
+.ai-tier-pill .tag-cheap { background: #dcfce7; color: #14532d; }
+.ai-tier-pill .tag-best  { background: #fef3c7; color: #78350f; }
+.ai-tier-pill .tag-fast  { background: #dbeafe; color: #1e3a8a; }
+</style>
+
+<div class="card" style="border-left:3px solid #a855f7;">
+  <h3>🎭 AI personality</h3>
+  <p class="muted small">
+    A short description of the voice, tone, and character the AI should adopt in every reply.
+    Kept separate from the (advanced) full system prompt override in AI Settings — most
+    workspaces only need this. It flavours <strong>every</strong> AI call —
+    first-touch replies, always-on chat, agent-composer drafts, and F&amp;B cart parsing.
+  </p>
+  <form method="post" style="margin-top:10px;">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="save_persona">
+    <label class="muted small">Persona (max 1000 characters)</label>
+    <textarea name="ai_persona" rows="4" maxlength="1000"
+              placeholder="e.g. You are Ali, the friendly server at Vicky's Nasi Lemak. Speak casual Malaysian English with the occasional Bahasa Melayu word (lah, boleh, jom). Warm, helpful, never pushy. Remember our house special is nasi lemak ayam berempah — mention it if the customer asks for recommendations."
+              style="width:100%; padding:8px 10px; border:1px solid #d0d7de; border-radius:6px; font-size:13px;"><?= e($curPersona) ?></textarea>
+    <div style="margin-top: 8px; display:flex; gap:8px; align-items:center;">
+      <button class="btn btn-primary btn-sm" type="submit">Save persona</button>
+      <span class="muted small"><?= mb_strlen($curPersona) ?> / 1000 chars</span>
+    </div>
+  </form>
+</div>
+
+<!-- =====================================================
+     AI MODEL TIER - speed vs quality vs cost
+     ===================================================== -->
+<div class="card" style="border-left:3px solid #0072B2;">
+  <h3>⚡ AI model tier</h3>
+  <p class="muted small">
+    Pick which Claude model handles every AI reply. Cheaper models are faster and
+    sharper for simple FAQ replies; the top tier is worth it if answers need real
+    reasoning (multi-step questions, structured extraction, sensitive replies).
+    Billing scales with model — check
+    <a href="/admin/ai_usage.php">AI usage</a> for current spend.
+  </p>
+  <form method="post" style="margin-top:10px;">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="save_model">
+    <div class="ai-tier-row">
+      <?php
+        $tiers = [
+          'haiku'  => ['name' => 'Haiku 4.5',  'price' => '$1 / $5 per 1M tok',   'use' => 'Simple FAQs, greetings, cart parse', 'tag' => 'cheap', 'tagLabel' => 'CHEAPEST'],
+          'sonnet' => ['name' => 'Sonnet 5',   'price' => '$3 / $15 per 1M tok',  'use' => 'Most conversations · recommended',   'tag' => 'best', 'tagLabel' => 'BALANCED'],
+          'opus'   => ['name' => 'Opus 5',     'price' => '$15 / $75 per 1M tok', 'use' => 'Complex reasoning, high-stakes replies', 'tag' => 'fast', 'tagLabel' => 'BEST QUALITY'],
+        ];
+      ?>
+      <?php foreach ($tiers as $key => $t):
+        $selected = $curTier === $key;
+      ?>
+        <label class="ai-tier-pill <?= $selected ? 'selected' : '' ?>">
+          <input type="radio" name="model_tier" value="<?= $key ?>" <?= $selected ? 'checked' : '' ?>
+                 onchange="this.form.submit()">
+          <div class="n">
+            <?= e($t['name']) ?>
+            <span class="tag tag-<?= $t['tag'] ?>"><?= e($t['tagLabel']) ?></span>
+          </div>
+          <div class="price">💰 <?= e($t['price']) ?> input / output</div>
+          <div class="use"><?= e($t['use']) ?></div>
+        </label>
+      <?php endforeach; ?>
+    </div>
+    <div class="muted small" style="margin-top:8px;">
+      Currently selected: <strong><?= e(ucfirst($curTier)) ?></strong>
+      (<code><?= e($curModel) ?></code>).
+      Click any tier to switch — auto-saves.
+    </div>
+  </form>
+</div>
+
 <div class="card">
   <h3>Add an article</h3>
   <form method="post" enctype="multipart/form-data" class="form-grid">

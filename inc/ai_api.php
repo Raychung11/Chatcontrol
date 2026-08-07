@@ -36,7 +36,17 @@ function ai_api_key(array $company): string
 function ai_default_system_prompt(array $company): string
 {
     $brand = $company['name'] ?? 'this business';
-    return "You are a WhatsApp customer service agent for {$brand}. "
+    $prompt = "You are a WhatsApp customer service agent for {$brand}. ";
+
+    // Persona injection — the short "voice / personality" field the
+    // operator sets on /admin/knowledge.php. Adds character to EVERY
+    // reply without them having to author a full system prompt.
+    $persona = trim((string)($company['ai_persona'] ?? ''));
+    if ($persona !== '') {
+        $prompt .= "Your persona: " . $persona . " ";
+    }
+
+    return $prompt
          . "Write a single, concise, friendly reply to the customer's last message. "
          . "Match the customer's language. Keep it under 3 short sentences. "
          . "If the customer asks something you cannot answer with the information given, "

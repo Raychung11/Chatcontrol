@@ -15,6 +15,7 @@
  */
 
 require_once __DIR__ . '/../inc/layout.php';
+require_once __DIR__ . '/../inc/flow_visual.php';
 
 $current_user = require_role(['super_admin', 'manager']);
 $companyId    = (int)$current_user['company_id'];
@@ -183,6 +184,25 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
   </form>
 </div>
 
+<!-- =====================================================
+     VISUAL OVERVIEW - top-down SVG flowchart, click to jump
+     ===================================================== -->
+<div class="card">
+  <div class="card-head">
+    <h2>🗺 Visual overview</h2>
+    <span class="muted small">Click any node to jump to its edit row below. Entry node is marked ★.</span>
+  </div>
+  <?= flow_visual_render($nodes, $edgesByNode, (int)($flow['entry_node_id'] ?? 0)) ?>
+  <div class="muted small" style="margin-top:10px; display:flex; gap:14px; flex-wrap:wrap;">
+    <span><span style="display:inline-block;width:10px;height:10px;background:#dbeafe;border:1.5px solid #3b82f6;border-radius:2px;vertical-align:middle;"></span> send msg</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#fef3c7;border:1.5px solid #f59e0b;border-radius:2px;vertical-align:middle;"></span> wait reply</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#f3e8ff;border:1.5px solid #a855f7;border-radius:2px;vertical-align:middle;"></span> branch</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#d1fae5;border:1.5px solid #10b981;border-radius:2px;vertical-align:middle;"></span> F&amp;B</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#fee2e2;border:1.5px solid #ef4444;border-radius:2px;vertical-align:middle;"></span> end</span>
+    <span style="margin-left:auto;">Dashed edge = default / else branch</span>
+  </div>
+</div>
+
 <div class="card">
   <div class="card-head">
     <h2>Nodes</h2>
@@ -204,7 +224,8 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
 
   <?php foreach ($nodes as $n): ?>
     <?php $cfg = json_decode((string)($n['config'] ?? ''), true) ?: []; ?>
-    <div style="border:1px solid var(--c-border); border-radius:8px; padding:14px; margin: 10px 0;">
+    <div id="node-<?= (int)$n['id'] ?>"
+         style="border:1px solid var(--c-border); border-radius:8px; padding:14px; margin: 10px 0; scroll-margin-top: 20px;">
       <form method="post" class="form-grid">
         <?= csrf_field() ?>
         <input type="hidden" name="action" value="save_node">

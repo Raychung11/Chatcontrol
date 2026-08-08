@@ -298,6 +298,25 @@ body.impersonating .app-shell { border-top: 0; }
 }
 .pin-link:hover { background: #2c3744; color: #fff; text-decoration: none; }
 
+/* Password show/hide toggle. The script wraps every input[type=password]
+   in a .pw-wrap so we can pin the eye button on the right edge without
+   changing the input's own width. Inherits the input's font size for
+   crisp emoji rendering. */
+.pw-wrap {
+  position: relative; display: block; width: 100%;
+}
+.pw-wrap > input {
+  width: 100%; padding-right: 40px !important;
+}
+.pw-toggle-btn {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: transparent; border: 0; padding: 4px 8px;
+  cursor: pointer; font-size: 16px; line-height: 1;
+  opacity: 0.55; border-radius: 4px;
+}
+.pw-toggle-btn:hover  { opacity: 1; background: rgba(15,23,42,0.06); }
+.pw-toggle-btn:active { transform: translateY(-50%) scale(0.94); }
+
 /* -------- Cards / forms -------- */
 .card {
   background: var(--c-card);

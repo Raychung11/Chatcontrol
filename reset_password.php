@@ -128,5 +128,6 @@ if ($user && is_post() && $tokenErr === '') {
         <a class="btn btn-primary btn-block" href="/forgot_password.php">Send reset link</a>
     <?php endif; ?>
 </div>
+<script src="<?= e(asset_url('/assets/js/password_toggle.js')) ?>" defer></script>
 </body>
 </html>

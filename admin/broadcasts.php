@@ -75,11 +75,15 @@ layout_start($current_user, 'Broadcasts', 'broadcasts');
       <?php endif; ?>
     </div>
     <?php if ($quota['plan'] === 'free'): ?>
-      <span class="muted small">
-        Upgrade: <strong><?= e($quota['currency']) ?> <?= rtrim(rtrim(number_format($quota['price'], 2), '0'), '.') ?>/mo</strong>
-      </span>
+      <a class="btn btn-primary btn-sm" href="/admin/plan.php"
+         title="Upgrade to Paid: <?= number_format($quota['paid_limit']) ?> recipients / month">
+        ✨ Upgrade — <?= e($quota['currency']) ?> <?= rtrim(rtrim(number_format($quota['price'], 2), '0'), '.') ?>/mo
+      </a>
     <?php elseif ($quota['plan'] === 'paid' && $quota['billing_cycle'] === 'yearly'): ?>
-      <span class="muted small">Yearly billing (<?= (int)$quota['yearly_discount'] ?>% off)</span>
+      <span class="muted small">Yearly billing (<?= (int)$quota['yearly_discount'] ?>% off)
+        · <a href="/admin/plan.php">manage</a></span>
+    <?php else: ?>
+      <a href="/admin/plan.php" class="muted small">Manage plan →</a>
     <?php endif; ?>
   </div>
   <?php if (!$quota['unlimited']): ?>

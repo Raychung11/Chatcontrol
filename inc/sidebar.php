@@ -80,7 +80,7 @@ $sb_groups = [
     'messaging' => ['templates', 'auto_replies', 'broadcasts', 'flows', 'knowledge', 'tags'],
     'reports'   => ['reports', 'topics', 'ai_usage'],
     'workspace' => ['channels', 'webchat', 'users', 'departments', 'branches', 'routing'],
-    'settings'  => ['settings', 'ai_settings'],
+    'settings'  => ['settings', 'ai_settings', 'plan'],
     'fnb'       => ['fnb_orders', 'fnb_menu', 'fnb_analytics'],
     'platform'  => ['workspaces', 'channels_debug', 'ai_billing', 'pricing', 'legal', 'branding',
                     'evolution_connect', 'webhook_log', 'connection_debug'],
@@ -175,6 +175,7 @@ $fnbActive = fnb_module_active((int)($current_user['company_id'] ?? 0));
         <summary>⚙️ Settings</summary>
         <a href="/admin/settings.php"    class="<?= $active === 'settings'    ? 'active' : '' ?>">Workspace settings</a>
         <a href="/admin/ai_settings.php" class="<?= $active === 'ai_settings' ? 'active' : '' ?>">AI settings</a>
+        <a href="/admin/plan.php"        class="<?= $active === 'plan'        ? 'active' : '' ?>">💳 Plan &amp; billing</a>
       </details>
 
       <?php if ($fnbActive): ?>

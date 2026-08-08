@@ -48,6 +48,14 @@ $logoUrl = !empty($company['logo'])
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title><?= e($title) ?></title>
+<!-- Per-channel PWA: install as this workspace's own app on the home screen. -->
+<link rel="manifest" href="/widget_manifest.php?c=<?= e($channelToken) ?>">
+<meta name="theme-color" content="<?= e($brand) ?>">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="<?= e($title) ?>">
+<link rel="apple-touch-icon" href="/assets/img/company_logo.php?company_id=<?= (int)$channel['company_id'] ?>&size=180">
+<link rel="icon" type="image/png" href="/assets/img/company_logo.php?company_id=<?= (int)$channel['company_id'] ?>&size=192">
 <style>
 * { box-sizing: border-box; }
 html, body { margin:0; padding:0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
@@ -407,6 +415,136 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
   });
 
   widgetStart();
+})();
+</script>
+
+<!-- ============ PWA install banner + service worker ============ -->
+<style>
+.wc-install-banner {
+    position: fixed; left: 12px; right: 12px; bottom: 12px;
+    max-width: 480px; margin: 0 auto;
+    background: #1a2431; color: #e2e8f0;
+    border-radius: 12px; padding: 12px 14px;
+    display: flex; align-items: center; gap: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.25); z-index: 9999;
+    font-size: 13px; line-height: 1.35;
+    animation: wc-install-slide 0.25s ease-out;
+}
+@keyframes wc-install-slide { from { transform: translateY(20px); opacity: 0; } to { transform: none; opacity: 1; } }
+.wc-install-banner .wc-install-icon { font-size: 26px; line-height: 1; }
+.wc-install-banner .wc-install-text { flex: 1; }
+.wc-install-banner .wc-install-text strong { color: #fff; }
+.wc-install-banner button {
+    border: 0; border-radius: 6px; cursor: pointer;
+    padding: 8px 12px; font-size: 12.5px; font-weight: 600;
+}
+.wc-install-banner .wc-install-primary { background: <?= e($brand) ?>; color: #fff; }
+.wc-install-banner .wc-install-close {
+    background: transparent; color: #94a3b8; padding: 4px 8px; font-size: 18px;
+}
+</style>
+<script>
+(function () {
+    'use strict';
+    const CHANNEL_KEY = <?= json_encode($channelToken) ?>;
+    const APP_TITLE   = <?= json_encode($title) ?>;
+    const DISMISS_KEY = 'wc_pwa_dismissed_' + CHANNEL_KEY;
+
+    // Register the widget-specific service worker with its own scope
+    // so it doesn't fight the operator app's SW.
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker
+                .register('/widget-sw.js', { scope: '/chat.php' })
+                .catch((e) => console.warn('Widget SW register failed:', e));
+        });
+    }
+
+    const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    const isStandalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+                     || window.navigator.standalone === true;
+
+    // Silence when already installed OR user previously dismissed on
+    // this widget (per-channel key so dismissing "Kopetro" doesn't
+    // silence the prompt for "Kedai Ali").
+    if (isStandalone) return;
+    try { if (localStorage.getItem(DISMISS_KEY) === '1') return; } catch (e) {}
+
+    let deferredPrompt = null;
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        // Wait 8 seconds so the customer sees the chat first before
+        // being asked to install — nothing kills a widget faster than
+        // an install prompt on page load.
+        setTimeout(() => showBanner(false), 8000);
+    });
+
+    // iOS Safari never fires beforeinstallprompt — surface a Share
+    // instruction instead. Same 8 s delay for the same reason.
+    if (isIos) setTimeout(() => showBanner(true), 8000);
+
+    window.addEventListener('appinstalled', () => {
+        const b = document.getElementById('wc-install-banner');
+        if (b) b.remove();
+        try { localStorage.setItem(DISMISS_KEY, '1'); } catch (e) {}
+    });
+
+    function showBanner(ios) {
+        if (document.getElementById('wc-install-banner')) return;
+
+        const bar = document.createElement('div');
+        bar.id = 'wc-install-banner';
+        bar.className = 'wc-install-banner';
+
+        const icon = document.createElement('div');
+        icon.className = 'wc-install-icon';
+        icon.textContent = '📱';
+        bar.appendChild(icon);
+
+        const txt = document.createElement('div');
+        txt.className = 'wc-install-text';
+        txt.innerHTML = ios
+            ? 'Add <strong>' + escapeHtml(APP_TITLE) + '</strong> to your home screen — tap ' +
+              '<strong>Share</strong> ⬆ → <strong>Add to Home Screen</strong>'
+            : 'Install <strong>' + escapeHtml(APP_TITLE) + '</strong> on your home screen for faster access';
+        bar.appendChild(txt);
+
+        if (!ios) {
+            const install = document.createElement('button');
+            install.type = 'button';
+            install.className = 'wc-install-primary';
+            install.textContent = 'Install';
+            install.addEventListener('click', async () => {
+                if (!deferredPrompt) return;
+                install.disabled = true;
+                deferredPrompt.prompt();
+                try { await deferredPrompt.userChoice; } catch (_) {}
+                deferredPrompt = null;
+                bar.remove();
+            });
+            bar.appendChild(install);
+        }
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'wc-install-close';
+        close.textContent = '×';
+        close.setAttribute('aria-label', 'Dismiss');
+        close.addEventListener('click', () => {
+            bar.remove();
+            try { localStorage.setItem(DISMISS_KEY, '1'); } catch (e) {}
+        });
+        bar.appendChild(close);
+
+        document.body.appendChild(bar);
+    }
+
+    function escapeHtml(s) {
+        return String(s || '').replace(/[&<>"']/g, (c) => ({
+            '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+        })[c]);
+    }
 })();
 </script>
 

@@ -82,7 +82,7 @@ $sb_groups = [
     'workspace' => ['channels', 'webchat', 'users', 'departments', 'branches', 'routing'],
     'settings'  => ['settings', 'ai_settings', 'plan', 'my_invoices'],
     'fnb'       => ['fnb_orders', 'fnb_menu', 'fnb_analytics'],
-    'platform'  => ['workspaces', 'channels_debug', 'ai_billing', 'invoices', 'mail_test', 'pricing', 'legal', 'branding',
+    'platform'  => ['workspaces', 'channels_debug', 'ai_billing', 'invoices', 'mail_settings', 'mail_test', 'pricing', 'legal', 'branding',
                     'evolution_connect', 'webhook_log', 'connection_debug'],
 ];
 $sb_openGroup = fn(string $g): string =>
@@ -198,7 +198,8 @@ $fnbActive = fnb_module_active((int)($current_user['company_id'] ?? 0));
         <a href="/admin/channels_debug.php"  class="<?= $active === 'channels_debug'  ? 'active' : '' ?>">🩺 Channels health</a>
         <a href="/admin/ai_billing.php"      class="<?= $active === 'ai_billing'      ? 'active' : '' ?>">💰 AI billing</a>
         <a href="/admin/invoices.php"        class="<?= $active === 'invoices'        ? 'active' : '' ?>">💳 Invoices</a>
-        <a href="/admin/mail_test.php"       class="<?= $active === 'mail_test'       ? 'active' : '' ?>">✉️ Mail test</a>
+        <a href="/admin/mail_settings.php"   class="<?= $active === 'mail_settings'   ? 'active' : '' ?>">✉️ Mail settings</a>
+        <a href="/admin/mail_test.php"       class="<?= $active === 'mail_test'       ? 'active' : '' ?>">🧪 Mail test</a>
         <a href="/admin/pricing.php"         class="<?= $active === 'pricing'         ? 'active' : '' ?>">Pricing</a>
         <a href="/admin/legal.php"           class="<?= $active === 'legal'           ? 'active' : '' ?>">Legal &amp; operator</a>
         <a href="/admin/branding.php"        class="<?= $active === 'branding'        ? 'active' : '' ?>">Branding &amp; icon</a>

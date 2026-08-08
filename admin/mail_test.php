@@ -88,7 +88,7 @@ layout_start($current_user, 'Mail test', 'mail_test');
         <?php endforeach; ?>
     </table>
     <p class="muted small" style="margin-top:12px;">
-        Edit any of these in Adminer → <code>platform_settings</code> table, or via SQL.
+        Edit these in <a href="/admin/mail_settings.php">✉️ Mail settings</a>.
     </p>
 </div>
 <?php layout_end(); ?>

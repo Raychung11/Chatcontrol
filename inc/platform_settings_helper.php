@@ -18,15 +18,21 @@ function platform_settings_save(PDO $db, array $fields, string $logAction, int $
 {
     $values = [];
     foreach ($fields as $key => $meta) {
-        $raw = trim((string)($_POST[$key] ?? ''));
-        if ($meta['type'] === 'number') {
+        $raw  = trim((string)($_POST[$key] ?? ''));
+        $type = (string)($meta['type'] ?? 'text');
+        // Password: blank input = keep the previously-stored value.
+        if ($type === 'password' && $raw === '') continue;
+        if ($type === 'number') {
             if ($raw === '' || !is_numeric($raw) || (float)$raw < 0) {
                 return ['msg' => '', 'err' => $meta['label'] . ' must be a non-negative number.'];
             }
             $f = (float)$raw;
             $raw = (abs($f - round($f)) < 0.005) ? (string)(int)round($f) : (string)$f;
         }
-        if ($raw === '' && in_array($meta['type'], ['text','number'], true) && empty($meta['optional'])) {
+        if ($type === 'email' && $raw !== '' && !filter_var($raw, FILTER_VALIDATE_EMAIL)) {
+            return ['msg' => '', 'err' => $meta['label'] . ' must be a valid email address.'];
+        }
+        if ($raw === '' && in_array($type, ['text', 'number', 'email'], true) && empty($meta['optional'])) {
             return ['msg' => '', 'err' => $meta['label'] . ' is required.'];
         }
         $values[$key] = $raw;
@@ -72,16 +78,33 @@ function platform_settings_load(PDO $db): array
  */
 function render_platform_setting_field(string $key, array $meta, string $val): void
 {
-    $req = empty($meta['optional']) ? 'required' : '';
+    $req  = empty($meta['optional']) ? 'required' : '';
+    $type = (string)($meta['type'] ?? 'text');
     ?>
     <label>
       <?= e($meta['label']) ?>
       <?php if (!empty($meta['optional'])): ?><small class="muted">(optional)</small><?php endif; ?>
-      <?php if ($meta['type'] === 'textarea'): ?>
-        <textarea name="<?= e($key) ?>" rows="3"><?= e($val) ?></textarea>
-      <?php elseif ($meta['type'] === 'number'): ?>
+      <?php if ($type === 'textarea'): ?>
+        <textarea name="<?= e($key) ?>" rows="<?= (int)($meta['rows'] ?? 3) ?>"><?= e($val) ?></textarea>
+      <?php elseif ($type === 'number'): ?>
         <input type="number" name="<?= e($key) ?>" value="<?= e($val) ?>"
                step="<?= e($meta['step'] ?? '1') ?>" min="0" <?= $req ?>>
+      <?php elseif ($type === 'password'): ?>
+        <input type="password" name="<?= e($key) ?>"
+               autocomplete="new-password"
+               placeholder="<?= $val !== '' ? '•••••••• (' . strlen($val) . ' chars saved — leave blank to keep)' : 'not set' ?>"
+               <?= $req ?>>
+      <?php elseif ($type === 'email'): ?>
+        <input type="email" name="<?= e($key) ?>" value="<?= e($val) ?>"
+               <?= isset($meta['max']) ? 'maxlength="' . (int)$meta['max'] . '"' : '' ?> <?= $req ?>>
+      <?php elseif ($type === 'select'): ?>
+        <select name="<?= e($key) ?>" <?= $req ?>>
+          <?php foreach ((array)($meta['options'] ?? []) as $optV => $optL): ?>
+            <option value="<?= e((string)$optV) ?>" <?= (string)$val === (string)$optV ? 'selected' : '' ?>>
+              <?= e((string)$optL) ?>
+            </option>
+          <?php endforeach; ?>
+        </select>
       <?php else: ?>
         <input type="text" name="<?= e($key) ?>" value="<?= e($val) ?>"
                <?= isset($meta['max']) ? 'maxlength="' . (int)$meta['max'] . '"' : '' ?> <?= $req ?>>

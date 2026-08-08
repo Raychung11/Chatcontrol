@@ -164,6 +164,53 @@ body.impersonating .app-shell { border-top: 0; }
   color: #7d8898; padding: 18px 20px 6px;
 }
 
+/* Search + collapse-all toolbar (sits between brand and nav) */
+.sidebar-toolbar {
+  display: flex; gap: 6px; align-items: center;
+  padding: 8px 12px 4px;
+}
+.sidebar-search {
+  position: relative; flex: 1; display: flex; align-items: center;
+}
+.sidebar-search-icon {
+  position: absolute; left: 8px; font-size: 12px; opacity: 0.6;
+  pointer-events: none;
+}
+.sidebar-search input {
+  width: 100%;
+  padding: 6px 26px 6px 26px;
+  border: 1px solid #2c3744;
+  background: #222b36;
+  color: #d9e0e8;
+  border-radius: 6px;
+  font-size: 12.5px;
+  outline: none;
+}
+.sidebar-search input:focus {
+  border-color: var(--c-primary);
+  background: #1c242e;
+}
+.sidebar-search input::placeholder { color: #6c7683; }
+#sidebar-search-clear {
+  position: absolute; right: 4px;
+  width: 20px; height: 20px; border-radius: 50%;
+  border: none; background: transparent; color: #9aa5b4;
+  cursor: pointer; font-size: 16px; line-height: 1; padding: 0;
+}
+#sidebar-search-clear:hover { color: #fff; background: #2c3744; }
+
+#sidebar-toggle-all {
+  width: 28px; height: 28px;
+  background: #222b36; color: #d9e0e8;
+  border: 1px solid #2c3744; border-radius: 6px;
+  cursor: pointer; font-size: 14px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+#sidebar-toggle-all:hover {
+  background: #2c3744; color: #fff; border-color: var(--c-primary);
+}
+
 /* Collapsible sidebar groups (<details>/<summary>) — native, no JS to open/close.
    Small caret rotates on open. Every child link stays visually nested inside. */
 .sidebar-nav details.nav-group {

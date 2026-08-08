@@ -82,6 +82,20 @@ $fnbActive = fnb_module_active((int)($current_user['company_id'] ?? 0));
     <span class="brand-text"><?= e($sb_companyName !== '' ? $sb_companyName : 'AiServe Inbox') ?></span>
   </div>
 
+  <!-- ============ Search + collapse-all toolbar ============ -->
+  <div class="sidebar-toolbar">
+    <div class="sidebar-search">
+      <span class="sidebar-search-icon">🔎</span>
+      <input type="search" id="sidebar-search" placeholder="Search…"
+             autocomplete="off" spellcheck="false">
+      <button type="button" id="sidebar-search-clear" title="Clear search"
+              aria-label="Clear search">×</button>
+    </div>
+    <button type="button" id="sidebar-toggle-all" title="Collapse / expand all groups">
+      <span data-when="all-open">⇕</span>
+    </button>
+  </div>
+
   <nav class="sidebar-nav" id="sidebar-nav">
 
     <!-- ============ Top-level: always visible, no group ============ -->
@@ -184,26 +198,126 @@ $fnbActive = fnb_module_active((int)($current_user['company_id'] ?? 0));
 </aside>
 
 <script>
-// Remember each nav group's open/closed state across page loads.
-// The group containing the current active link is force-opened by
-// the server via the `open` attribute — we don't override that here
-// (that'd hide the user's own location). We DO restore user-toggled
-// state for every other group so the sidebar respects preferences.
 (function () {
     var nav = document.getElementById('sidebar-nav');
     if (!nav) return;
-    var groups = nav.querySelectorAll('details.nav-group');
+    var groups   = nav.querySelectorAll('details.nav-group');
+    var allLinks = nav.querySelectorAll('a');
+    var input    = document.getElementById('sidebar-search');
+    var clearBtn = document.getElementById('sidebar-search-clear');
+    var toggleAll= document.getElementById('sidebar-toggle-all');
+
+    // ----- Per-group open/closed state -----
+    // Server force-opens the group containing the current active link;
+    // we never override that on load. Every other group restores from
+    // localStorage so user preferences survive across pages.
     groups.forEach(function (g) {
         var key = 'aiserve_nav_' + g.dataset.group;
-        // If server didn't force it open, restore last saved state.
         if (!g.hasAttribute('open')) {
             try {
                 if (localStorage.getItem(key) === '1') g.setAttribute('open', '');
             } catch (e) {}
         }
         g.addEventListener('toggle', function () {
+            // Don't persist state changes made by the search auto-open —
+            // those are ephemeral. `data-search-forced` marks groups
+            // whose open state was changed by the search input, so we
+            // skip localStorage writes for them.
+            if (g.dataset.searchForced === '1') return;
             try { localStorage.setItem(key, g.open ? '1' : '0'); } catch (e) {}
         });
     });
+
+    // ----- Collapse / expand all button -----
+    // Middle state (mixed): default label ⇕. All open → clicking closes
+    // everything. All closed → clicking opens everything. Anything else
+    // → clicking opens everything (moves toward more info).
+    function updateToggleLabel() {
+        var openCount = 0;
+        groups.forEach(function (g) { if (g.open) openCount++; });
+        var lbl = toggleAll.querySelector('span');
+        if (openCount === 0)                   lbl.textContent = '▾'; // expand
+        else if (openCount === groups.length)  lbl.textContent = '▴'; // collapse
+        else                                    lbl.textContent = '⇕'; // mixed
+    }
+    toggleAll.addEventListener('click', function () {
+        var openCount = 0;
+        groups.forEach(function (g) { if (g.open) openCount++; });
+        var open = openCount < groups.length;   // if not all open, open all
+        groups.forEach(function (g) {
+            if (open) g.setAttribute('open', ''); else g.removeAttribute('open');
+        });
+        updateToggleLabel();
+    });
+    updateToggleLabel();
+
+    // ----- Live search -----
+    // Filters visible links by substring (case-insensitive) on their
+    // text content. When any child of a group matches, force-open the
+    // group. Blank query = restore original state.
+    function applySearch(q) {
+        q = (q || '').trim().toLowerCase();
+        if (q === '') {
+            // Clear filter — restore every link + close any group we
+            // force-opened during search, respecting the group's stored
+            // preference again.
+            allLinks.forEach(function (a) { a.style.display = ''; });
+            groups.forEach(function (g) {
+                if (g.dataset.searchForced === '1') {
+                    var key = 'aiserve_nav_' + g.dataset.group;
+                    var savedOpen = false;
+                    try { savedOpen = localStorage.getItem(key) === '1'; } catch (e) {}
+                    // Keep server-forced (contains active) groups open regardless.
+                    var hasActive = !!g.querySelector('a.active');
+                    if (savedOpen || hasActive) g.setAttribute('open', '');
+                    else                        g.removeAttribute('open');
+                    g.removeAttribute('data-search-forced');
+                }
+            });
+            clearBtn.style.display = 'none';
+            updateToggleLabel();
+            return;
+        }
+        clearBtn.style.display = '';
+        // Filter every link + track which groups had a match.
+        var matchedGroups = new Set();
+        allLinks.forEach(function (a) {
+            var txt = a.textContent.toLowerCase();
+            var hit = txt.indexOf(q) !== -1;
+            a.style.display = hit ? '' : 'none';
+            if (hit) {
+                var g = a.closest('details.nav-group');
+                if (g) matchedGroups.add(g);
+            }
+        });
+        // Auto-open any group that had a match, close the rest so the
+        // hit list is compact. Mark as search-forced so we don't leak
+        // this state into localStorage.
+        groups.forEach(function (g) {
+            if (matchedGroups.has(g)) {
+                if (!g.open) g.dataset.searchForced = '1';
+                g.setAttribute('open', '');
+            } else {
+                // If no match AND no matching top-level link, no reason
+                // to render this group open — hide it entirely (not just
+                // collapsed) so the sidebar reads as pure results.
+                g.style.display = '';    // group summary stays visible
+                if (g.open) g.dataset.searchForced = '1';
+                g.removeAttribute('open');
+            }
+        });
+        updateToggleLabel();
+    }
+    input.addEventListener('input',  function () { applySearch(input.value); });
+    clearBtn.addEventListener('click', function () {
+        input.value = ''; applySearch(''); input.focus();
+    });
+    // Esc clears the search.
+    input.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') { input.value = ''; applySearch(''); }
+    });
+
+    // Hide clear button on first paint.
+    clearBtn.style.display = 'none';
 })();
 </script>

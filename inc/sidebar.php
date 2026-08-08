@@ -38,14 +38,25 @@ if ($sb_companyId > 0) {
     } catch (Throwable $e) { /* non-fatal */ }
 }
 
-// Fetch this user's current availability (phase 41). Falls back to
-// 'available' silently if the column doesn't exist yet.
+// Fetch this user's current availability (phase 41) + whether they've
+// set a PIN (phase 43). Falls back silently on pre-migration DBs.
 $sb_availability = 'available';
+$sb_hasPin       = false;
 try {
-    $sa = aiserve_db()->prepare('SELECT availability FROM users WHERE id = ? LIMIT 1');
+    $sa = aiserve_db()->prepare('SELECT availability, pin_hash FROM users WHERE id = ? LIMIT 1');
     $sa->execute([(int)($current_user['id'] ?? 0)]);
-    $sb_availability = (string)($sa->fetchColumn() ?: 'available');
-} catch (Throwable $e) { /* column missing pre-phase41 = default */ }
+    if ($row = $sa->fetch()) {
+        $sb_availability = (string)($row['availability'] ?? 'available');
+        $sb_hasPin       = !empty($row['pin_hash']);
+    }
+} catch (Throwable $e) {
+    // Fall back to availability-only if pin_hash column doesn't exist yet.
+    try {
+        $sa = aiserve_db()->prepare('SELECT availability FROM users WHERE id = ? LIMIT 1');
+        $sa->execute([(int)($current_user['id'] ?? 0)]);
+        $sb_availability = (string)($sa->fetchColumn() ?: 'available');
+    } catch (Throwable $e2) { /* both missing = defaults */ }
+}
 
 // Empty-workspace nudge for the setup wizard.
 $showWizardBadge = false;
@@ -205,6 +216,10 @@ $fnbActive = fnb_module_active((int)($current_user['company_id'] ?? 0));
 
     <!-- Availability toggle — used by branch rotation to skip busy/away
          users when picking the next assignee. Purely self-serve. -->
+    <a href="/admin/set_pin.php" class="pin-link" title="Set a 6-digit PIN for quick unlock on this device">
+      🔒 <?= $sb_hasPin ?? false ? 'Change PIN' : 'Set PIN' ?>
+    </a>
+
     <div class="avail-toggle" id="avail-toggle" data-current="<?= e($sb_availability) ?>">
       <span class="avail-label muted small">Status</span>
       <button type="button" data-value="available"

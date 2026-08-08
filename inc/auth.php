@@ -6,6 +6,7 @@
 
 require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/remember_me.php';
+require_once __DIR__ . '/pin.php';
 
 function current_user(): ?array
 {
@@ -122,6 +123,17 @@ function require_login(): array
     if (!$u) {
         $next = $_SERVER['REQUEST_URI'] ?? '/';
         redirect('/login.php?next=' . urlencode($next));
+    }
+    // PIN gate — if the user has a PIN set and hasn't already unlocked
+    // this session (i.e. they arrived via remember-me auto-login), send
+    // them through /pin.php first. /pin.php itself sets the verified
+    // flag and redirects back to $next. We skip the gate on /pin.php
+    // and its POST endpoint to avoid a loop.
+    $reqPath = strtok((string)($_SERVER['REQUEST_URI'] ?? '/'), '?');
+    $isPinRoute = in_array($reqPath, ['/pin.php', '/api/pin_verify.php'], true);
+    if (!$isPinRoute && !empty($u['pin_hash']) && !pin_is_verified()) {
+        $next = $_SERVER['REQUEST_URI'] ?? '/dashboard.php';
+        redirect('/pin.php?next=' . urlencode($next));
     }
     return $u;
 }
@@ -302,6 +314,15 @@ function login_user(array $user): void
     $_SESSION['company_id'] = (int)$user['company_id'];
     $_SESSION['role']       = $user['role'];
     $_SESSION['name']       = $user['name'];
+    // Password login proves identity — no need to also enter PIN.
+    pin_mark_verified();
+    // Password success clears any PIN lockout too.
+    try {
+        aiserve_db()->prepare(
+            'UPDATE users SET pin_failed_attempts = 0, pin_locked_until = NULL
+             WHERE id = ? LIMIT 1'
+        )->execute([(int)$user['id']]);
+    } catch (Throwable $e) { /* ok */ }
 
     try {
         $stmt = aiserve_db()->prepare('UPDATE users SET last_login_at = NOW() WHERE id = ?');

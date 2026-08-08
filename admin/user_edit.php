@@ -28,6 +28,9 @@ if (is_post()) {
     $role     = (string)($_POST['role']                ?? 'agent');
     $deptId   = $_POST['department_id'] ?? '';
     $deptId   = ($deptId === '' || $deptId === '0') ? null : (int)$deptId;
+    // Primary "home" branch (phase 40) — single-select. Null = no home.
+    $primaryBranchId = $_POST['primary_branch_id'] ?? '';
+    $primaryBranchId = ($primaryBranchId === '' || $primaryBranchId === '0') ? null : (int)$primaryBranchId;
     $status   = ((string)($_POST['status'] ?? 'active') === 'inactive') ? 'inactive' : 'active';
     $password = (string)($_POST['password'] ?? '');
 
@@ -80,17 +83,32 @@ if (is_post()) {
     if ($err === '') {
         try {
             if ($user) {
-                $sql = 'UPDATE users SET name=?, email=?, phone=?, role=?, department_id=?, status=?'
-                     . ($password !== '' ? ', password_hash=?' : '')
-                     . ' WHERE id=? AND company_id=?';
-                $params = [$name, $email, $phone, $role, $deptId, $status];
-                if ($password !== '') {
-                    $params[] = password_hash($password, PASSWORD_BCRYPT);
+                // Try to include primary_branch_id — falls back cleanly
+                // if the phase-40 migration hasn't run yet on this DB.
+                try {
+                    $sql = 'UPDATE users SET name=?, email=?, phone=?, role=?, department_id=?, primary_branch_id=?, status=?'
+                         . ($password !== '' ? ', password_hash=?' : '')
+                         . ' WHERE id=? AND company_id=?';
+                    $params = [$name, $email, $phone, $role, $deptId, $primaryBranchId, $status];
+                    if ($password !== '') $params[] = password_hash($password, PASSWORD_BCRYPT);
+                    $params[] = (int)$user['id'];
+                    $params[] = $companyId;
+                    $db->prepare($sql)->execute($params);
+                } catch (PDOException $e) {
+                    // primary_branch_id column may not exist yet — retry without it.
+                    if (strpos($e->getMessage(), 'primary_branch_id') !== false) {
+                        $sql = 'UPDATE users SET name=?, email=?, phone=?, role=?, department_id=?, status=?'
+                             . ($password !== '' ? ', password_hash=?' : '')
+                             . ' WHERE id=? AND company_id=?';
+                        $params = [$name, $email, $phone, $role, $deptId, $status];
+                        if ($password !== '') $params[] = password_hash($password, PASSWORD_BCRYPT);
+                        $params[] = (int)$user['id'];
+                        $params[] = $companyId;
+                        $db->prepare($sql)->execute($params);
+                    } else {
+                        throw $e;
+                    }
                 }
-                $params[] = (int)$user['id'];
-                $params[] = $companyId;
-                $stmt = $db->prepare($sql);
-                $stmt->execute($params);
                 // Channel access for agents. Wipe + re-insert so
                 // unchecking a box actually removes access.
                 user_edit_save_channels($db, $companyId, (int)$user['id'], $role, $channelIds);
@@ -102,14 +120,31 @@ if (is_post()) {
                 $stmt->execute([(int)$user['id']]);
                 $user = $stmt->fetch();
             } else {
-                $stmt = $db->prepare(
-                    'INSERT INTO users (company_id, department_id, name, email, phone, password_hash, role, status)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-                );
-                $stmt->execute([
-                    $companyId, $deptId, $name, $email, $phone,
-                    password_hash($password, PASSWORD_BCRYPT), $role, $status,
-                ]);
+                // Try with primary_branch_id (phase 40). Fall back to the
+                // legacy INSERT if the column isn't there yet.
+                try {
+                    $stmt = $db->prepare(
+                        'INSERT INTO users (company_id, department_id, primary_branch_id, name, email, phone, password_hash, role, status)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                    );
+                    $stmt->execute([
+                        $companyId, $deptId, $primaryBranchId, $name, $email, $phone,
+                        password_hash($password, PASSWORD_BCRYPT), $role, $status,
+                    ]);
+                } catch (PDOException $e) {
+                    if (strpos($e->getMessage(), 'primary_branch_id') !== false) {
+                        $stmt = $db->prepare(
+                            'INSERT INTO users (company_id, department_id, name, email, phone, password_hash, role, status)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+                        );
+                        $stmt->execute([
+                            $companyId, $deptId, $name, $email, $phone,
+                            password_hash($password, PASSWORD_BCRYPT), $role, $status,
+                        ]);
+                    } else {
+                        throw $e;
+                    }
+                }
                 $newId = (int)$db->lastInsertId();
                 user_edit_save_channels($db, $companyId, $newId, $role, $channelIds);
                 user_edit_save_branches($db, $companyId, $newId, $branchIds);
@@ -199,6 +234,28 @@ layout_start($current_user, $user ? 'Edit user' : 'New user', 'users');
         <?php endforeach; ?>
       </select>
     </label>
+
+    <label>Primary branch <small class="muted">(where they mainly work)</small>
+      <?php if ($allBranches): ?>
+        <select name="primary_branch_id">
+          <option value="0">— None —</option>
+          <?php $curPrimary = (int)($user['primary_branch_id'] ?? 0);
+                foreach ($allBranches as $b): ?>
+            <option value="<?= (int)$b['id'] ?>" <?= $curPrimary === (int)$b['id'] ? 'selected' : '' ?>>
+              <?= e($b['name']) ?>
+            </option>
+          <?php endforeach; ?>
+        </select>
+        <small class="muted" style="display:block; margin-top:4px;">
+          Sets a home branch. For rotation membership across multiple branches, use the "Branch access" section below.
+        </small>
+      <?php else: ?>
+        <div class="muted small" style="padding:8px 10px; background:#f6f9fb; border:1px dashed #cbd5e1; border-radius:6px;">
+          No branches configured yet. Create one first in
+          <a href="/admin/branches.php">Admin → Branches</a>, then edit this user again.
+        </div>
+      <?php endif; ?>
+    </label>
     <label>Status
       <select name="status">
         <option value="active"   <?= ($user['status'] ?? 'active') === 'active' ? 'selected' : '' ?>>Active</option>
@@ -238,32 +295,37 @@ layout_start($current_user, $user ? 'Edit user' : 'New user', 'users');
       <?php endif; ?>
     </fieldset>
 
-    <?php if ($allBranches): ?>
     <fieldset style="border:1px solid var(--c-border); border-radius:8px; padding:14px; margin:0;">
       <legend style="padding:0 6px; font-weight:600; font-size:14px;">Branch access &amp; rotation</legend>
       <p class="muted small" style="margin:0 0 10px;">
-        Tick the branches this person belongs to. Ticks do <strong>two things</strong>:
+        Tick every branch this person also belongs to (in addition to their primary above).
+        <strong>Two effects:</strong>
         <br>
-        · <strong>For agents:</strong> the rotation pool for those branches includes
-          this person, so new conversations for contacts in a ticked branch may be
-          auto-assigned to them.<br>
-        · <strong>For managers (e.g. an Area Manager):</strong> visibility gets
-          scoped — they only see conversations for contacts in ticked branches.
-          <em>Leaving all ticks empty for a manager means they see every branch
-          (unrestricted).</em><br>
+        · <strong>Agents:</strong> the rotation pool for those branches includes this person, so
+          new conversations for contacts in a ticked branch may be auto-assigned to them.<br>
+        · <strong>Managers (e.g. an Area Manager):</strong> visibility gets scoped — they only see
+          conversations for contacts in ticked branches.
+          <em>Leaving all ticks empty for a manager means they see every branch (unrestricted).</em><br>
         Super admins always see every branch — this section is ignored for them.
       </p>
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:6px;">
-        <?php foreach ($allBranches as $b): ?>
-          <label style="display:flex; align-items:center; gap:8px; font-weight:normal; font-size:14px;">
-            <input type="checkbox" name="branch_ids[]" value="<?= (int)$b['id'] ?>"
-                   <?= in_array((int)$b['id'], $rotationBranchIds, true) ? 'checked' : '' ?>>
-            <span><?= e($b['name']) ?></span>
-          </label>
-        <?php endforeach; ?>
-      </div>
+      <?php if ($allBranches): ?>
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:6px;">
+          <?php foreach ($allBranches as $b): ?>
+            <label style="display:flex; align-items:center; gap:8px; font-weight:normal; font-size:14px;">
+              <input type="checkbox" name="branch_ids[]" value="<?= (int)$b['id'] ?>"
+                     <?= in_array((int)$b['id'], $rotationBranchIds, true) ? 'checked' : '' ?>>
+              <span><?= e($b['name']) ?></span>
+            </label>
+          <?php endforeach; ?>
+        </div>
+      <?php else: ?>
+        <div class="muted small" style="padding:14px; text-align:center; background:#f6f9fb; border:1px dashed #cbd5e1; border-radius:6px;">
+          No branches configured for this workspace yet.
+          <br><a href="/admin/branches.php">Create your first branch →</a>
+          then come back to assign this user.
+        </div>
+      <?php endif; ?>
     </fieldset>
-    <?php endif; ?>
 
     <div>
       <button class="btn btn-primary" type="submit"><?= $user ? 'Save changes' : 'Create user' ?></button>

@@ -76,7 +76,10 @@ if (is_post()) {
       <label for="email">Email</label>
       <input type="email" id="email" name="email" value="<?= e($email) ?>" autocomplete="username" required>
 
-      <label for="password">Password</label>
+      <label for="password" style="display:flex; justify-content:space-between; align-items:baseline;">
+        <span>Password</span>
+        <a href="/forgot_password.php" class="muted small" style="text-decoration:none;">Forgot?</a>
+      </label>
       <input type="password" id="password" name="password" autocomplete="current-password" required>
 
       <?php

@@ -120,14 +120,19 @@ function invoicing_get_by_token(int $id, string $token): ?array
  */
 function invoicing_render_html(array $invoice, bool $forEmail = false): string
 {
+    // Prefer trading name; fall back to legal name so an operator who
+    // only fills one field still gets a labelled invoice.
     $operator = [
-        'name'    => platform_setting('operator_business_name', 'AiServe'),
-        'address' => platform_setting('operator_address',       ''),
-        'reg_no'  => platform_setting('operator_reg_no',        ''),
-        'tax_id'  => platform_setting('operator_tax_id',        ''),
+        'name'    => platform_setting('operator_business_name',
+                     platform_setting('operator_legal_name',    'AiServe')),
+        'address' => platform_setting('operator_address',        ''),
+        // Historical duplicate key names — check both.
+        'reg_no'  => platform_setting('operator_registration_no',
+                     platform_setting('operator_reg_no',         '')),
+        'tax_id'  => platform_setting('operator_tax_id',         ''),
         'email'   => platform_setting('operator_email',
-                     platform_setting('operator_contact_email', '')),
-        'phone'   => platform_setting('operator_phone',         ''),
+                     platform_setting('operator_contact_email',  '')),
+        'phone'   => platform_setting('operator_phone',          ''),
     ];
     $payText = platform_setting('broadcast_payment_instructions',
         "Bank transfer to the account on the invoice. "

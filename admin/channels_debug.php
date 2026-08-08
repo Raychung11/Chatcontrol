@@ -34,11 +34,21 @@ if (is_post() && ($_POST['action'] ?? '') === 'test') {
     $s->execute([$cid]);
     $ch = $s->fetch();
     if ($ch) {
-        // Endpoint per provider. All accept ?ch=<token>.
-        $endpoint = match ((string)$ch['provider']) {
+        $provider = (string)$ch['provider'];
+        // Per-provider probe: match how the real webhook receives traffic.
+        //  - evolution / aiserve_chatbot: POST empty JSON. The handler
+        //    parses it, finds no messages/statuses, returns 200 with
+        //    zero counts. Auth passes because ?ch=<token> is Case 1
+        //    (cryptographic token) — no side effects.
+        //  - cloud_api (Meta): GET with hub_challenge=… the standard
+        //    Meta verification handshake — returns 200 echoing the
+        //    challenge if the workspace's verify_token matches.
+        //  - web_chat is a widget, not a webhook — skipped upstream by
+        //    the UI, so we don't reach here in practice.
+        $endpoint = match ($provider) {
             'evolution', 'aiserve_chatbot' => '/webhook/evolution.php',
-            'web_chat'                     => '/api/widget_start.php', // widgets don't take webhooks
-            default                        => '/webhook/whatsapp.php', // meta cloud
+            'web_chat'                     => '/chat.php',
+            default                        => '/webhook/whatsapp.php',
         };
 
         $base = defined('APP_BASE_URL') && APP_BASE_URL !== ''
@@ -46,32 +56,44 @@ if (is_post() && ($_POST['action'] ?? '') === 'test') {
             : 'https://' . ($_SERVER['HTTP_HOST'] ?? 'localhost');
         $url  = $base . $endpoint . '?ch=' . urlencode((string)$ch['webhook_token']);
 
-        // Fire a GET verification-style probe (Meta hub_challenge pattern);
-        // both meta.php and evolution.php return quickly on this without
-        // side effects. For evolution.php an empty GET yields 404/400 but
-        // still confirms nginx + PHP-FPM + channel resolver work.
-        $probeUrl = $url . '&hub_mode=subscribe&hub_verify_token=aiserve-health&hub_challenge=hc';
-        $t0 = microtime(true);
-        $ctx = stream_context_create([
-            'http' => ['timeout' => 5, 'ignore_errors' => true, 'method' => 'GET'],
-            'ssl'  => ['verify_peer' => true, 'verify_peer_name' => true],
-        ]);
-        $body = @file_get_contents($probeUrl, false, $ctx);
-        $dur  = (int)((microtime(true) - $t0) * 1000);
-
-        // Parse HTTP status from $http_response_header magic.
-        $status = 0;
-        if (isset($http_response_header[0]) && preg_match('#HTTP/\S+\s+(\d+)#', $http_response_header[0], $m)) {
-            $status = (int)$m[1];
+        // Fire the right probe for this provider via cURL — supports
+        // both POST bodies and GET, plus proper HTTPS on localhost.
+        $curl = curl_init();
+        $opts = [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 5,
+            CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ];
+        $probeMode = 'GET';
+        if (in_array($provider, ['evolution', 'aiserve_chatbot'], true)) {
+            // Empty-JSON POST — safe no-op.
+            $opts[CURLOPT_URL]        = $url;
+            $opts[CURLOPT_POST]       = true;
+            $opts[CURLOPT_POSTFIELDS] = '{}';
+            $opts[CURLOPT_HTTPHEADER] = ['Content-Type: application/json'];
+            $probeMode = 'POST';
+        } else {
+            // Meta verification GET.
+            $opts[CURLOPT_URL] = $url . '&hub_mode=subscribe&hub_verify_token=aiserve-health&hub_challenge=hc';
         }
+        curl_setopt_array($curl, $opts);
+        $t0     = microtime(true);
+        $body   = curl_exec($curl);
+        $dur    = (int)((microtime(true) - $t0) * 1000);
+        $status = (int)curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        $curlErr= curl_error($curl);
+        curl_close($curl);
 
         $testResult = [
             'channel_id' => $cid,
             'url'        => $url,
+            'mode'       => $probeMode,
             'status'     => $status,
-            'body'       => mb_substr((string)($body ?? ''), 0, 300),
+            'body'       => mb_substr((string)($body ?: ''), 0, 300),
             'duration'   => $dur,
-            'error'      => $body === false ? error_get_last()['message'] ?? 'request failed' : null,
+            'error'      => $body === false ? ($curlErr ?: 'request failed') : null,
         ];
     }
 }
@@ -252,7 +274,8 @@ layout_start($current_user, 'Channels · Health', 'channels_debug');
       $cls   = $isErr ? 'fail' : ($isOk ? 'ok' : 'warn');
     ?>
     <div class="ch-test-result <?= $cls ?>">
-      <strong>🧪 Test result</strong> — HTTP <?= (int)$testResult['status'] ?> · <?= (int)$testResult['duration'] ?> ms
+      <strong>🧪 Test result</strong> — <?= e((string)($testResult['mode'] ?? 'GET')) ?>
+      · HTTP <?= (int)$testResult['status'] ?> · <?= (int)$testResult['duration'] ?> ms
       <div class="muted small" style="margin-top:4px;">URL: <code><?= e($testResult['url']) ?></code></div>
       <?php if ($testResult['error']): ?>
         <div style="color:#DC2626; margin-top:6px;"><strong>Error:</strong> <?= e($testResult['error']) ?></div>

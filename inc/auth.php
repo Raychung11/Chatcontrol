@@ -5,12 +5,21 @@
  */
 
 require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/remember_me.php';
 
 function current_user(): ?array
 {
     aiserve_start_session();
     if (empty($_SESSION['user_id'])) {
-        return null;
+        // No live session — try the remember-me cookie. If it resolves,
+        // populate the session as if the user had just logged in and
+        // fall through to the normal user-load below.
+        $rememberedId = remember_me_try();
+        if ($rememberedId) {
+            $_SESSION['user_id'] = $rememberedId;
+        } else {
+            return null;
+        }
     }
     static $cached = null;
     $sessionTag = (int)$_SESSION['user_id'] . ':' . (int)($_SESSION['_impersonate_company_id'] ?? 0);
@@ -312,6 +321,10 @@ function logout_user(): void
     if ($uid && $cid) {
         log_activity((int)$cid, (int)$uid, 'logout', 'user', (int)$uid, 'User logged out');
     }
+    // Kill the remember-me cookie + DB row too, so "Logout" truly
+    // signs the user out — otherwise the next request would auto-log
+    // them back in via the cookie.
+    remember_me_revoke_current();
     $_SESSION = [];
     if (ini_get('session.use_cookies')) {
         $params = session_get_cookie_params();

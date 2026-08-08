@@ -36,6 +36,12 @@ if (is_post()) {
         if ($user && password_verify($pass, $user['password_hash'])) {
             login_record_attempt($email, $ip, true);
             login_user($user);
+            // "Stay signed in on this device" — mint a 30-day
+            // remember-me cookie. Auto-checked for mobile UAs; still
+            // opt-in for desktop browsers via the checkbox.
+            if (!empty($_POST['remember_me'])) {
+                remember_me_issue((int)$user['id']);
+            }
             redirect($next);
         }
 
@@ -72,6 +78,18 @@ if (is_post()) {
 
       <label for="password">Password</label>
       <input type="password" id="password" name="password" autocomplete="current-password" required>
+
+      <?php
+        // Default the "stay signed in" box to checked on obvious mobile
+        // UAs (phones + tablets) so the WhatsApp-style experience is
+        // the default there. Desktop users still opt in.
+        $ua = strtolower((string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
+        $isMobileUA = (bool)preg_match('/(android|iphone|ipad|ipod|mobile|windows phone)/', $ua);
+      ?>
+      <label style="display:flex; align-items:center; gap:8px; margin: 12px 0; font-weight: normal; cursor: pointer;">
+        <input type="checkbox" name="remember_me" value="1" <?= $isMobileUA ? 'checked' : '' ?>>
+        <span>Stay signed in on this device <small class="muted">(30 days)</small></span>
+      </label>
 
       <button type="submit" class="btn btn-primary btn-block">Sign in</button>
     </form>

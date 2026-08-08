@@ -273,6 +273,24 @@ body.impersonating .app-shell { border-top: 0; }
 }
 .btn-logout:hover { background: var(--c-danger); color: #fff; text-decoration: none; }
 
+/* Availability toggle in the sidebar footer — three-state pill row
+   (available / busy / away). Highlights the current state; clicking a
+   dot POSTs to /api/set_availability.php. */
+.avail-toggle {
+  display: flex; gap: 4px; align-items: center;
+  margin: 8px 0;
+}
+.avail-toggle .avail-label { flex: 1; color: #7d8898; font-size: 11px; }
+.avail-btn {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: #222b36; border: 1px solid #2c3744;
+  cursor: pointer; font-size: 12px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; opacity: 0.5; transition: opacity 0.15s, transform 0.15s;
+}
+.avail-btn:hover  { opacity: 0.9; transform: scale(1.08); }
+.avail-btn.on     { opacity: 1; border-color: var(--c-primary); box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.25); }
+
 /* -------- Cards / forms -------- */
 .card {
   background: var(--c-card);

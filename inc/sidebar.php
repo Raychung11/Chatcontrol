@@ -38,6 +38,15 @@ if ($sb_companyId > 0) {
     } catch (Throwable $e) { /* non-fatal */ }
 }
 
+// Fetch this user's current availability (phase 41). Falls back to
+// 'available' silently if the column doesn't exist yet.
+$sb_availability = 'available';
+try {
+    $sa = aiserve_db()->prepare('SELECT availability FROM users WHERE id = ? LIMIT 1');
+    $sa->execute([(int)($current_user['id'] ?? 0)]);
+    $sb_availability = (string)($sa->fetchColumn() ?: 'available');
+} catch (Throwable $e) { /* column missing pre-phase41 = default */ }
+
 // Empty-workspace nudge for the setup wizard.
 $showWizardBadge = false;
 if (in_array($role, ['super_admin', 'manager'], true) && !empty($current_user['company_id'])) {
@@ -193,9 +202,53 @@ $fnbActive = fnb_module_active((int)($current_user['company_id'] ?? 0));
         <div class="user-role"><?= e(role_label($current_user['role'] ?? 'agent')) ?></div>
       </div>
     </div>
+
+    <!-- Availability toggle — used by branch rotation to skip busy/away
+         users when picking the next assignee. Purely self-serve. -->
+    <div class="avail-toggle" id="avail-toggle" data-current="<?= e($sb_availability) ?>">
+      <span class="avail-label muted small">Status</span>
+      <button type="button" data-value="available"
+              class="avail-btn <?= $sb_availability === 'available' ? 'on' : '' ?>"
+              title="Available for new leads">🟢</button>
+      <button type="button" data-value="busy"
+              class="avail-btn <?= $sb_availability === 'busy' ? 'on' : '' ?>"
+              title="Busy — only get a lead if nobody free">🟡</button>
+      <button type="button" data-value="away"
+              class="avail-btn <?= $sb_availability === 'away' ? 'on' : '' ?>"
+              title="Away — skipped by rotation">⚫</button>
+    </div>
+
     <a class="btn-logout" href="/logout.php">Logout</a>
   </div>
 </aside>
+
+<script>
+// Self-serve availability toggle in the sidebar footer.
+(function () {
+    var box = document.getElementById('avail-toggle');
+    if (!box) return;
+    box.querySelectorAll('.avail-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var val = btn.dataset.value;
+            var fd  = new FormData();
+            fd.append('availability', val);
+            // CSRF is shared per session — read from any csrf_field meta on the page.
+            var t = document.querySelector('meta[name="csrf-token"]');
+            if (t) fd.append('_csrf', t.getAttribute('content'));
+            fetch('/api/set_availability.php', { method: 'POST', body: fd, credentials: 'same-origin' })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    if (data && data.ok) {
+                        box.querySelectorAll('.avail-btn').forEach(function (b) {
+                            b.classList.toggle('on', b.dataset.value === val);
+                        });
+                        box.dataset.current = val;
+                    }
+                });
+        });
+    });
+})();
+</script>
 
 <script>
 (function () {

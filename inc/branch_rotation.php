@@ -22,43 +22,84 @@
 require_once __DIR__ . '/helpers.php';
 
 /**
- * Return the next user_id to assign a conversation to for this branch,
- * updating the rotation cursor as a side effect. Returns null if the
- * branch has no active users in the pool.
+ * Pick the next agent for a branch's rotation using a fair, load-aware
+ * algorithm:
+ *
+ *   1. Skip users who are away.
+ *   2. Prefer 'available' users. Fall back to 'busy' only when zero
+ *      available users exist (so leads never queue while someone's
+ *      technically eligible).
+ *   3. Within that tier, pick the user with the FEWEST currently-open
+ *      assigned conversations (status IN open/pending/escalated).
+ *   4. Tie-break by longest time since their last assignment (using the
+ *      rotation cursor + user id) so equal-load users still see fair
+ *      round-robin between themselves.
+ *
+ * Falls back cleanly to id-ASC if the availability column isn't in
+ * the DB yet (pre-phase-41 workspace).
+ *
+ * Side effect: updates branches.last_assigned_user_id so tie-breakers
+ * on the next call move on to the next equally-loaded user.
  */
 function branch_next_agent_id(PDO $db, int $branchId, int $companyId): ?int
 {
     if ($branchId <= 0) return null;
 
-    $stmt = $db->prepare(
-        'SELECT u.id
+    // Detect whether the availability column exists so we work on both
+    // pre- and post-phase-41 DBs without a hard dependency.
+    static $hasAvail = null;
+    if ($hasAvail === null) {
+        try {
+            $t = $db->query("SHOW COLUMNS FROM users LIKE 'availability'")->fetchAll();
+            $hasAvail = count($t) > 0;
+        } catch (Throwable $e) { $hasAvail = false; }
+    }
+
+    // Fetch every candidate + their open-load count in a single query.
+    $availCol = $hasAvail ? 'u.availability' : '"available" AS availability';
+    $sql =
+        "SELECT u.id, $availCol AS availability,
+                (SELECT COUNT(*) FROM conversations
+                  WHERE assigned_user_id = u.id
+                    AND status IN ('open','pending','escalated')) AS open_load
          FROM users u
          INNER JOIN user_branches ub ON ub.user_id = u.id
          WHERE ub.branch_id = ?
            AND u.company_id = ?
-           AND u.status = "active"
-         ORDER BY u.id ASC'
-    );
+           AND u.status = 'active'
+         " . ($hasAvail ? "AND u.availability <> 'away'" : '') . "
+         ORDER BY u.id ASC";
+    $stmt = $db->prepare($sql);
     $stmt->execute([$branchId, $companyId]);
-    $ids = array_map('intval', array_column($stmt->fetchAll(), 'id'));
-    if (!$ids) return null;
+    $cands = $stmt->fetchAll();
+    if (!$cands) return null;
 
-    $cursorStmt = $db->prepare('SELECT last_assigned_user_id FROM branches WHERE id = ?');
-    $cursorStmt->execute([$branchId]);
-    $last = (int)($cursorStmt->fetchColumn() ?: 0);
+    // Split into tiers so 'busy' only wins when no 'available' exists.
+    $available = array_values(array_filter($cands, fn($c) => $c['availability'] === 'available'));
+    $busy      = array_values(array_filter($cands, fn($c) => $c['availability'] === 'busy'));
+    $pool = $available ?: $busy;
+    if (!$pool) return null;
 
-    $next = null;
-    foreach ($ids as $uid) {
-        if ($uid > $last) { $next = $uid; break; }
-    }
-    if ($next === null) {
-        // Cursor was at (or past) the end of the pool - wrap to first.
-        $next = $ids[0];
-    }
+    // Cursor lets tie-broken users still round-robin among themselves.
+    $cur = $db->prepare('SELECT last_assigned_user_id FROM branches WHERE id = ?');
+    $cur->execute([$branchId]);
+    $last = (int)($cur->fetchColumn() ?: 0);
 
+    // Sort: fewest open leads first, then "cursor rank" — users past the
+    // cursor sort before users before it (so we wrap the ring fairly).
+    usort($pool, function ($a, $b) use ($last) {
+        $la = (int)$a['open_load']; $lb = (int)$b['open_load'];
+        if ($la !== $lb) return $la <=> $lb;
+        // Tie: prefer the next user past the cursor.
+        $rankA = ((int)$a['id'] > $last) ? 0 : 1;
+        $rankB = ((int)$b['id'] > $last) ? 0 : 1;
+        if ($rankA !== $rankB) return $rankA <=> $rankB;
+        return (int)$a['id'] <=> (int)$b['id'];
+    });
+
+    $next = (int)$pool[0]['id'];
     $db->prepare('UPDATE branches SET last_assigned_user_id = ? WHERE id = ?')
        ->execute([$next, $branchId]);
-
     return $next;
 }
 

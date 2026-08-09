@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/../inc/layout.php';
 require_once __DIR__ . '/../inc/knowledge_base.php';
+require_once __DIR__ . '/../inc/ai_api.php';  // AI_PERSONA_PRESETS + ai_model_for_feature
 
 $current_user = require_role(['super_admin', 'manager']);
 $companyId    = (int)$current_user['company_id'];

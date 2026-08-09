@@ -35,6 +35,10 @@ csrf_check();
 
 $conversationId = (int)($inputJson['conversation_id'] ?? $_POST['conversation_id'] ?? 0);
 $messageText    = trim((string)($inputJson['message_text']    ?? $_POST['message_text']    ?? ''));
+// Optional: the AI's original draft (if the agent used the composer's
+// suggestion). Captured so we can diff draft vs sent and feed it back
+// into the KB's style-rule learning cron.
+$aiDraft        = trim((string)($inputJson['ai_draft']        ?? $_POST['ai_draft']        ?? ''));
 
 if ($conversationId <= 0 || $messageText === '') {
     json_response(['ok' => false, 'error' => 'conversation_id and message_text are required.'], 400);
@@ -118,6 +122,43 @@ if ($result['ok']) {
 
     log_activity((int)$user['company_id'], (int)$user['id'], 'message_sent',
         'conversation', $conversationId, 'Agent reply sent');
+
+    // AI-draft learning capture — save (customer message, ai draft,
+    // agent's actual send) whenever an AI draft was provided. Best-
+    // effort: never blocks the send. Pre-phase47 workspaces silently
+    // skip (table doesn't exist yet).
+    if ($aiDraft !== '') {
+        try {
+            $lastIn = $db->prepare(
+                "SELECT message_text FROM messages
+                 WHERE conversation_id = ? AND direction = 'incoming'
+                   AND message_text IS NOT NULL AND message_text <> ''
+                 ORDER BY id DESC LIMIT 1"
+            );
+            $lastIn->execute([$conversationId]);
+            $custMsg = (string)($lastIn->fetchColumn() ?: '');
+            if ($custMsg !== '') {
+                $dist = levenshtein(
+                    mb_substr($aiDraft, 0, 255),
+                    mb_substr($messageText, 0, 255)
+                );
+                $db->prepare(
+                    'INSERT INTO ai_edit_examples
+                        (company_id, conversation_id, customer_message,
+                         ai_draft, agent_sent, edit_distance, agent_user_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)'
+                )->execute([
+                    (int)$user['company_id'], $conversationId,
+                    mb_substr($custMsg,    0, 2000),
+                    mb_substr($aiDraft,    0, 2000),
+                    mb_substr($messageText,0, 2000),
+                    $dist, (int)$user['id'],
+                ]);
+            }
+        } catch (Throwable $e) {
+            error_log('[AiServe ai_edit_examples] ' . $e->getMessage());
+        }
+    }
 
     json_response([
         'ok'             => true,

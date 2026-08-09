@@ -112,6 +112,10 @@
           return;
         }
         ta.value = '';
+        // Reset the ai_draft hidden field so subsequent manual sends
+        // aren't recorded as edited AI drafts.
+        const aiDraftField = composer.querySelector('input[name="ai_draft"]');
+        if (aiDraftField) aiDraftField.value = '';
         clearMediaPreview();
         if (statusEl) statusEl.textContent = 'Sent';
         setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 1500);
@@ -661,7 +665,21 @@
   if (aiRegenBtn) aiRegenBtn.addEventListener('click', fetchAiSuggestion);
   if (aiUseBtn) aiUseBtn.addEventListener('click', () => {
     const ta = document.getElementById('composer-text');
-    if (ta && aiBody) { ta.value = aiBody.textContent || ''; ta.focus(); }
+    if (ta && aiBody) {
+      ta.value = aiBody.textContent || '';
+      ta.focus();
+      // Stash the AI's original draft in a hidden field so the send
+      // endpoint can capture (draft, sent) pairs for the KB learning
+      // loop. The composer's FormData(...) picks it up automatically.
+      let hidden = composer.querySelector('input[name="ai_draft"]');
+      if (!hidden) {
+        hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'ai_draft';
+        composer.appendChild(hidden);
+      }
+      hidden.value = aiBody.textContent || '';
+    }
     if (aiPanel) aiPanel.classList.add('hidden');
   });
   if (aiDismissBtn) aiDismissBtn.addEventListener('click', () => {

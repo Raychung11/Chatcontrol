@@ -121,7 +121,35 @@ function kb_normalize_text(string $text): string
  */
 function kb_load_for_company(int $companyId): ?array
 {
-    $stmt = aiserve_db()->prepare(
+    $db = aiserve_db();
+
+    // High-signal Q&A pairs FIRST — they're compact and the AI treats
+    // rendered "Q: … A: …" blocks as answered examples. Falls back
+    // silently when the kb_qa_pairs table doesn't exist yet (pre-
+    // phase47 workspaces).
+    $qaBlock = '';
+    $qaCount = 0;
+    try {
+        $q = $db->prepare(
+            'SELECT question, answer FROM kb_qa_pairs
+             WHERE company_id = ? AND status = "active"
+             ORDER BY id ASC LIMIT 200'
+        );
+        $q->execute([$companyId]);
+        $qa = $q->fetchAll();
+        if ($qa) {
+            $lines = ["### Common questions the team already has answers for"];
+            foreach ($qa as $r) {
+                $lines[] = "Q: " . trim((string)$r['question']);
+                $lines[] = "A: " . trim((string)$r['answer']);
+                $lines[] = '';
+            }
+            $qaBlock = implode("\n", $lines);
+            $qaCount = count($qa);
+        }
+    } catch (Throwable $e) { /* pre-phase47 = skip */ }
+
+    $stmt = $db->prepare(
         'SELECT id, title, content_text, content_chars
          FROM knowledge_base
          WHERE company_id = ? AND status = "active"
@@ -129,11 +157,18 @@ function kb_load_for_company(int $companyId): ?array
     );
     $stmt->execute([$companyId]);
     $rows = $stmt->fetchAll();
-    if (!$rows) return null;
+    if (!$rows && $qaBlock === '') return null;
 
     $parts = [];
     $total = 0;
     $titles = [];
+
+    if ($qaBlock !== '') {
+        $parts[]  = $qaBlock;
+        $titles[] = 'Q&A pairs (' . $qaCount . ')';
+        $total   += mb_strlen($qaBlock);
+    }
+
     foreach ($rows as $r) {
         $title = (string)$r['title'];
         $body  = (string)$r['content_text'];
@@ -155,5 +190,121 @@ function kb_load_for_company(int $companyId): ?array
         'titles'       => $titles,
         'char_count'   => $total,
         'article_ids'  => array_map(fn($r) => (int)$r['id'], $rows),
+        'qa_count'     => $qaCount,
     ];
+}
+
+// =====================================================================
+// URL scraping — fetch a URL, extract clean text, save/refresh a KB
+// article. Uses curl + a simple HTML-to-text pass (strip scripts /
+// styles / nav / footer, then strip_tags). Handles PDFs at URLs too.
+// =====================================================================
+
+/**
+ * Fetch a URL and extract the primary text body. Returns
+ *   ['ok' => bool, 'text' => string, 'title' => string, 'mime' => string, 'error' => string]
+ */
+function kb_fetch_url_text(string $url): array
+{
+    $url = trim($url);
+    if (!filter_var($url, FILTER_VALIDATE_URL) || !preg_match('#^https?://#i', $url)) {
+        return ['ok' => false, 'error' => 'Only http(s) URLs are supported.'];
+    }
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 5,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_USERAGENT      => 'AiServe-KB-Bot/1.0 (+https://inbox.aiserve.my)',
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+    $body   = curl_exec($ch);
+    $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $mime   = strtolower((string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
+    $err    = curl_error($ch);
+    curl_close($ch);
+    if ($body === false || $status >= 400) {
+        return ['ok' => false, 'error' => 'Fetch failed (HTTP ' . $status . '): ' . $err];
+    }
+    if (mb_strlen($body) > KB_MAX_BYTES_PER_FILE) {
+        $body = mb_substr($body, 0, KB_MAX_BYTES_PER_FILE);
+    }
+
+    // PDF at URL: pipe through the same pdftotext path we use for uploads.
+    if (str_contains($mime, 'application/pdf')) {
+        $tmp = tempnam(sys_get_temp_dir(), 'kburl');
+        file_put_contents($tmp, $body);
+        $ext = kb_extract_text($tmp, 'application/pdf', basename($url));
+        @unlink($tmp);
+        if (!$ext['ok']) return $ext;
+        return ['ok' => true, 'text' => (string)$ext['text'],
+                'title' => basename(parse_url($url, PHP_URL_PATH) ?: 'Untitled PDF'),
+                'mime'  => 'application/pdf'];
+    }
+
+    // HTML: strip scripts/styles/nav/footer/aside/header first so we
+    // keep the meaningful body text and drop chrome.
+    $title = '';
+    if (preg_match('#<title[^>]*>(.*?)</title>#is', $body, $m)) {
+        $title = trim(html_entity_decode(strip_tags($m[1]), ENT_QUOTES, 'UTF-8'));
+    }
+    $clean = preg_replace('#<(script|style|nav|footer|aside|header|noscript|form|svg)[^>]*>.*?</\\1>#is', ' ', $body);
+    $clean = strip_tags((string)$clean);
+    $clean = html_entity_decode($clean, ENT_QUOTES, 'UTF-8');
+    $clean = preg_replace('/\s+/', ' ', $clean);
+    $clean = trim($clean);
+    if (mb_strlen($clean) > KB_MAX_CHARS_PER_ITEM) {
+        $clean = mb_substr($clean, 0, KB_MAX_CHARS_PER_ITEM) . '…';
+    }
+    if ($clean === '') return ['ok' => false, 'error' => 'Fetched but no readable text — the page might be JS-rendered.'];
+
+    return [
+        'ok'    => true,
+        'text'  => $clean,
+        'title' => $title !== '' ? $title : (parse_url($url, PHP_URL_HOST) ?: 'Untitled'),
+        'mime'  => $mime ?: 'text/html',
+    ];
+}
+
+/**
+ * Fetch a URL and save/update as a KB article. If an existing article
+ * with the same source_url exists, refresh it. Otherwise create a new
+ * one. Returns the article id or null on failure.
+ */
+function kb_upsert_from_url(int $companyId, int $userId, string $url, ?string $overrideTitle = null): ?int
+{
+    $r = kb_fetch_url_text($url);
+    if (!$r['ok']) return null;
+    $title = trim((string)($overrideTitle ?? $r['title']));
+    if ($title === '') $title = parse_url($url, PHP_URL_HOST) ?: 'Untitled';
+    $text  = (string)$r['text'];
+    $chars = mb_strlen($text);
+    try {
+        $db = aiserve_db();
+        $existing = $db->prepare('SELECT id FROM knowledge_base WHERE company_id = ? AND source_url = ? LIMIT 1');
+        $existing->execute([$companyId, $url]);
+        $id = (int)($existing->fetchColumn() ?: 0);
+        if ($id > 0) {
+            $db->prepare(
+                'UPDATE knowledge_base
+                 SET title = ?, content_text = ?, content_chars = ?, status = "active",
+                     source_last_fetched_at = NOW()
+                 WHERE id = ?'
+            )->execute([$title, $text, $chars, $id]);
+            return $id;
+        }
+        $ins = $db->prepare(
+            'INSERT INTO knowledge_base
+                (company_id, title, source_filename, mime_type, content_text, content_chars,
+                 status, created_by, source_url, source_last_fetched_at)
+             VALUES (?, ?, NULL, ?, ?, ?, "active", ?, ?, NOW())'
+        );
+        $ins->execute([$companyId, $title, (string)$r['mime'], $text, $chars, $userId, $url]);
+        return (int)$db->lastInsertId();
+    } catch (Throwable $e) {
+        error_log('[AiServe kb_upsert_from_url] ' . $e->getMessage());
+        return null;
+    }
 }

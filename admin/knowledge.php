@@ -118,6 +118,53 @@ if (is_post()) {
             log_activity($companyId, (int)$current_user['id'], 'ai_model_updated', 'company', $companyId, $tier);
             $msg = 'AI model set to ' . ucfirst($tier) . '. It takes effect on the next AI reply.';
         }
+    } elseif ($action === 'add_url' && user_can_edit_settings($current_user)) {
+        $url   = trim((string)($_POST['url']   ?? ''));
+        $title = trim((string)($_POST['title'] ?? ''));
+        if (!filter_var($url, FILTER_VALIDATE_URL)) {
+            $err = 'Enter a valid http(s) URL.';
+        } else {
+            $newId = kb_upsert_from_url($companyId, (int)$current_user['id'], $url, $title ?: null);
+            if ($newId) {
+                log_activity($companyId, (int)$current_user['id'], 'kb_url_added', 'knowledge_base', $newId, $url);
+                $msg = 'Fetched and saved. Refresh anytime from the article row.';
+            } else {
+                $err = 'Could not fetch that URL — it may be JS-rendered, blocked, or unreachable from our server.';
+            }
+        }
+    } elseif ($action === 'refresh_url' && $id > 0 && user_can_edit_settings($current_user)) {
+        $u = $db->prepare('SELECT source_url FROM knowledge_base WHERE id = ? AND company_id = ?');
+        $u->execute([$id, $companyId]);
+        $srcUrl = (string)($u->fetchColumn() ?: '');
+        if ($srcUrl === '') {
+            $err = 'This article has no source URL to refresh.';
+        } else {
+            $newId = kb_upsert_from_url($companyId, (int)$current_user['id'], $srcUrl);
+            $msg = $newId ? 'Refreshed from URL.' : 'Refresh failed — URL may be unreachable.';
+            if (!$newId) $err = $msg;
+        }
+    } elseif ($action === 'qa_add' && user_can_edit_settings($current_user)) {
+        $q   = mb_substr(trim((string)($_POST['question'] ?? '')), 0, 500);
+        $a   = trim((string)($_POST['answer'] ?? ''));
+        $tag = mb_substr(trim((string)($_POST['tag'] ?? '')), 0, 60);
+        if ($q === '' || $a === '') {
+            $err = 'Both question and answer are required.';
+        } else {
+            $db->prepare(
+                'INSERT INTO kb_qa_pairs (company_id, question, answer, tag, created_by)
+                 VALUES (?, ?, ?, ?, ?)'
+            )->execute([$companyId, $q, $a, $tag ?: null, (int)$current_user['id']]);
+            log_activity($companyId, (int)$current_user['id'], 'kb_qa_added', 'kb_qa_pairs', (int)$db->lastInsertId());
+            $msg = 'Q&A pair saved.';
+        }
+    } elseif ($action === 'qa_delete' && $id > 0 && user_can_edit_settings($current_user)) {
+        $db->prepare('DELETE FROM kb_qa_pairs WHERE id = ? AND company_id = ?')->execute([$id, $companyId]);
+        $msg = 'Q&A pair deleted.';
+    } elseif ($action === 'qa_toggle' && $id > 0 && user_can_edit_settings($current_user)) {
+        $db->prepare(
+            'UPDATE kb_qa_pairs SET status = IF(status = "active","inactive","active")
+             WHERE id = ? AND company_id = ?'
+        )->execute([$id, $companyId]);
     } elseif ($action === 'save_model_by_feature' && user_can_edit_settings($current_user)) {
         // Per-feature model override — one dropdown per feature. Empty
         // value means "fall back to workspace default", stored as
@@ -181,6 +228,16 @@ $stmt = $db->prepare(
 );
 $stmt->execute([$companyId]);
 $articles = $stmt->fetchAll();
+
+// Q&A pairs — silently skip if the phase-47 table isn't in yet.
+$qaPairs = [];
+try {
+    $qs = $db->prepare(
+        'SELECT * FROM kb_qa_pairs WHERE company_id = ? ORDER BY id DESC LIMIT 200'
+    );
+    $qs->execute([$companyId]);
+    $qaPairs = $qs->fetchAll();
+} catch (Throwable $e) { /* pre-phase47 = empty */ }
 
 $totalActiveChars = 0;
 foreach ($articles as $a) {
@@ -429,6 +486,98 @@ function wsApplyPreset(text) {
     </div>
   </form>
 </div>
+
+<!-- =====================================================
+     🌐 Add from URL — one-click ingest of a webpage or PDF URL
+     ===================================================== -->
+<?php if (user_can_edit_settings($current_user)): ?>
+<div class="card" style="border-left:3px solid #0ea5e9;">
+  <h3>🌐 Add from URL <small class="muted">(webpage or PDF)</small></h3>
+  <p class="muted small">
+    Paste a URL — your business website, a blog post, a shipping-policy PDF —
+    and we fetch, extract clean text, and save it as a knowledge base article.
+    Refresh anytime from the article row if the source page changes.
+  </p>
+  <form method="post" class="form-grid" style="grid-template-columns: 1fr 1fr 120px; gap: 8px; align-items: end;">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="add_url">
+    <label>URL
+      <input type="url" name="url" required placeholder="https://your-business.com/faq">
+    </label>
+    <label>Title <small class="muted">(optional — auto-detected)</small>
+      <input type="text" name="title" placeholder="e.g. Shipping FAQ">
+    </label>
+    <div>
+      <button class="btn btn-primary" type="submit">🌐 Fetch + save</button>
+    </div>
+  </form>
+</div>
+
+<!-- =====================================================
+     🎯 Q&A pairs — high-signal short-form entries
+     ===================================================== -->
+<div class="card" style="border-left:3px solid #f59e0b;">
+  <h3>🎯 Q&amp;A pairs <small class="muted">(high-signal FAQ entries)</small></h3>
+  <p class="muted small">
+    Short question + answer pairs the AI treats as gold. Use these for the
+    top ~30 questions your team gets every day (delivery cost, hours, address,
+    return policy). AI prompts inject Q&amp;A pairs BEFORE longer articles so
+    the exact answer is right on top.
+  </p>
+  <form method="post" class="form-grid" style="grid-template-columns: 1fr 2fr 120px 120px; gap: 8px; align-items: end;">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="qa_add">
+    <label>Question
+      <input type="text" name="question" required maxlength="500"
+             placeholder="e.g. Berapa harga delivery ke Sabah?">
+    </label>
+    <label>Answer
+      <input type="text" name="answer" required
+             placeholder="e.g. RM 15 for East Malaysia. Free above RM 200.">
+    </label>
+    <label>Tag <small class="muted">(optional)</small>
+      <input type="text" name="tag" maxlength="60" placeholder="shipping">
+    </label>
+    <div>
+      <button class="btn btn-primary" type="submit">+ Add</button>
+    </div>
+  </form>
+
+  <?php if ($qaPairs): ?>
+    <table class="data-table" style="margin-top: 14px; font-size: 13px;">
+      <thead>
+        <tr><th>Question</th><th>Answer</th><th>Tag</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody>
+        <?php foreach ($qaPairs as $qa): ?>
+          <tr <?= $qa['status'] !== 'active' ? 'style="opacity:0.55;"' : '' ?>>
+            <td><strong><?= e((string)$qa['question']) ?></strong></td>
+            <td class="muted small"><?= e(mb_substr((string)$qa['answer'], 0, 200)) ?><?= mb_strlen((string)$qa['answer']) > 200 ? '…' : '' ?></td>
+            <td><?php if ($qa['tag']): ?><span style="background:#eef2ff; color:#3730a3; padding:2px 8px; border-radius:999px; font-size:11px;"><?= e((string)$qa['tag']) ?></span><?php endif; ?></td>
+            <td><?= status_badge($qa['status']) ?></td>
+            <td class="actions">
+              <form method="post" style="display:inline">
+                <?= csrf_field() ?>
+                <input type="hidden" name="action" value="qa_toggle">
+                <input type="hidden" name="id" value="<?= (int)$qa['id'] ?>">
+                <button class="btn btn-sm" type="submit"><?= $qa['status'] === 'active' ? 'Disable' : 'Enable' ?></button>
+              </form>
+              <form method="post" style="display:inline" onsubmit="return confirm('Delete this Q&A?');">
+                <?= csrf_field() ?>
+                <input type="hidden" name="action" value="qa_delete">
+                <input type="hidden" name="id" value="<?= (int)$qa['id'] ?>">
+                <button class="btn btn-sm btn-danger" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+  <?php else: ?>
+    <p class="muted small" style="margin-top:10px;">No Q&A pairs yet — add your first above.</p>
+  <?php endif; ?>
+</div>
+<?php endif; ?>
 <?php endif; ?>
 
 <div class="card">
@@ -455,7 +604,16 @@ function wsApplyPreset(text) {
               <?php endif; ?>
             </td>
             <td class="muted small">
-              <?= $isAuto ? 'auto-distilled' : e($a['source_filename'] ?? 'pasted') ?>
+              <?php if ($isAuto): ?>
+                auto-distilled
+              <?php elseif (!empty($a['source_url'])): ?>
+                <span title="<?= e((string)$a['source_url']) ?>">🌐 <?= e(mb_substr((string)parse_url((string)$a['source_url'], PHP_URL_HOST), 0, 24)) ?></span>
+                <?php if (!empty($a['source_last_fetched_at'])): ?>
+                  <br><small>fetched <?= e(fmt_dt($a['source_last_fetched_at'])) ?></small>
+                <?php endif; ?>
+              <?php else: ?>
+                <?= e($a['source_filename'] ?? 'pasted') ?>
+              <?php endif; ?>
             </td>
             <td><?= number_format((int)$a['content_chars']) ?></td>
             <td><?= status_badge($a['status']) ?></td>
@@ -468,6 +626,15 @@ function wsApplyPreset(text) {
                 <input type="hidden" name="id" value="<?= (int)$a['id'] ?>">
                 <button class="btn btn-sm" type="submit"><?= $a['status'] === 'active' ? 'Disable' : 'Enable' ?></button>
               </form>
+              <?php if (!empty($a['source_url']) && user_can_edit_settings($current_user)): ?>
+                <form method="post" style="display:inline"
+                      onsubmit="return confirm('Re-fetch this article from its source URL? Any local edits will be overwritten.');">
+                  <?= csrf_field() ?>
+                  <input type="hidden" name="action" value="refresh_url">
+                  <input type="hidden" name="id" value="<?= (int)$a['id'] ?>">
+                  <button class="btn btn-sm" type="submit" title="Re-fetch from source URL">↻ Refresh</button>
+                </form>
+              <?php endif; ?>
               <?php if (user_can_edit_settings($current_user) && !$isAuto): ?>
                 <form method="post" style="display:inline" onsubmit="return confirm('Delete this article?');">
                   <?= csrf_field() ?>

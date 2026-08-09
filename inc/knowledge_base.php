@@ -269,6 +269,93 @@ function kb_fetch_url_text(string $url): array
 }
 
 /**
+ * Claude Vision — OCR + describe an uploaded image, return extracted
+ * text suitable for a KB article. Uses the workspace's own Anthropic
+ * key + costs are logged under feature = 'kb_image_extract'.
+ *
+ * Returns ['ok' => bool, 'text' => string, 'title' => string, 'error' => string].
+ */
+function kb_extract_from_image(int $companyId, string $imgBytes, string $mime): array
+{
+    require_once __DIR__ . '/whatsapp_api.php';
+    require_once __DIR__ . '/ai_api.php';
+    require_once __DIR__ . '/ai_billing.php';
+
+    $company = load_company_settings($companyId);
+    if (!$company || empty($company['ai_enabled'])) {
+        return ['ok' => false, 'error' => 'AI is not enabled for this workspace.'];
+    }
+    $apiKey = ai_api_key($company);
+    if ($apiKey === '') return ['ok' => false, 'error' => 'Anthropic key missing.'];
+
+    // Anthropic wants base64 for image content blocks.
+    $b64 = base64_encode($imgBytes);
+    if (!in_array($mime, ['image/jpeg','image/png','image/webp','image/gif'], true)) {
+        return ['ok' => false, 'error' => 'Unsupported image MIME.'];
+    }
+
+    // Vision needs a real model — a Haiku default might not support
+    // images. Use Sonnet by default for extract, but respect a per-
+    // feature override if the operator set one.
+    $model = ai_model_for_feature($company, 'kb_image_extract');
+    if (!$model || str_contains($model, 'haiku')) {
+        $model = 'claude-sonnet-5';
+    }
+
+    $payload = [
+        'model'      => $model,
+        'max_tokens' => 1200,
+        'messages'   => [[
+            'role'    => 'user',
+            'content' => [
+                ['type' => 'image', 'source' => [
+                    'type' => 'base64', 'media_type' => $mime, 'data' => $b64,
+                ]],
+                ['type' => 'text', 'text' =>
+                    "Extract every readable piece of text from this image (menu items, prices, "
+                  . "opening hours, policies, contact info — whatever's there). Format as a clean "
+                  . "markdown article suitable for a customer-service FAQ. Preserve prices, phone "
+                  . "numbers, times exactly. If the image has multiple sections, use ## headings. "
+                  . "Start your reply with a single line: 'TITLE: <short 4-8 word title>' then a "
+                  . "blank line, then the article body. No preamble."],
+            ],
+        ]],
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_TIMEOUT => 45,
+        CURLOPT_HTTPHEADER => [
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: 2023-06-01',
+            'Content-Type: application/json',
+        ],
+        CURLOPT_POSTFIELDS => json_encode($payload),
+    ]);
+    $resp = curl_exec($ch);
+    curl_close($ch);
+    $data = json_decode((string)$resp, true);
+    $raw  = trim((string)($data['content'][0]['text'] ?? ''));
+    if ($raw === '') return ['ok' => false, 'error' => 'Vision returned empty response.'];
+
+    if (!empty($data['usage'])) {
+        ai_log_usage($companyId, null, 'kb_image_extract', $data['usage'], (string)($data['model'] ?? $model));
+    }
+
+    // Parse "TITLE: …" line off the top.
+    $title = '';
+    $body  = $raw;
+    if (preg_match('/^TITLE:\s*(.+?)\r?\n\r?\n(.+)$/s', $raw, $m)) {
+        $title = trim($m[1]);
+        $body  = trim($m[2]);
+    }
+    if (mb_strlen($body) > KB_MAX_CHARS_PER_ITEM) {
+        $body = mb_substr($body, 0, KB_MAX_CHARS_PER_ITEM) . '…';
+    }
+    return ['ok' => true, 'title' => $title, 'text' => $body];
+}
+
+/**
  * Fetch a URL and save/update as a KB article. If an existing article
  * with the same source_url exists, refresh it. Otherwise create a new
  * one. Returns the article id or null on failure.

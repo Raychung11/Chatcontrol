@@ -165,6 +165,76 @@ if (is_post()) {
             'UPDATE kb_qa_pairs SET status = IF(status = "active","inactive","active")
              WHERE id = ? AND company_id = ?'
         )->execute([$id, $companyId]);
+    } elseif ($action === 'add_image' && user_can_edit_settings($current_user)) {
+        // 🖼 Image → Claude Vision → extract text + describe → save as
+        // KB article. Great for a photo of a printed price list / menu
+        // board / promo poster.
+        $haveFile = !empty($_FILES['image']) && ($_FILES['image']['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK;
+        $title    = trim((string)($_POST['title'] ?? ''));
+        if (!$haveFile) {
+            $err = 'Upload an image (JPG or PNG) first.';
+        } elseif (!in_array((string)$_FILES['image']['type'], ['image/jpeg','image/png','image/webp','image/gif'], true)) {
+            $err = 'Only JPG / PNG / WebP / GIF supported.';
+        } elseif ((int)$_FILES['image']['size'] > 5 * 1024 * 1024) {
+            $err = 'Image over 5 MB — please compress.';
+        } else {
+            $bin  = (string)file_get_contents($_FILES['image']['tmp_name']);
+            $mime = (string)$_FILES['image']['type'];
+            $r    = kb_extract_from_image($companyId, $bin, $mime);
+            if (!$r['ok']) {
+                $err = 'Vision extract failed: ' . ($r['error'] ?? 'unknown');
+            } else {
+                $useTitle = $title !== '' ? $title : ($r['title'] ?: 'Extracted from image');
+                $ins = $db->prepare(
+                    'INSERT INTO knowledge_base
+                        (company_id, title, source_filename, mime_type, content_text, content_chars, status, created_by)
+                     VALUES (?, ?, ?, ?, ?, ?, "active", ?)'
+                );
+                $ins->execute([$companyId, $useTitle, $_FILES['image']['name'], $mime,
+                              $r['text'], mb_strlen($r['text']), (int)$current_user['id']]);
+                $newId = (int)$db->lastInsertId();
+                log_activity($companyId, (int)$current_user['id'], 'kb_image_added', 'knowledge_base', $newId, $useTitle);
+                $msg = 'Image extracted (' . mb_strlen($r['text']) . ' characters).';
+            }
+        }
+    } elseif ($action === 'add_csv' && user_can_edit_settings($current_user)) {
+        // 📊 CSV → many Q&A pairs. First row is header; expects
+        // "question,answer[,tag]" columns. Skips malformed rows.
+        $haveFile = !empty($_FILES['csv']) && ($_FILES['csv']['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK;
+        if (!$haveFile) {
+            $err = 'Upload a .csv file first.';
+        } else {
+            $fh = @fopen((string)$_FILES['csv']['tmp_name'], 'r');
+            if (!$fh) {
+                $err = 'Could not open the CSV.';
+            } else {
+                $header = fgetcsv($fh) ?: [];
+                $lower  = array_map(fn($h) => mb_strtolower(trim((string)$h)), $header);
+                $qCol   = array_search('question', $lower, true);
+                $aCol   = array_search('answer',   $lower, true);
+                $tCol   = array_search('tag',      $lower, true);
+                if ($qCol === false || $aCol === false) {
+                    $err = 'CSV must have a header row with columns: question, answer (tag is optional).';
+                } else {
+                    $imported = 0;
+                    $ins = $db->prepare(
+                        'INSERT INTO kb_qa_pairs (company_id, question, answer, tag, created_by)
+                         VALUES (?, ?, ?, ?, ?)'
+                    );
+                    while (($row = fgetcsv($fh)) !== false) {
+                        $q = trim((string)($row[$qCol] ?? ''));
+                        $a = trim((string)($row[$aCol] ?? ''));
+                        $t = $tCol !== false ? mb_substr(trim((string)($row[$tCol] ?? '')), 0, 60) : '';
+                        if ($q === '' || $a === '') continue;
+                        $ins->execute([$companyId, mb_substr($q, 0, 500), $a, $t ?: null, (int)$current_user['id']]);
+                        $imported++;
+                    }
+                    log_activity($companyId, (int)$current_user['id'], 'kb_csv_imported', 'kb_qa_pairs', 0, (string)$imported);
+                    $msg = 'Imported ' . $imported . ' Q&A pair(s) from CSV.';
+                }
+                fclose($fh);
+            }
+        }
     } elseif ($action === 'save_model_by_feature' && user_can_edit_settings($current_user)) {
         // Per-feature model override — one dropdown per feature. Empty
         // value means "fall back to workspace default", stored as
@@ -512,6 +582,51 @@ function wsApplyPreset(text) {
     </div>
   </form>
 </div>
+
+<!-- =====================================================
+     🖼 Add from image — Claude Vision OCR
+     ===================================================== -->
+<?php if (user_can_edit_settings($current_user)): ?>
+<div class="card" style="border-left:3px solid #ec4899;">
+  <h3>🖼 Add from image <small class="muted">(printed menu / poster / price list photo)</small></h3>
+  <p class="muted small">
+    Snap or upload a photo of your printed menu, promo poster, or price list. Claude Vision reads
+    every price / item / time and saves it as a KB article. JPG / PNG / WebP up to 5 MB.
+  </p>
+  <form method="post" enctype="multipart/form-data" class="form-grid" style="grid-template-columns: 1fr 1fr 140px; gap: 8px; align-items: end;">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="add_image">
+    <label>Image
+      <input type="file" name="image" required accept="image/jpeg,image/png,image/webp,image/gif">
+    </label>
+    <label>Title <small class="muted">(optional — AI names it)</small>
+      <input type="text" name="title" placeholder="e.g. Wall menu, June 2026">
+    </label>
+    <div>
+      <button class="btn btn-primary" type="submit">🖼 Extract + save</button>
+    </div>
+  </form>
+</div>
+<?php endif; ?>
+
+<!-- =====================================================
+     📊 Import Q&A from CSV
+     ===================================================== -->
+<?php if (user_can_edit_settings($current_user)): ?>
+<div class="card" style="border-left:3px solid #64748b;">
+  <h3>📊 Import Q&amp;A from CSV <small class="muted">(bulk load)</small></h3>
+  <p class="muted small">
+    CSV file with columns <code>question,answer,tag</code> (tag optional). First row is the header.
+    Each valid row becomes one Q&amp;A pair.
+  </p>
+  <form method="post" enctype="multipart/form-data" style="display:flex; gap:8px; align-items:end;">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="add_csv">
+    <input type="file" name="csv" required accept=".csv,text/csv">
+    <button class="btn btn-primary" type="submit">📊 Import CSV</button>
+  </form>
+</div>
+<?php endif; ?>
 
 <!-- =====================================================
      🎯 Q&A pairs — high-signal short-form entries

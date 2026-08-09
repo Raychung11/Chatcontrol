@@ -395,3 +395,186 @@ function kb_upsert_from_url(int $companyId, int $userId, string $url, ?string $o
         return null;
     }
 }
+
+// =====================================================================
+// Google Sheets sync for Q&A pairs.
+//
+// Design: no OAuth. Operator publishes a Google Sheet as CSV via
+// "File → Share → Publish to web → CSV" and pastes the URL. Every sync
+// we fetch the CSV, parse (question, answer[, tag]) rows, wipe every
+// kb_qa_pairs row tagged with THIS sheet's URL, and reinsert. Rows
+// added by hand (source_sheet_url IS NULL) are never touched.
+//
+// Accepts three URL shapes so the operator can paste whatever they have:
+//   - .../pub?output=csv                (the "publish as CSV" URL)
+//   - .../edit#gid=0                    (the normal edit URL — we
+//                                         rewrite to /export?format=csv)
+//   - .../export?format=csv&gid=0       (already-formed export URL)
+// =====================================================================
+
+/**
+ * Rewrite a Google Sheets URL into a CSV-fetchable form. Returns the URL
+ * unchanged if it doesn't match a known pattern.
+ */
+function kb_qa_sheet_normalize_url(string $url): string
+{
+    $url = trim($url);
+    // /edit → /export?format=csv (preserve gid if present in the fragment)
+    if (preg_match('#^(https?://docs\.google\.com/spreadsheets/d/[A-Za-z0-9_-]+)/edit(?:#gid=(\d+))?#i', $url, $m)) {
+        $base = $m[1] . '/export?format=csv';
+        return isset($m[2]) && $m[2] !== '' ? $base . '&gid=' . $m[2] : $base;
+    }
+    return $url;
+}
+
+/**
+ * Fetch a Google Sheet CSV URL and return the raw CSV text.
+ * @return array{ok:bool, csv?:string, error?:string}
+ */
+function kb_qa_sheet_fetch_csv(string $url): array
+{
+    $url = kb_qa_sheet_normalize_url($url);
+    if (!filter_var($url, FILTER_VALIDATE_URL) || !preg_match('#^https?://#i', $url)) {
+        return ['ok' => false, 'error' => 'Sheet URL is not a valid http(s) URL.'];
+    }
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 5,
+        CURLOPT_TIMEOUT        => 20,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_USERAGENT      => 'AiServe-KB-Bot/1.0 (+https://inbox.aiserve.my)',
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+    $body   = curl_exec($ch);
+    $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err    = curl_error($ch);
+    curl_close($ch);
+    if ($body === false || $status >= 400) {
+        return ['ok' => false, 'error' => 'Fetch failed (HTTP ' . $status . '): ' . ($err ?: 'sheet may not be published to the web')];
+    }
+    if (mb_strlen($body) > KB_MAX_BYTES_PER_FILE) {
+        return ['ok' => false, 'error' => 'Sheet is over the 5 MB fetch cap — split into smaller sheets.'];
+    }
+    // A published sheet returns text/csv; an unpublished / private one
+    // returns text/html with a login page. Detect the common failure so
+    // the error is friendlier than a random parse.
+    if (str_starts_with(ltrim($body), '<')) {
+        return ['ok' => false, 'error' => 'Sheet is not published as CSV. In Google Sheets: File → Share → Publish to web → choose the tab, format CSV, then click Publish.'];
+    }
+    return ['ok' => true, 'csv' => (string)$body];
+}
+
+/**
+ * Parse CSV text into [{question, answer, tag}, …]. First row is treated
+ * as a header when it contains "question" (case-insensitive); otherwise
+ * every row is a data row. Column order tolerated: question|answer|tag,
+ * a|q|tag, or plain 2-3 columns.
+ *
+ * @return array<int, array{question:string, answer:string, tag:?string}>
+ */
+function kb_qa_sheet_parse_csv(string $csv): array
+{
+    $csv  = str_replace(["\r\n", "\r"], "\n", $csv);
+    $rows = [];
+    $fh   = fopen('php://memory', 'r+');
+    fwrite($fh, $csv);
+    rewind($fh);
+    while (($row = fgetcsv($fh, 0, ',', '"', '\\')) !== false) {
+        if ($row === [null] || $row === false) continue;
+        $rows[] = $row;
+    }
+    fclose($fh);
+    if (!$rows) return [];
+
+    // Header detection + column mapping.
+    $qIdx = 0; $aIdx = 1; $tIdx = 2;
+    $first = array_map(fn($v) => strtolower(trim((string)$v)), $rows[0]);
+    $hasHeader = false;
+    foreach ($first as $i => $h) {
+        if (in_array($h, ['question', 'q', 'ask'], true)) { $qIdx = $i; $hasHeader = true; }
+        elseif (in_array($h, ['answer', 'a', 'reply', 'response'], true)) { $aIdx = $i; $hasHeader = true; }
+        elseif (in_array($h, ['tag', 'category', 'label'], true)) { $tIdx = $i; $hasHeader = true; }
+    }
+    if ($hasHeader) array_shift($rows);
+
+    $out = [];
+    foreach ($rows as $r) {
+        $q = trim((string)($r[$qIdx] ?? ''));
+        $a = trim((string)($r[$aIdx] ?? ''));
+        if ($q === '' || $a === '') continue;
+        if (mb_strlen($q) > 500)  $q = mb_substr($q, 0, 500);
+        // kb_qa_pairs.answer is TEXT — cap at a generous 8 KB for safety.
+        if (mb_strlen($a) > 8000) $a = mb_substr($a, 0, 8000);
+        $tag = trim((string)($r[$tIdx] ?? ''));
+        if ($tag !== '' && mb_strlen($tag) > 60) $tag = mb_substr($tag, 0, 60);
+        $out[] = ['question' => $q, 'answer' => $a, 'tag' => $tag !== '' ? $tag : null];
+    }
+    return $out;
+}
+
+/**
+ * Sync one configured sheet — fetch, parse, wipe rows tagged with this
+ * sheet's URL, reinsert fresh. Updates last_synced_at / last_synced_count
+ * / last_error on the kb_qa_sheets row.
+ *
+ * @return array{ok:bool, count:int, error?:string}
+ */
+function kb_sync_qa_sheet(int $sheetId): array
+{
+    $db = aiserve_db();
+    $s  = $db->prepare('SELECT id, company_id, sheet_url FROM kb_qa_sheets WHERE id = ? LIMIT 1');
+    $s->execute([$sheetId]);
+    $sheet = $s->fetch();
+    if (!$sheet) return ['ok' => false, 'count' => 0, 'error' => 'Sheet not found.'];
+
+    $companyId = (int)$sheet['company_id'];
+    $url       = (string)$sheet['sheet_url'];
+
+    $fetch = kb_qa_sheet_fetch_csv($url);
+    if (!$fetch['ok']) {
+        $db->prepare('UPDATE kb_qa_sheets SET last_error = ?, last_synced_at = NOW() WHERE id = ?')
+           ->execute([mb_substr((string)$fetch['error'], 0, 500), $sheetId]);
+        return ['ok' => false, 'count' => 0, 'error' => (string)$fetch['error']];
+    }
+    $pairs = kb_qa_sheet_parse_csv((string)$fetch['csv']);
+    if (!$pairs) {
+        $err = 'CSV had no question/answer rows. Row 1 should be "question,answer[,tag]" or a header line with those column names.';
+        $db->prepare('UPDATE kb_qa_sheets SET last_error = ?, last_synced_at = NOW(), last_synced_count = 0 WHERE id = ?')
+           ->execute([$err, $sheetId]);
+        return ['ok' => false, 'count' => 0, 'error' => $err];
+    }
+
+    try {
+        $db->beginTransaction();
+        // Wipe only rows tagged with THIS sheet URL — hand-added ones
+        // (source_sheet_url IS NULL) are safe.
+        $db->prepare('DELETE FROM kb_qa_pairs WHERE company_id = ? AND source_sheet_url = ?')
+           ->execute([$companyId, $url]);
+
+        $ins = $db->prepare(
+            'INSERT INTO kb_qa_pairs
+                (company_id, question, answer, tag, status, source_sheet_url)
+             VALUES (?, ?, ?, ?, "active", ?)'
+        );
+        foreach ($pairs as $p) {
+            $ins->execute([$companyId, $p['question'], $p['answer'], $p['tag'], $url]);
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        $err = 'DB error during sync: ' . $e->getMessage();
+        $db->prepare('UPDATE kb_qa_sheets SET last_error = ?, last_synced_at = NOW() WHERE id = ?')
+           ->execute([mb_substr($err, 0, 500), $sheetId]);
+        return ['ok' => false, 'count' => 0, 'error' => $err];
+    }
+
+    $db->prepare(
+        'UPDATE kb_qa_sheets
+         SET last_error = NULL, last_synced_at = NOW(), last_synced_count = ?
+         WHERE id = ?'
+    )->execute([count($pairs), $sheetId]);
+
+    return ['ok' => true, 'count' => count($pairs)];
+}

@@ -235,6 +235,63 @@ if (is_post()) {
                 fclose($fh);
             }
         }
+    } elseif ($action === 'sheet_add' && user_can_edit_settings($current_user)) {
+        // 📗 Add a Google Sheet source for Q&A sync. We store the URL
+        // as-pasted (normalised at fetch time). "Sync now" runs
+        // immediately so the operator sees the row count.
+        $name = mb_substr(trim((string)($_POST['name'] ?? '')), 0, 120);
+        $url  = trim((string)($_POST['sheet_url'] ?? ''));
+        if ($name === '' || $url === '') {
+            $err = 'Both a friendly name and the sheet URL are required.';
+        } elseif (!filter_var($url, FILTER_VALIDATE_URL)) {
+            $err = 'Enter a valid http(s) URL.';
+        } else {
+            $ins = $db->prepare(
+                'INSERT INTO kb_qa_sheets (company_id, name, sheet_url, created_by)
+                 VALUES (?, ?, ?, ?)'
+            );
+            $ins->execute([$companyId, $name, $url, (int)$current_user['id']]);
+            $sheetId = (int)$db->lastInsertId();
+            log_activity($companyId, (int)$current_user['id'], 'kb_qa_sheet_added', 'kb_qa_sheets', $sheetId, $name);
+            // First sync right away so the operator sees whether the URL works.
+            $r = kb_sync_qa_sheet($sheetId);
+            if ($r['ok']) {
+                $msg = 'Sheet added. Synced ' . (int)$r['count'] . ' Q&A pair(s).';
+            } else {
+                $err = 'Sheet added but first sync failed: ' . (string)($r['error'] ?? 'unknown');
+            }
+        }
+    } elseif ($action === 'sheet_sync' && $id > 0 && user_can_edit_settings($current_user)) {
+        // Manual "sync now" from the row action.
+        $chk = $db->prepare('SELECT id FROM kb_qa_sheets WHERE id = ? AND company_id = ?');
+        $chk->execute([$id, $companyId]);
+        if (!$chk->fetchColumn()) {
+            $err = 'Sheet not found.';
+        } else {
+            $r = kb_sync_qa_sheet($id);
+            $msg = $r['ok']
+                ? 'Synced ' . (int)$r['count'] . ' Q&A pair(s).'
+                : '';
+            if (!$r['ok']) $err = 'Sync failed: ' . (string)($r['error'] ?? 'unknown');
+        }
+    } elseif ($action === 'sheet_toggle' && $id > 0 && user_can_edit_settings($current_user)) {
+        $db->prepare(
+            'UPDATE kb_qa_sheets SET active = IF(active = 1, 0, 1)
+             WHERE id = ? AND company_id = ?'
+        )->execute([$id, $companyId]);
+    } elseif ($action === 'sheet_delete' && $id > 0 && user_can_edit_settings($current_user)) {
+        // Delete the sheet AND wipe the Q&A pairs sourced from it.
+        // Hand-added rows (source_sheet_url IS NULL) stay untouched.
+        $u = $db->prepare('SELECT sheet_url FROM kb_qa_sheets WHERE id = ? AND company_id = ?');
+        $u->execute([$id, $companyId]);
+        $sheetUrl = (string)($u->fetchColumn() ?: '');
+        if ($sheetUrl !== '') {
+            $db->prepare('DELETE FROM kb_qa_pairs WHERE company_id = ? AND source_sheet_url = ?')
+               ->execute([$companyId, $sheetUrl]);
+        }
+        $db->prepare('DELETE FROM kb_qa_sheets WHERE id = ? AND company_id = ?')->execute([$id, $companyId]);
+        log_activity($companyId, (int)$current_user['id'], 'kb_qa_sheet_deleted', 'kb_qa_sheets', $id);
+        $msg = 'Sheet removed and its Q&A pairs wiped. Hand-added pairs kept.';
     } elseif ($action === 'save_model_by_feature' && user_can_edit_settings($current_user)) {
         // Per-feature model override — one dropdown per feature. Empty
         // value means "fall back to workspace default", stored as
@@ -308,6 +365,16 @@ try {
     $qs->execute([$companyId]);
     $qaPairs = $qs->fetchAll();
 } catch (Throwable $e) { /* pre-phase47 = empty */ }
+
+// Google Sheets sync configs — pre-phase-48 = empty.
+$qaSheets = [];
+try {
+    $ss = $db->prepare(
+        'SELECT * FROM kb_qa_sheets WHERE company_id = ? ORDER BY id DESC'
+    );
+    $ss->execute([$companyId]);
+    $qaSheets = $ss->fetchAll();
+} catch (Throwable $e) { /* pre-phase48 = empty */ }
 
 $totalActiveChars = 0;
 foreach ($articles as $a) {
@@ -625,6 +692,117 @@ function wsApplyPreset(text) {
     <input type="file" name="csv" required accept=".csv,text/csv">
     <button class="btn btn-primary" type="submit">📊 Import CSV</button>
   </form>
+</div>
+<?php endif; ?>
+
+<!-- =====================================================
+     📗 Google Sheets sync — keep Q&A pairs in sync with a sheet
+     ===================================================== -->
+<?php if (user_can_edit_settings($current_user)): ?>
+<div class="card" style="border-left:3px solid #16a34a;">
+  <h3>📗 Google Sheets sync <small class="muted">(bulk edit Q&amp;A in a familiar tool)</small></h3>
+  <p class="muted small">
+    Keep a Google Sheet as your source of truth for Q&amp;A pairs. Every hour (and on
+    "Sync now") we pull the latest rows and replace <strong>only the pairs that came from
+    this sheet</strong>. Hand-added pairs above stay untouched.
+  </p>
+  <details style="margin: 6px 0 12px; font-size: 12.5px;">
+    <summary style="cursor:pointer; color:#15803d; font-weight:600;">📖 How to publish a Google Sheet as CSV</summary>
+    <ol style="margin: 8px 0 4px 20px; padding: 0; color:#475569;">
+      <li>Open your sheet — column A = <code>question</code>, column B = <code>answer</code>, optional column C = <code>tag</code>. First row can be a header (recommended).</li>
+      <li>In Google Sheets: <strong>File → Share → Publish to web</strong>.</li>
+      <li>Under <em>Link</em>, pick the sheet tab, choose format <strong>Comma-separated values (.csv)</strong>, click <strong>Publish</strong>.</li>
+      <li>Copy the URL you get (looks like <code>…/pub?output=csv</code>) and paste it below.</li>
+    </ol>
+    <div class="muted small" style="margin-top:6px;">
+      You can also paste the normal <code>/edit</code> URL — we'll rewrite it. Sheet must be either published-to-web or link-shareable "Anyone with the link".
+    </div>
+  </details>
+
+  <form method="post" class="form-grid" style="grid-template-columns: 1fr 2fr 140px; gap: 8px; align-items: end;">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="sheet_add">
+    <label>Friendly name
+      <input type="text" name="name" required maxlength="120" placeholder="e.g. Main FAQ sheet">
+    </label>
+    <label>Sheet URL <small class="muted">(published CSV or /edit URL)</small>
+      <input type="url" name="sheet_url" required placeholder="https://docs.google.com/spreadsheets/d/…/pub?output=csv">
+    </label>
+    <div>
+      <button class="btn btn-primary" type="submit">📗 Add + sync now</button>
+    </div>
+  </form>
+
+  <?php if ($qaSheets): ?>
+    <table class="data-table" style="margin-top: 14px; font-size: 13px;">
+      <thead>
+        <tr>
+          <th>Sheet</th><th>Last synced</th><th>Rows</th><th>Status</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <?php foreach ($qaSheets as $sheet):
+          $active = (int)($sheet['active'] ?? 0) === 1;
+          $err    = (string)($sheet['last_error'] ?? '');
+        ?>
+          <tr <?= !$active ? 'style="opacity:0.55;"' : '' ?>>
+            <td>
+              <strong><?= e((string)$sheet['name']) ?></strong><br>
+              <a href="<?= e((string)$sheet['sheet_url']) ?>" target="_blank" rel="noopener" class="muted small" title="<?= e((string)$sheet['sheet_url']) ?>">
+                🔗 <?= e(mb_substr((string)$sheet['sheet_url'], 0, 50)) ?><?= mb_strlen((string)$sheet['sheet_url']) > 50 ? '…' : '' ?>
+              </a>
+            </td>
+            <td class="muted small">
+              <?php if (!empty($sheet['last_synced_at'])): ?>
+                <?= e(fmt_dt($sheet['last_synced_at'])) ?>
+              <?php else: ?>
+                <em>never</em>
+              <?php endif; ?>
+              <?php if ($err !== ''): ?>
+                <br><span style="color:#b91c1c; font-size:11px;" title="<?= e($err) ?>">⚠ <?= e(mb_substr($err, 0, 80)) ?></span>
+              <?php endif; ?>
+            </td>
+            <td>
+              <?= isset($sheet['last_synced_count']) && $sheet['last_synced_count'] !== null ? (int)$sheet['last_synced_count'] : '—' ?>
+            </td>
+            <td>
+              <?php if ($active): ?>
+                <span class="badge badge-open" style="background:#dcfce7;color:#14532d;">Active</span>
+              <?php else: ?>
+                <span class="badge">Paused</span>
+              <?php endif; ?>
+            </td>
+            <td class="actions">
+              <form method="post" style="display:inline">
+                <?= csrf_field() ?>
+                <input type="hidden" name="action" value="sheet_sync">
+                <input type="hidden" name="id" value="<?= (int)$sheet['id'] ?>">
+                <button class="btn btn-sm btn-primary" type="submit" title="Fetch the sheet and reinsert every Q&amp;A row now">↻ Sync now</button>
+              </form>
+              <form method="post" style="display:inline">
+                <?= csrf_field() ?>
+                <input type="hidden" name="action" value="sheet_toggle">
+                <input type="hidden" name="id" value="<?= (int)$sheet['id'] ?>">
+                <button class="btn btn-sm" type="submit"><?= $active ? 'Pause' : 'Resume' ?></button>
+              </form>
+              <form method="post" style="display:inline"
+                    onsubmit="return confirm('Delete this sheet AND wipe every Q&A pair sourced from it? Hand-added pairs stay safe.');">
+                <?= csrf_field() ?>
+                <input type="hidden" name="action" value="sheet_delete">
+                <input type="hidden" name="id" value="<?= (int)$sheet['id'] ?>">
+                <button class="btn btn-sm btn-danger" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+    <p class="muted small" style="margin-top:8px;">
+      🕒 Auto-sync runs hourly via the <code>cron/sync_qa_sheets.php</code> cron.
+    </p>
+  <?php else: ?>
+    <p class="muted small" style="margin-top:10px;">No sheets configured yet — paste one above and we'll sync it every hour.</p>
+  <?php endif; ?>
 </div>
 <?php endif; ?>
 

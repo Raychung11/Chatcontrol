@@ -402,6 +402,58 @@ Portal AND per-channel widget both installable:
 - Stuck instance? Kill via SQL: `UPDATE flow_instances SET status='cancelled' WHERE conversation_id=<n> AND status IN ('running','waiting')` — the next customer msg starts a fresh flow.
 - Templates library: /admin/flows.php has 10+ prebuilt (F&B order, reservation, appointment, FAQ router, lead capture, feedback survey, order lookup, delivery tracking, birthday opt-in, refund).
 
+## Recipe: route a customer to a branch by keyword
+
+When operators ask "how do I send KL customers to the KL branch" / "route by outlet" / "auto-assign to the right shop", give them one of these two flow shapes. Both use the Assign-to-branch node (tags the CONTACT so every future message from that customer also routes to the branch, and rotation prioritises agents whose primary_branch_id matches).
+
+### Shape A — silent keyword detection (recommended, fastest)
+Customer just mentions their outlet in ANY message → routed silently.
+
+```
+[Branch node]  (entry)
+  ├─ keyword "kl" / "klcc" / "sentral"   → [Assign to branch: KL]      → [Send: "Routed to KL 🙌"]      → End
+  ├─ keyword "penang" / "gurney"         → [Assign to branch: Penang]  → [Send: "Routed to Penang ✅"] → End
+  ├─ keyword "jelutong"                  → [Assign to branch: Jelutong]→ [Send: "Routed to Jelutong"]  → End
+  └─ default                             → [Send: "Which outlet? KL / Penang / Jelutong"] → End
+```
+
+Flow config:
+- Name: "Branch router"
+- Trigger: **keyword** (only fires when a branch word appears — doesn't hijack every message)
+- Trigger keywords: `kl,klcc,sentral,penang,gurney,jelutong`
+- Entry node: the Branch node
+
+### Shape B — ask first (safer for confused customers)
+Fires on brand-new conversations, asks which outlet with a numbered list.
+
+```
+[Send: "1️⃣ KL   2️⃣ Penang   3️⃣ Jelutong — reply with the number"]
+[Wait for reply → var: pick]
+[Branch on {{pick}}]
+  ├─ keyword "1" / "kl"       → [Assign to branch: KL]      → [Send: "Routed to KL ✅"]      → End
+  ├─ keyword "2" / "penang"   → [Assign to branch: Penang]  → [Send: "Routed to Penang ✅"] → End
+  ├─ keyword "3" / "jelutong" → [Assign to branch: Jelutong]→ [Send: "Routed to Jelutong ✅"]→ End
+  └─ default                  → [Send: "Reply 1, 2, or 3"] → loops back to Wait
+```
+
+Trigger: **new_conversation**.
+
+### How to build Shape A in the editor (~5 min)
+1. /admin/flows.php → **+ New flow** → set name, trigger=keyword, keywords list, save
+2. **+ Add node** → **Branch** → save (this is the entry)
+3. **+ Add node** → **Assign to branch** → pick the branch → save. Note its id.
+4. **+ Add node** → **Send message** → confirmation text → Next=end → save. Then go back to the assign node and set its Next=this send node.
+5. Repeat 3–4 for each branch.
+6. **+ Add node** → **Send message** → "Which outlet? Reply KL / Penang / Jelutong" → the fallback.
+7. Open the Branch node → **Edges** panel → add one edge per keyword pointing to the matching assign node → add a `default` edge to the fallback → save edges.
+8. Top of flow → Entry node = Branch node, Status = Active → save.
+
+### Prereq check
+Branches must exist at /admin/branches.php first (super_admin only). If none, the Assign-to-branch node's dropdown will be empty and the flow can't be built.
+
+### After it's live
+Message the widget with something like "hi from KL" — check the contact side panel in /inbox/chat.php: branch tag should flip to KL. Every future message from that customer also lands under KL.
+
 ## Broadcasts quick-reference
 
 - Meta Cloud API path: outside the 24-hour window MUST use an approved template (submit at /admin/templates.php, Meta reviews 1–24h). Raw text only works if the customer messaged in the last 24h.

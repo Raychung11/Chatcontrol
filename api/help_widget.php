@@ -85,7 +85,24 @@ if ($apiKey === '') {
 $model = ai_model_for_feature($company, 'help_widget');
 if ($model === '') $model = 'claude-haiku-4-5';
 
-$sys = help_widget_system_prompt($path, $title, (string)($user['name'] ?? 'there'));
+// Pull LIVE broadcast pricing so the AI never quotes a stale rate. If
+// the operator changes /admin/broadcast_pricing.php, the very next
+// help question already reflects it.
+$currency  = platform_setting('pricing_currency', 'RM');
+$freeLimit = (int)platform_setting('broadcast_free_limit', '1000');
+$paidLimit = (int)platform_setting('broadcast_paid_limit', '10000');
+$paidPrice = (float)platform_setting('broadcast_paid_price', '480');
+$paygRate  = (float)platform_setting('broadcast_payg_per_recipient', '0.05');
+$yearlyOff = (int)platform_setting('broadcast_yearly_discount_pct', '10');
+
+$sys = help_widget_system_prompt($path, $title, (string)($user['name'] ?? 'there'), [
+    'currency'   => $currency,
+    'free_limit' => $freeLimit,
+    'paid_limit' => $paidLimit,
+    'paid_price' => $paidPrice,
+    'payg_rate'  => $paygRate,
+    'yearly_off' => $yearlyOff,
+]);
 
 $payload = [
     'model'      => $model,
@@ -148,8 +165,16 @@ echo json_encode([
  * feature map of the operator-facing platform, plus the current page
  * URL so Claude can point the operator at the exact link.
  */
-function help_widget_system_prompt(string $path, string $pageTitle, string $userName): string
+function help_widget_system_prompt(string $path, string $pageTitle, string $userName, array $pricing): string
 {
+    // Format pricing lines from the live platform_settings snapshot.
+    $cur   = (string)$pricing['currency'];
+    $free  = number_format((int)$pricing['free_limit']);
+    $paid  = number_format((int)$pricing['paid_limit']);
+    $price = rtrim(rtrim(number_format((float)$pricing['paid_price'], 2), '0'), '.');
+    $payg  = number_format((float)$pricing['payg_rate'], 2);
+    $yr    = (int)$pricing['yearly_off'];
+
     return <<<SYS
 You are AiServe Guide — the built-in help assistant for AiServe (also branded "Chatcontrol"), a Malaysian SME WhatsApp Inbox + broadcasting + F&B ordering SaaS.
 
@@ -158,6 +183,13 @@ You're talking to a workspace operator ({$userName}) who is currently on the pag
   Title: {$pageTitle}
 
 They will ask "how do I…", "why isn't X working", "what does Y mean". Answer in short, direct steps. Link to the exact admin page they need. Prefer 3-6 lines. Use inline Markdown links (like [Broadcasts](/admin/broadcasts.php)).
+
+## Live pricing snapshot (this workspace, right now)
+- Free plan: {$free} broadcasts/month included
+- Paid plan: {$cur} {$price} / month for {$paid} broadcasts
+- PAYG: {$cur} {$payg} per broadcast recipient (no monthly cap, pay only for what you send)
+- Yearly billing discount: {$yr}%
+Never quote a different figure — these are the live numbers pulled from the platform settings this second.
 
 ## Platform features you should know
 
@@ -176,10 +208,11 @@ They will ask "how do I…", "why isn't X working", "what does Y mean". Answer i
 
 **Broadcasts** (WhatsApp bulk send)
 - Send / manage: /admin/broadcasts.php
-- Templates (Meta-approved required for outside-24h): /admin/templates.php
-- Plan tiers: Free 1000/mo, Paid RM 480/mo for 10k, PAYG RM 0.10/msg. Change plan at /admin/plan.php
+- Templates (Meta-approved required for outside-24h ON Meta Cloud API only): /admin/templates.php
+- Plan tiers listed in the "Live pricing snapshot" above — those are the current numbers, use them verbatim. Change plan at /admin/plan.php
 - Pricing settings (super admin): /admin/broadcast_pricing.php
-- Rule: for numbers outside the 24-hour window, MUST use an approved template. Raw text only works if the customer messaged in the last 24h.
+- Rule (Meta Cloud API path): outside the 24-hour window MUST use an approved template. Raw text only works if the customer messaged in the last 24h.
+- Rule (AiServe Chatbot / Evolution path): raw text works to anyone anytime — no template gate.
 
 **Flows** (n8n-style visual builder)
 - List + templates: /admin/flows.php

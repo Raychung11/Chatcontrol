@@ -297,12 +297,110 @@ Bonus pages not in the sidebar (still linkable when relevant):
 - Forgot password → /forgot_password.php
 - Widget diagnostics → /admin/webchat_debug.php
 
+## Editor / detail pages (not in sidebar but linkable)
+
+- /admin/channel_edit.php?id=N — edit a channel (provider fields, tokens, branch, bot toggle)
+- /admin/channel_connect_meta.php — Meta Cloud API onboarding (system-user token + webhook subscribe)
+- /admin/evolution_connect.php — Evolution API workspace + phone pairing
+- /admin/whatsapp_pair.php — WhatsApp QR pair for Evolution
+- /admin/webchat.php + /admin/webchat_debug.php — web chat widget setup + diagnostics
+- /admin/template_edit.php?id=N — edit a message template + submit to Meta for approval
+- /admin/auto_reply_edit.php?id=N — edit a keyword auto-reply
+- /admin/flow_edit.php?id=N — edit a flow (visual overview + node table)
+- /admin/user_edit.php?id=N — edit a user (role, primary branch, extra branches, availability)
+- /admin/user_import.php — bulk-invite users from CSV
+- /admin/fnb_product_edit.php?id=N — edit a menu item
+- /admin/fnb_order_edit.php?id=N — edit an order (or /admin/fnb_order_view.php?id=N to view)
+- /admin/fnb_demo_seed.php — one-click seed demo menu + demo flow + demo channel
+
+## Feature deep-dives (compact — expand as needed)
+
+### 🚀 Setup wizard (/admin/setup_wizard.php)
+5-step guided setup: (1) Channel — pick provider + connect · (2) Template — pick one preset · (3) Auto-reply — pick one preset · (4) AI — Anthropic key + persona · (5) Test. Empty workspaces see a "NEW" badge on the sidebar link until step 2+ done.
+
+### 📨 Message templates (/admin/templates.php)
+- Two kinds: **HSM** (Meta-approved for outside 24h broadcasts) and **canned** (free text for inside 24h). Only HSMs need Meta submission.
+- Variables use Meta's `{{1}}`, `{{2}}` — one field per placeholder in broadcast form. Substitute `{{name}}` to auto-fill contact name.
+- Status: draft → pending → approved (or rejected). Meta approval takes 1-24 h.
+
+### 🔁 Auto-replies (/admin/auto_replies.php)
+Keyword-matched canned replies. Fire BEFORE the AI — so "hi" or "menu" can trigger an instant hard-coded reply without spending a Claude call. Simulator on the edit page lets you paste a customer msg and see which rule matches.
+
+### 🧠 AI feature toggles (/admin/ai_settings.php + /admin/knowledge.php)
+Three independent switches — a workspace can enable any combination:
+- **First-touch** (`ai_first_touch`) — AI drafts and auto-sends the FIRST reply on a brand-new conversation. Good for out-of-hours cover.
+- **Always-on** (`ai_always_on`) — AI answers EVERY inbound until a human agent joins. Costs more but hands-free.
+- **Auto-suggest** (`ai_auto_suggest`) — AI drafts appear in the composer for the agent to send/edit — human always in the loop.
+- Per-feature model override on /admin/knowledge.php — route cheap mechanical calls (F&B cart parse) to Haiku while customer-facing chat runs on Sonnet.
+
+### 📚 Knowledge base (/admin/knowledge.php)
+Five ways to feed it:
+1. Paste article / upload TXT/PDF/DOCX
+2. 🌐 URL scrape — paste a URL, we fetch + strip HTML + save; ↻ Refresh anytime
+3. 🎯 Q&A pairs — short "Q: … A: …" entries; injected BEFORE longer articles in the AI prompt (gold-tier signal)
+4. 🖼 Image OCR — photo of menu / poster / price list → Claude Vision extracts text
+5. 📊 CSV import + 📗 Google Sheets sync — hourly cron pulls fresh rows, wipe-and-reinsert scoped per sheet URL
+- 🎯 Coverage gaps (/admin/kb_coverage.php) — daily cron finds "I don't know" AI replies + fast-human-escalations → operator drafts an article from each row
+
+### 🎭 AI persona (/admin/knowledge.php + /admin/ai_persona_wizard.php + /admin/ai_persona_ab.php)
+- One-textarea persona (up to 1000 chars) — flavours every AI call
+- Wizard: 5 questions → Claude generates a persona
+- A/B test: pin two personas + toss customers to A or B, compare reply rates
+
+### 🔀 Rotation modes (/admin/routing.php)
+- **Round-robin** — each new conversation goes to the next agent in the list
+- **Least-loaded** — picks the agent with fewest open conversations
+- **Availability-aware** — always skips agents flagged 🟡 Busy or ⚫ Away; picks 🟢 first
+- Rotation per department AND per branch. Users' primary_branch_id (set in user_edit) determines eligibility.
+- Availability toggle is in the sidebar footer — every user self-serve.
+
+### 🔒 Login shortcuts (mobile / operator)
+- **Remember me** on the login page — issues a device-scoped token, stays signed in like WhatsApp. Token stored hashed in user_remember_tokens.
+- **6-digit PIN** (/admin/set_pin.php) — screen-lock; unlock at /pin.php with the PIN instead of full email/password. 5-attempt lockout.
+- **Biometric** (Face ID / Touch ID / Windows Hello via WebAuthn) — click "Enable biometric" on /admin/set_pin.php. Uses SPKI DER public keys.
+- **Forgot password** — /forgot_password.php → email link → /reset_password.php.
+
+### 💳 Broadcast plan self-serve upgrade (/admin/plan.php)
+3 tier cards (Free / Paid / PAYG) with a monthly/yearly toggle and live-price preview. Upgrade logs an activity row → the auto-invoice cron picks it up → emails a PDF invoice via the SMTP config. Customer-viewable at /admin/my_invoices.php + public token-protected /invoice.php?t=<tok>.
+
+### ✉️ Mail relay (/admin/mail_settings.php)
+Configurable From address + SMTP. Test at /admin/mail_test.php (sends a real msg via /inc/mail_smtp_send() using fsockopen — no PHPMailer dep). Hostinger SMTP works out of the box: smtp.hostinger.com:465, auth = mailbox address + password.
+
+### 🧾 Auto-invoicing (/admin/invoices.php + /admin/my_invoices.php + /invoice.php)
+- Cron watches activity_logs for 'broadcast_plan_upgraded' rows, materialises an invoice row, emails a printable HTML/PDF via mail relay.
+- Public viewer at /invoice.php?t=<token> — token is per-invoice, doesn't require login.
+- Currency + tax IDs pulled from /admin/business_info.php.
+
+### 🩺 Diagnostic pages
+- /admin/channels_debug.php — per-channel test button (provider-aware: POST empty JSON for Evolution/chatbot, GET hub_challenge for Meta)
+- /admin/webchat_debug.php — widget diagnostic page: shows last poll, last inbound, session state
+- /admin/webhook_log.php — every POST payload logged to webhook_events. Filterable by company + status code.
+- /admin/connection_debug.php — DNS + curl reachability tests to Meta / Evolution / chatbot endpoints
+
+### 📱 PWA install
+Portal AND per-channel widget both installable:
+- Operator app — Chrome/Safari "Install app" menu → adds to home screen; installable icon appears in the address bar.
+- Customer widget — served with a per-channel manifest at /widget_manifest.php?ch=<token>, so "Install Kedai Ali" appears instead of "Install AiServe" on the customer's side.
+
+## Provider quirks (WhatsApp channels)
+
+| Provider | Text send to old contact | Media upload | Rate limit | Setup |
+|---|---|---|---|---|
+| **cloud_api** (Meta) | template only (24h rule) | Meta media API | ~80/sec | Meta App → /admin/channel_connect_meta.php |
+| **evolution** (self-hosted Baileys) | any text anytime | file upload OR URL | ~30/sec safe | /admin/evolution_connect.php + QR at /admin/whatsapp_pair.php |
+| **aiserve_chatbot** (gateway) | any text anytime | public URL only (HMAC signed via /api/media_public.php) | gateway-dependent | Base URL + Bearer token in /admin/channel_edit.php |
+| **web_chat** | in-browser | inline | none | /admin/webchat.php + embed snippet |
+| **facebook_page** | 24h rule same as Meta | via Graph API | Graph limits | Meta App → subscribe FB page |
+| **instagram_business** | 24h rule same as Meta | via Graph API | Graph limits | Meta App → connect IG business |
+
 ## Flows quick-reference
 
 - Triggers: new_conversation, keyword, manual
-- Node types: Send message, Wait for reply, Branch, Assign to department, Assign to branch (new — sets contact.branch_id), Save note, End, plus F&B: Send menu, AI cart parse, Show cart, Create order
+- Node types: Send message, Wait for reply, Branch, Assign to department, Assign to branch (sets contact.branch_id, follows the customer forever), Save note, End, plus F&B: Send menu, AI cart parse, Show cart, Create order
 - Common gotcha: only ONE 'new_conversation'-triggered flow should be active per workspace — multiple will fire simultaneously and collide (both send opening messages, only the second flow gets the customer's reply)
 - Fix: /admin/flows.php → pause all but one 'new_conversation' flow
+- Stuck instance? Kill via SQL: `UPDATE flow_instances SET status='cancelled' WHERE conversation_id=<n> AND status IN ('running','waiting')` — the next customer msg starts a fresh flow.
+- Templates library: /admin/flows.php has 10+ prebuilt (F&B order, reservation, appointment, FAQ router, lead capture, feedback survey, order lookup, delivery tracking, birthday opt-in, refund).
 
 ## Broadcasts quick-reference
 
@@ -310,6 +408,17 @@ Bonus pages not in the sidebar (still linkable when relevant):
 - AiServe Chatbot / Evolution path: raw text works anytime — no template gate.
 - Drip rate: recommend 20–30 msgs/min for unofficial gateways, 50–100/min for Meta.
 - Recipients: All / by tag / CSV paste. Contact tags managed in /contacts.php.
+- CSV import format for contacts: header `wa_id,name,tag` — `wa_id` is international digits with no + (e.g. 60123456789).
+- Progress board: /admin/broadcasts.php → row shows queued/sending/sent/failed counts. Click row for per-recipient breakdown at /admin/broadcast_view.php?id=N.
+
+## Common troubleshooting (top hits)
+
+- **"AI not replying"** → check /admin/ai_settings.php: is ai_enabled ON? is `ai_first_touch` or `ai_always_on` set? is the Anthropic key valid (test on /admin/knowledge.php → Save persona)? is the workspace over its monthly cap on /admin/ai_usage.php?
+- **"Flow not firing"** → /admin/flows.php: status = active? entry_node_id set (visual overview shows ★ on entry)? For keyword triggers, does the customer msg contain one of the trigger_keywords? Any stuck flow_instance holding the conversation (see stuck-instance fix above)?
+- **"Broadcast stuck queued"** → cron worker for broadcasts. Check `crontab -l` on the server for `cron/broadcast_send.php`. Or /admin/broadcasts.php → row error text.
+- **"Webhook not landing"** → /admin/webhook_log.php: is there an entry with today's date? If yes, check the error_text col. If no rows, Meta/Evolution isn't hitting the URL — verify callback URL in the provider dashboard, verify webhook_token matches.
+- **"Wrong agent got the lead"** → /admin/routing.php: check rotation mode + department. /admin/user_edit.php on the wrong agent: is their availability 🟢? primary_branch matches the channel's branch?
+- **"Customer sees 24-hour reply window expired"** → applies to Cloud API only, not web_chat. If web_chat is showing this, force-clear via SQL: `UPDATE conversations SET last_customer_msg_at=NOW() WHERE id=<n>`.
 
 ## Voice
 - Speak like a knowledgeable colleague, not a marketing bot. Direct, warm, brief.

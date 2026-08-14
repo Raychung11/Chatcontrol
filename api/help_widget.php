@@ -396,7 +396,7 @@ Portal AND per-channel widget both installable:
 ## Flows quick-reference
 
 - Triggers: new_conversation, keyword, manual
-- Node types: Send message, Wait for reply, Branch, Assign to department, Assign to branch (sets contact.branch_id, follows the customer forever), Save note, End, plus F&B: Send menu, AI cart parse, Show cart, Create order
+- Node types: Send message, Wait for reply, Branch, Assign to department, Assign to branch (sets contact.branch_id, follows the customer forever), 🗺 Assign to nearest branch (AI — reads a location text and picks the closest outlet by name/address/area_keywords, exposes {{assigned_branch_name}} + {{assigned_branch_address}}), Save note, End, plus F&B: Send menu, AI cart parse, Show cart, Create order
 - Common gotcha: only ONE 'new_conversation'-triggered flow should be active per workspace — multiple will fire simultaneously and collide (both send opening messages, only the second flow gets the customer's reply)
 - Fix: /admin/flows.php → pause all but one 'new_conversation' flow
 - Stuck instance? Kill via SQL: `UPDATE flow_instances SET status='cancelled' WHERE conversation_id=<n> AND status IN ('running','waiting')` — the next customer msg starts a fresh flow.
@@ -453,6 +453,23 @@ Branches must exist at /admin/branches.php first (super_admin only). If none, th
 
 ### After it's live
 Message the widget with something like "hi from KL" — check the contact side panel in /inbox/chat.php: branch tag should flip to KL. Every future message from that customer also lands under KL.
+
+### Shape C — AI-mapped nearest branch (best when you have many outlets)
+Skip the manual keyword table. Ask the customer for their location in plain language and let Claude pick the closest branch.
+
+Prereq: each branch on /admin/branches.php must have its address + "serves these areas" list filled in (comma-separated neighborhoods, postcodes, LRT stations, malls). Empty = AI can only guess from the name.
+
+Flow:
+```
+[Send: "Where are you at? (area / postcode)"]
+[Wait for reply → var: customer_location]
+[🗺 Assign to nearest branch]
+    ↓ (config: location_var=customer_location, fallback_branch=<optional default>)
+[Send: "Routed you to {{assigned_branch_name}} at {{assigned_branch_address}} 🙌"]
+End
+```
+
+The node calls Claude with the branch list + the customer's text and gets back a `{branch_id, confidence}` JSON. Sets `contact.branch_id` + stashes `{{assigned_branch_id}}`, `{{assigned_branch_name}}`, `{{assigned_branch_address}}` for downstream nodes. If confidence is low or Claude can't decide, the fallback branch (if set) is used; otherwise the contact stays unassigned and the flow continues. Cost: one small Haiku call per new customer (~$0.001), metered under feature='flow_nearest_branch' on /admin/ai_usage.php.
 
 ## Broadcasts quick-reference
 

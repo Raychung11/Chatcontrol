@@ -35,6 +35,22 @@ if (is_post()) {
                 ? 'A branch with that name already exists.'
                 : 'Could not create branch.';
         }
+    } elseif ($action === 'save_details' && $branchId > 0) {
+        // Save name + address + area_keywords in one pass. Handles the
+        // 'edit branch' inline form below each row.
+        $addr = mb_substr(trim((string)($_POST['address']       ?? '')), 0, 500);
+        $kw   = mb_substr(trim((string)($_POST['area_keywords'] ?? '')), 0, 2000);
+        try {
+            $db->prepare(
+                'UPDATE branches SET name = ?, address = ?, area_keywords = ?
+                 WHERE id = ? AND company_id = ?'
+            )->execute([$name, $addr ?: null, $kw ?: null, $branchId, $companyId]);
+            log_activity($companyId, (int)$current_user['id'], 'branch_updated',
+                'branch', $branchId, $name);
+            $msg = 'Branch updated.';
+        } catch (PDOException $e) {
+            $err = 'Could not save (name may already be in use).';
+        }
     } elseif ($action === 'rename' && $branchId > 0 && $name !== '') {
         try {
             $db->prepare('UPDATE branches SET name = ? WHERE id = ? AND company_id = ?')
@@ -113,36 +129,82 @@ layout_start($current_user, 'Branches', 'branches');
       <?php endif; ?>
       <?php foreach ($branches as $b): ?>
         <tr>
-          <td>
-            <form method="post" style="display:flex; gap:6px;">
-              <?= csrf_field() ?>
-              <input type="hidden" name="action" value="rename">
-              <input type="hidden" name="branch_id" value="<?= (int)$b['id'] ?>">
-              <input type="text" name="name" value="<?= e($b['name']) ?>" maxlength="120" required style="min-width:180px;">
-              <button class="btn btn-sm" type="submit">Rename</button>
-            </form>
-          </td>
-          <td>
-            <a href="/contacts.php?branch_id=<?= (int)$b['id'] ?>"><?= (int)$b['contact_count'] ?></a>
-          </td>
-          <td><?= status_badge($b['status']) ?></td>
-          <td class="muted small"><?= e(fmt_dt($b['created_at'])) ?></td>
-          <td class="actions">
-            <form method="post" style="display:inline">
-              <?= csrf_field() ?>
-              <input type="hidden" name="action" value="toggle">
-              <input type="hidden" name="branch_id" value="<?= (int)$b['id'] ?>">
-              <button class="btn btn-sm" type="submit">
-                <?= $b['status'] === 'active' ? 'Disable' : 'Enable' ?>
-              </button>
-            </form>
-            <form method="post" style="display:inline"
-                  onsubmit="return confirm('Delete this branch? Contacts in it will become unassigned but their conversations stay.');">
-              <?= csrf_field() ?>
-              <input type="hidden" name="action" value="delete">
-              <input type="hidden" name="branch_id" value="<?= (int)$b['id'] ?>">
-              <button class="btn btn-sm btn-danger" type="submit">Delete</button>
-            </form>
+          <td colspan="5" style="padding: 12px 14px;">
+            <details <?= empty($b['address']) && empty($b['area_keywords']) ? 'open' : '' ?>
+                     style="background:#fafbfc; border:1px solid #e3e8ee; border-radius:8px; padding: 10px 12px;">
+              <summary style="cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+                <span>
+                  <strong style="font-size:14px;"><?= e($b['name']) ?></strong>
+                  <?= status_badge($b['status']) ?>
+                  <span class="muted small">·
+                    <a href="/contacts.php?branch_id=<?= (int)$b['id'] ?>"><?= (int)$b['contact_count'] ?> contact(s)</a>
+                    · created <?= e(fmt_dt($b['created_at'])) ?>
+                  </span>
+                  <?php if (empty($b['address'])): ?>
+                    <span style="background:#fef3c7; color:#78350f; padding:1px 8px; border-radius:999px; font-size:11px; margin-left:6px;">
+                      ⚠ no address — nearest-branch AI mapping needs this
+                    </span>
+                  <?php endif; ?>
+                </span>
+                <span class="muted small">▾ edit</span>
+              </summary>
+
+              <form method="post" style="display:grid; gap:10px; margin-top:12px; grid-template-columns: 1fr 2fr;">
+                <?= csrf_field() ?>
+                <input type="hidden" name="action" value="save_details">
+                <input type="hidden" name="branch_id" value="<?= (int)$b['id'] ?>">
+
+                <label style="display:block;">
+                  <span class="muted small">Branch name</span>
+                  <input type="text" name="name" value="<?= e($b['name']) ?>" maxlength="120" required
+                         style="width:100%; padding:6px 10px;">
+                </label>
+
+                <label style="display:block;">
+                  <span class="muted small">Address <em>(shown to customers when the AI routes them here)</em></span>
+                  <input type="text" name="address" value="<?= e((string)($b['address'] ?? '')) ?>" maxlength="500"
+                         placeholder="e.g. 12, Jalan Bangsar, 59100 Kuala Lumpur"
+                         style="width:100%; padding:6px 10px;">
+                </label>
+
+                <label style="grid-column: 1 / -1; display:block;">
+                  <span class="muted small">
+                    Serves these areas <em>(comma-separated — used by the
+                    <strong>Assign to nearest branch</strong> flow node so
+                    Claude knows which customer locations map to this outlet)</em>
+                  </span>
+                  <textarea name="area_keywords" rows="2" maxlength="2000"
+                            placeholder="e.g. Bangsar, Bangsar South, Kerinchi, Mid Valley, KL Sentral, Brickfields, Pantai Hillpark, Menara UOA, 59100, 59200"
+                            style="width:100%; padding:6px 10px; font-family:inherit;"><?= e((string)($b['area_keywords'] ?? '')) ?></textarea>
+                  <small class="muted">
+                    Tip: include neighborhood names, common landmarks (LRT stations, malls), and postcodes.
+                    The more you list, the smarter the AI matcher gets.
+                  </small>
+                </label>
+
+                <div style="grid-column: 1 / -1;">
+                  <button class="btn btn-primary btn-sm" type="submit">💾 Save</button>
+                </div>
+              </form>
+
+              <div style="margin-top:10px; padding-top:10px; border-top:1px solid #eef2f7; display:flex; gap:6px; flex-wrap:wrap;">
+                <form method="post" style="display:inline">
+                  <?= csrf_field() ?>
+                  <input type="hidden" name="action" value="toggle">
+                  <input type="hidden" name="branch_id" value="<?= (int)$b['id'] ?>">
+                  <button class="btn btn-sm" type="submit">
+                    <?= $b['status'] === 'active' ? 'Disable' : 'Enable' ?>
+                  </button>
+                </form>
+                <form method="post" style="display:inline"
+                      onsubmit="return confirm('Delete this branch? Contacts in it will become unassigned but their conversations stay.');">
+                  <?= csrf_field() ?>
+                  <input type="hidden" name="action" value="delete">
+                  <input type="hidden" name="branch_id" value="<?= (int)$b['id'] ?>">
+                  <button class="btn btn-sm btn-danger" type="submit">🗑 Delete branch</button>
+                </form>
+              </div>
+            </details>
           </td>
         </tr>
       <?php endforeach; ?>

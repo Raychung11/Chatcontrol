@@ -64,7 +64,7 @@ if (is_post()) {
         $type   = (string)($_POST['node_type'] ?? 'send_message');
         $label  = trim((string)($_POST['label'] ?? '')) ?: null;
         $nextId = (int)($_POST['next_node_id'] ?? 0);
-        if (!in_array($type, ['send_message','wait_reply','branch','assign_dept','assign_branch','save_note','end',
+        if (!in_array($type, ['send_message','wait_reply','branch','assign_dept','assign_branch','assign_nearest_branch','save_note','end',
                                'fnb_send_menu','fnb_cart_add','fnb_cart_show','fnb_create_order'], true)) {
             $type = 'send_message';
         }
@@ -129,7 +129,12 @@ $depts = $depts->fetchAll();
 
 // Branches for the "Assign to branch" node type — empty if the workspace
 // hasn't set any up yet (the node still saves but the picker sits empty).
-$branches = $db->prepare('SELECT id, name FROM branches WHERE company_id = ? AND status = "active" ORDER BY name');
+// address + area_keywords are only used by the assign_nearest_branch
+// editor's data-gap warning, but selecting all costs nothing here.
+$branches = $db->prepare(
+    'SELECT id, name, address, area_keywords
+     FROM branches WHERE company_id = ? AND status = "active" ORDER BY name'
+);
 $branches->execute([$companyId]);
 $branches = $branches->fetchAll();
 
@@ -204,6 +209,7 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
     <span><span style="display:inline-block;width:10px;height:10px;background:#fef3c7;border:1.5px solid #f59e0b;border-radius:2px;vertical-align:middle;"></span> wait reply</span>
     <span><span style="display:inline-block;width:10px;height:10px;background:#f3e8ff;border:1.5px solid #a855f7;border-radius:2px;vertical-align:middle;"></span> branch</span>
     <span><span style="display:inline-block;width:10px;height:10px;background:#ccfbf1;border:1.5px solid #14b8a6;border-radius:2px;vertical-align:middle;"></span> assign</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#cffafe;border:1.5px solid #0891b2;border-radius:2px;vertical-align:middle;"></span> 🗺 AI-map</span>
     <span><span style="display:inline-block;width:10px;height:10px;background:#d1fae5;border:1.5px solid #10b981;border-radius:2px;vertical-align:middle;"></span> F&amp;B</span>
     <span><span style="display:inline-block;width:10px;height:10px;background:#fee2e2;border:1.5px solid #ef4444;border-radius:2px;vertical-align:middle;"></span> end</span>
     <span style="margin-left:auto;">Dashed edge = default / else branch</span>
@@ -253,6 +259,7 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
                     'branch'       => 'Branch',
                     'assign_dept'  => 'Assign to department',
                     'assign_branch'=> 'Assign to branch',
+                    'assign_nearest_branch' => '🗺 Assign to nearest branch (AI)',
                     'save_note'    => 'Save internal note',
                     'end'          => 'End',
                 ] as $k => $v): ?>
@@ -331,6 +338,55 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
                 <?php endif; ?>
               </small>
             </label>
+            <?php break; ?>
+
+          <?php case 'assign_nearest_branch': ?>
+            <label>Location source variable <small class="muted">(optional — defaults to the customer's last reply)</small>
+              <input type="text" name="location_var" maxlength="60"
+                     value="<?= e((string)($cfg['location_var'] ?? '')) ?>"
+                     placeholder="customer_location">
+              <small class="muted">
+                If you captured the customer's area with a <em>Wait for reply</em>
+                node into a variable (say <code>customer_location</code>), name
+                it here. Leave blank to use whatever the customer typed most
+                recently.
+              </small>
+            </label>
+            <label>Fallback branch <small class="muted">(if AI can't decide)</small>
+              <select name="fallback_branch_id">
+                <option value="0">— no fallback (leave contact unassigned) —</option>
+                <?php foreach ($branches as $b): ?>
+                  <option value="<?= (int)$b['id'] ?>" <?= (int)($cfg['fallback_branch_id'] ?? 0) === (int)$b['id'] ? 'selected' : '' ?>>
+                    <?= e($b['name']) ?>
+                  </option>
+                <?php endforeach; ?>
+              </select>
+            </label>
+            <div class="muted small" style="padding:8px 10px; background:#f0f9ff; border-left:3px solid #0072B2; border-radius:4px;">
+              🗺 <strong>How it works:</strong> Claude reads the customer's location text
+              + all your active branches (name, address, area keywords) and picks
+              the closest one. Then tags the contact's branch and exposes
+              <code>{{assigned_branch_name}}</code>, <code>{{assigned_branch_address}}</code>,
+              and <code>{{assigned_branch_id}}</code> as variables you can use in
+              downstream Send-message nodes (e.g. <em>"Routed you to {{assigned_branch_name}}
+              at {{assigned_branch_address}} 🙌"</em>).
+              <?php if (!$branches): ?>
+                <br><br><strong>⚠ Prereq:</strong> set up branches at
+                <a href="/admin/branches.php">Settings → Branches</a>, and fill in each
+                branch's <em>address</em> and <em>area keywords</em> — that's what the AI
+                matches against.
+              <?php else:
+                $missing = 0;
+                foreach ($branches as $bx) {
+                    if (empty($bx['address']) && empty($bx['area_keywords'])) $missing++;
+                }
+                if ($missing > 0): ?>
+                <br><br><strong>⚠ Data gap:</strong> <?= $missing ?> of <?= count($branches) ?>
+                branch(es) have no address AND no area keywords. Claude can only
+                guess from the name for those. Fill them in on
+                <a href="/admin/branches.php">Settings → Branches</a> for better mapping.
+              <?php endif; endif; ?>
+            </div>
             <?php break; ?>
 
           <?php case 'save_note': ?>
@@ -480,6 +536,7 @@ function flow_edit_node_label(array $n): string
         'branch'           => 'Branch',
         'assign_dept'      => 'Assign to dept',
         'assign_branch'    => 'Assign to branch',
+        'assign_nearest_branch' => '🗺 Assign to nearest branch',
         'save_note'        => 'Save note',
         'end'              => 'End',
         'fnb_send_menu'    => 'F&B · Send menu',
@@ -503,6 +560,13 @@ function flow_edit_pack_config(string $type, array $post): string
             return json_encode(['department_id' => (int)($post['department_id'] ?? 0)], JSON_UNESCAPED_UNICODE);
         case 'assign_branch':
             return json_encode(['branch_id' => (int)($post['branch_id'] ?? 0)], JSON_UNESCAPED_UNICODE);
+        case 'assign_nearest_branch':
+            $lv = trim((string)($post['location_var'] ?? ''));
+            $lv = preg_replace('/[^a-zA-Z0-9_]/', '', $lv);
+            return json_encode([
+                'location_var'       => $lv,
+                'fallback_branch_id' => (int)($post['fallback_branch_id'] ?? 0),
+            ], JSON_UNESCAPED_UNICODE);
         case 'save_note':
             return json_encode(['template' => (string)($post['template'] ?? '')], JSON_UNESCAPED_UNICODE);
         case 'branch':

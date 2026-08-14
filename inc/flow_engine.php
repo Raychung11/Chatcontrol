@@ -312,6 +312,70 @@ function flow_engine_execute_node(PDO $db, array $inst, array $node): int
             }
             return (int)($node['next_node_id'] ?? 0);
 
+        case 'assign_nearest_branch':
+            // AI-mapped location → nearest branch.
+            // 1. Read customer's location from either a captured var
+            //    (state[vars][<location_var>]) or fall back to their
+            //    last reply text.
+            // 2. Load every active branch for this workspace with its
+            //    address + area keywords.
+            // 3. Ask Claude to pick the best match, return the branch id.
+            // 4. Tag contact.branch_id + stash {{assigned_branch_*}} vars
+            //    so downstream Send-message nodes can confirm.
+            $conv = flow_engine_conversation($db, (int)$inst['conversation_id']);
+            if (!$conv || empty($conv['contact_id'])) {
+                return (int)($node['next_node_id'] ?? 0);
+            }
+            $companyId = (int)$conv['company_id'];
+
+            $locVar   = (string)($cfg['location_var'] ?? '');
+            $location = '';
+            if ($locVar !== '' && isset($state['vars'][$locVar])) {
+                $location = trim((string)$state['vars'][$locVar]);
+            }
+            if ($location === '') $location = trim((string)($state['last_reply'] ?? ''));
+            if ($location === '') $location = $customerReply;
+            $location = mb_substr($location, 0, 500);
+
+            // Load candidate branches with the fields Claude needs.
+            $bs = $db->prepare(
+                'SELECT id, name, address, area_keywords
+                 FROM branches
+                 WHERE company_id = ? AND status = "active"
+                 ORDER BY name'
+            );
+            $bs->execute([$companyId]);
+            $branches = $bs->fetchAll();
+
+            $picked = null;
+            if ($branches && $location !== '') {
+                $picked = flow_engine_pick_nearest_branch($db, $companyId, $branches, $location);
+            }
+
+            // Fall back if AI couldn't decide (or no branches configured).
+            if ($picked === null) {
+                $fb = (int)($cfg['fallback_branch_id'] ?? 0);
+                if ($fb > 0) {
+                    foreach ($branches as $b) {
+                        if ((int)$b['id'] === $fb) { $picked = $b; break; }
+                    }
+                }
+            }
+
+            if ($picked) {
+                $db->prepare('UPDATE contacts SET branch_id = ? WHERE id = ?')
+                   ->execute([(int)$picked['id'], (int)$conv['contact_id']]);
+
+                $state['vars']['assigned_branch_id']      = (int)$picked['id'];
+                $state['vars']['assigned_branch_name']    = (string)$picked['name'];
+                $state['vars']['assigned_branch_address'] = (string)($picked['address'] ?? '');
+                // Persist immediately so if the next node crashes we still
+                // have the pick recorded and can debug from state.
+                $db->prepare('UPDATE flow_instances SET state = ? WHERE id = ?')
+                   ->execute([json_encode($state, JSON_UNESCAPED_UNICODE), (int)$inst['id']]);
+            }
+            return (int)($node['next_node_id'] ?? 0);
+
         case 'save_note':
             $text = flow_engine_render((string)($cfg['template'] ?? ''), $state);
             if ($text !== '') {
@@ -615,4 +679,115 @@ function flow_engine_log_outgoing_message(PDO $db, array $conv, string $text, ar
     } catch (Throwable $e) {
         error_log('[AiServe flow_engine] log_outgoing_message: ' . $e->getMessage());
     }
+}
+
+/**
+ * Ask Claude to pick the closest branch for a customer's free-text
+ * location. Given the branch list ([{id, name, address, area_keywords}])
+ * and the customer's answer ('near KLCC', 'bangsar', 'im at gurney',
+ * '46200 petaling jaya'), returns the matching branch row or NULL if
+ * Claude can't decide.
+ *
+ * Cost: one small Anthropic call (Haiku by default) per flow run —
+ * roughly 500-1500 input tokens depending on how many branches there
+ * are. Metered under feature = 'flow_nearest_branch' via ai_log_usage.
+ *
+ * @param array $branches [{id, name, address, area_keywords}, ...]
+ * @return array|null the picked branch row, or null on 'no confident match'
+ */
+function flow_engine_pick_nearest_branch(PDO $db, int $companyId, array $branches, string $location): ?array
+{
+    require_once __DIR__ . '/whatsapp_api.php';   // load_company_settings
+    require_once __DIR__ . '/ai_api.php';         // ai_api_key, ai_model_for_feature
+    require_once __DIR__ . '/ai_billing.php';     // ai_log_usage
+
+    $company = load_company_settings($companyId);
+    if (!$company || empty($company['ai_enabled'])) return null;
+    $apiKey = ai_api_key($company);
+    if ($apiKey === '') return null;
+
+    // Compact branch list for the prompt — Claude just needs identity + areas.
+    $branchLines = [];
+    foreach ($branches as $b) {
+        $id      = (int)$b['id'];
+        $name    = trim((string)$b['name']);
+        $addr    = trim((string)($b['address'] ?? ''));
+        $areas   = trim((string)($b['area_keywords'] ?? ''));
+        $bits    = ["id={$id}", "name=\"{$name}\""];
+        if ($addr  !== '') $bits[] = "address=\"{$addr}\"";
+        if ($areas !== '') $bits[] = "serves=\"{$areas}\"";
+        $branchLines[] = '- ' . implode(' | ', $bits);
+    }
+    $branchBlock = implode("\n", $branchLines);
+
+    $sys = <<<SYS
+You are a routing helper for a Malaysian multi-outlet business. Given a customer's location text and a list of branches, pick the CLOSEST branch and reply with STRICTLY this JSON, nothing else:
+
+  {"branch_id": <int>, "confidence": "high"|"medium"|"low"}
+
+Rules:
+- Match by area name / postcode / landmark / neighborhood, favouring branches whose "serves" list contains the customer's location or a nearby area.
+- If the customer's location is genuinely ambiguous, unrecognisable, or nowhere near any branch (say >30 km), reply with {"branch_id": 0, "confidence": "low"}.
+- Bahasa Melayu, English, Manglish, typos, and short forms (KL / PJ / TTDI / BSC) are all normal — infer generously.
+- Never invent a branch id — only pick from the list.
+- Do not add any prose, commentary, or code fences. JSON only.
+SYS;
+
+    $user = "Customer's location:\n" . $location . "\n\nBranches:\n" . $branchBlock;
+
+    $model = ai_model_for_feature($company, 'flow_nearest_branch');
+    if ($model === '') $model = 'claude-haiku-4-5';
+
+    $payload = [
+        'model'      => $model,
+        'max_tokens' => 60,
+        'system'     => $sys,
+        'messages'   => [['role' => 'user', 'content' => $user]],
+    ];
+
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST           => true,
+        CURLOPT_TIMEOUT        => 20,
+        CURLOPT_HTTPHEADER     => [
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: 2023-06-01',
+            'Content-Type: application/json',
+        ],
+        CURLOPT_POSTFIELDS     => json_encode($payload),
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($code !== 200) {
+        error_log('[AiServe flow nearest-branch] HTTP ' . $code . ' ' . mb_substr((string)$resp, 0, 300));
+        return null;
+    }
+
+    $data = json_decode((string)$resp, true) ?: [];
+    $raw  = trim((string)($data['content'][0]['text'] ?? ''));
+
+    // Meter usage under the workspace's AI billing rollup.
+    if (!empty($data['usage'])) {
+        try {
+            ai_log_usage($companyId, null, 'flow_nearest_branch',
+                $data['usage'], (string)($data['model'] ?? $model));
+        } catch (Throwable $e) { /* never break routing on billing errors */ }
+    }
+
+    // Claude sometimes wraps JSON in code fences even when told not to.
+    if (preg_match('/\{[^{}]*"branch_id"[^{}]*\}/', $raw, $m)) $raw = $m[0];
+    $parsed = json_decode($raw, true);
+    if (!is_array($parsed)) return null;
+
+    $pickedId   = (int)($parsed['branch_id'] ?? 0);
+    $confidence = (string)($parsed['confidence'] ?? '');
+    if ($pickedId <= 0 || $confidence === 'low') return null;
+
+    foreach ($branches as $b) {
+        if ((int)$b['id'] === $pickedId) return $b;
+    }
+    return null;
 }

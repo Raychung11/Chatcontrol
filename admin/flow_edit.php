@@ -64,7 +64,7 @@ if (is_post()) {
         $type   = (string)($_POST['node_type'] ?? 'send_message');
         $label  = trim((string)($_POST['label'] ?? '')) ?: null;
         $nextId = (int)($_POST['next_node_id'] ?? 0);
-        if (!in_array($type, ['send_message','wait_reply','branch','assign_dept','save_note','end',
+        if (!in_array($type, ['send_message','wait_reply','branch','assign_dept','assign_branch','save_note','end',
                                'fnb_send_menu','fnb_cart_add','fnb_cart_show','fnb_create_order'], true)) {
             $type = 'send_message';
         }
@@ -126,6 +126,12 @@ foreach ($edges->fetchAll() as $e) {
 $depts = $db->prepare('SELECT id, name FROM departments WHERE company_id = ? AND status = "active" ORDER BY name');
 $depts->execute([$companyId]);
 $depts = $depts->fetchAll();
+
+// Branches for the "Assign to branch" node type — empty if the workspace
+// hasn't set any up yet (the node still saves but the picker sits empty).
+$branches = $db->prepare('SELECT id, name FROM branches WHERE company_id = ? AND status = "active" ORDER BY name');
+$branches->execute([$companyId]);
+$branches = $branches->fetchAll();
 
 layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
 ?>
@@ -197,6 +203,7 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
     <span><span style="display:inline-block;width:10px;height:10px;background:#dbeafe;border:1.5px solid #3b82f6;border-radius:2px;vertical-align:middle;"></span> send msg</span>
     <span><span style="display:inline-block;width:10px;height:10px;background:#fef3c7;border:1.5px solid #f59e0b;border-radius:2px;vertical-align:middle;"></span> wait reply</span>
     <span><span style="display:inline-block;width:10px;height:10px;background:#f3e8ff;border:1.5px solid #a855f7;border-radius:2px;vertical-align:middle;"></span> branch</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#ccfbf1;border:1.5px solid #14b8a6;border-radius:2px;vertical-align:middle;"></span> assign</span>
     <span><span style="display:inline-block;width:10px;height:10px;background:#d1fae5;border:1.5px solid #10b981;border-radius:2px;vertical-align:middle;"></span> F&amp;B</span>
     <span><span style="display:inline-block;width:10px;height:10px;background:#fee2e2;border:1.5px solid #ef4444;border-radius:2px;vertical-align:middle;"></span> end</span>
     <span style="margin-left:auto;">Dashed edge = default / else branch</span>
@@ -245,6 +252,7 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
                     'wait_reply'   => 'Wait for reply',
                     'branch'       => 'Branch',
                     'assign_dept'  => 'Assign to department',
+                    'assign_branch'=> 'Assign to branch',
                     'save_note'    => 'Save internal note',
                     'end'          => 'End',
                 ] as $k => $v): ?>
@@ -300,6 +308,28 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
                   </option>
                 <?php endforeach; ?>
               </select>
+            </label>
+            <?php break; ?>
+
+          <?php case 'assign_branch': ?>
+            <label>Branch
+              <select name="branch_id">
+                <option value="0">— pick a branch —</option>
+                <?php foreach ($branches as $b): ?>
+                  <option value="<?= (int)$b['id'] ?>" <?= (int)($cfg['branch_id'] ?? 0) === (int)$b['id'] ? 'selected' : '' ?>>
+                    <?= e($b['name']) ?>
+                  </option>
+                <?php endforeach; ?>
+              </select>
+              <small class="muted">
+                Tags the CONTACT with this branch — every future conversation
+                from this customer routes there too, and rotation picks
+                agents whose primary branch matches.
+                <?php if (!$branches): ?>
+                  <br><strong>Heads-up:</strong> no active branches yet — set them up in
+                  <a href="/admin/branches.php">Settings → Branches</a> first.
+                <?php endif; ?>
+              </small>
             </label>
             <?php break; ?>
 
@@ -449,6 +479,7 @@ function flow_edit_node_label(array $n): string
         'wait_reply'       => 'Wait for reply',
         'branch'           => 'Branch',
         'assign_dept'      => 'Assign to dept',
+        'assign_branch'    => 'Assign to branch',
         'save_note'        => 'Save note',
         'end'              => 'End',
         'fnb_send_menu'    => 'F&B · Send menu',
@@ -470,6 +501,8 @@ function flow_edit_pack_config(string $type, array $post): string
             return json_encode(['var_name' => $v], JSON_UNESCAPED_UNICODE);
         case 'assign_dept':
             return json_encode(['department_id' => (int)($post['department_id'] ?? 0)], JSON_UNESCAPED_UNICODE);
+        case 'assign_branch':
+            return json_encode(['branch_id' => (int)($post['branch_id'] ?? 0)], JSON_UNESCAPED_UNICODE);
         case 'save_note':
             return json_encode(['template' => (string)($post['template'] ?? '')], JSON_UNESCAPED_UNICODE);
         case 'branch':

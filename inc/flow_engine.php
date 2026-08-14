@@ -287,6 +287,31 @@ function flow_engine_execute_node(PDO $db, array $inst, array $node): int
             }
             return (int)($node['next_node_id'] ?? 0);
 
+        case 'assign_branch':
+            // Tag the CONTACT with the branch (durable — every future
+            // conversation from this customer inherits it). Effective
+            // routing already COALESCEs contact.branch_id → channel.branch_id,
+            // so nothing else changes.
+            $branchId = (int)($cfg['branch_id'] ?? 0);
+            if ($branchId > 0) {
+                $conv = flow_engine_conversation($db, (int)$inst['conversation_id']);
+                if ($conv && !empty($conv['contact_id'])) {
+                    // Verify branch belongs to this workspace before writing —
+                    // guards against a stale flow that points at a since-
+                    // deleted branch in another company.
+                    $vf = $db->prepare(
+                        'SELECT 1 FROM branches
+                         WHERE id = ? AND company_id = ? AND status = "active" LIMIT 1'
+                    );
+                    $vf->execute([$branchId, (int)$conv['company_id']]);
+                    if ($vf->fetchColumn()) {
+                        $db->prepare('UPDATE contacts SET branch_id = ? WHERE id = ?')
+                           ->execute([$branchId, (int)$conv['contact_id']]);
+                    }
+                }
+            }
+            return (int)($node['next_node_id'] ?? 0);
+
         case 'save_note':
             $text = flow_engine_render((string)($cfg['template'] ?? ''), $state);
             if ($text !== '') {

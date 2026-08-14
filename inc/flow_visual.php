@@ -82,6 +82,7 @@ const FLOW_VISUAL_PALETTE = [
     'wait_reply'       => ['stroke' => '#f59e0b', 'fill' => '#fef3c7', 'icon' => '⏸'],
     'branch'           => ['stroke' => '#a855f7', 'fill' => '#f3e8ff', 'icon' => '🔀'],
     'assign_dept'      => ['stroke' => '#14b8a6', 'fill' => '#ccfbf1', 'icon' => '👥'],
+    'assign_branch'    => ['stroke' => '#14b8a6', 'fill' => '#ccfbf1', 'icon' => '🏢'],
     'save_note'        => ['stroke' => '#64748b', 'fill' => '#f1f5f9', 'icon' => '📝'],
     'end'              => ['stroke' => '#ef4444', 'fill' => '#fee2e2', 'icon' => '🏁'],
     'fnb_send_menu'    => ['stroke' => '#10b981', 'fill' => '#d1fae5', 'icon' => '📋'],

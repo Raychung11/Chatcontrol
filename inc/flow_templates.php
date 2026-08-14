@@ -34,6 +34,24 @@ function flow_templates_registry(): array
             'builder'      => 'flow_template_fnb_ordering',
         ],
         [
+            'key'          => 'fnb_branch_router',
+            'name'         => 'F&B ordering — with branch router (multi-outlet)',
+            'category'     => 'F&B',
+            'icon'         => '🗺',
+            'description'  => 'For multi-outlet restaurants. Welcome → ask area → 🗺 AI picks nearest branch → delivery/pickup → send menu → AI cart → confirm. Requires branches to have address + area keywords filled in.',
+            'requires_fnb' => true,
+            'builder'      => 'flow_template_fnb_branch_router',
+        ],
+        [
+            'key'          => 'furniture_showroom',
+            'name'         => 'Furniture showroom lead capture',
+            'category'     => 'Retail',
+            'icon'         => '🛋',
+            'description'  => 'For multi-outlet furniture / home retail. Welcome → 🗺 AI routes to nearest showroom → interest picker (showroom visit / home consult / catalogue / trade quote) → save qualified lead → hand off to sales at that branch.',
+            'requires_fnb' => false,
+            'builder'      => 'flow_template_furniture_showroom',
+        ],
+        [
             'key'          => 'restaurant_reservation',
             'name'         => 'Restaurant reservation',
             'category'     => 'F&B',
@@ -671,6 +689,303 @@ function flow_template_refund_request(PDO $db, int $companyId, int $userId, bool
             $nAssign => $nBye,      $nBye    => $nEnd,
         ]);
         flow_template_finalize($db, $fid, $nAsk);
+        $db->commit();
+        return $fid;
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+
+/**
+ * F&B ordering — multi-outlet variant.
+ *
+ * Welcome → ask which area → 🗺 AI-map to nearest branch → confirm
+ * branch pick + ask delivery/pickup → send menu → AI cart parse →
+ * loop until "done" → collect name + address → create order.
+ *
+ * Prereq: branches must have address + area_keywords filled in
+ * (/admin/branches.php) for the AI mapper to work well. If nothing
+ * matches, the flow uses the first branch as fallback (or leaves the
+ * contact unassigned).
+ */
+function flow_template_fnb_branch_router(PDO $db, int $companyId, int $userId, bool $goLive): int
+{
+    $db->beginTransaction();
+    try {
+        [$fid, $node, $wire] = flow_template_bootstrap(
+            $db, $companyId, $userId,
+            'F&B ordering with branch router (starter)',
+            $goLive,
+            'order,menu,food,makan,pesan'
+        );
+
+        // Pick the alphabetically-first active branch as the AI-mapper's
+        // safety-net fallback. Zero if none configured — the assign_nearest
+        // node handles that gracefully (leaves the contact unassigned).
+        $fallbackBranch = (int)($db->query(
+            'SELECT id FROM branches WHERE company_id = ' . (int)$companyId
+          . ' AND status = "active" ORDER BY name LIMIT 1'
+        )->fetchColumn() ?: 0);
+
+        $nHello    = $node('send_message', 'Welcome + ask area', ['text' =>
+            "Hi 👋 Welcome!\n\n"
+          . "Which area are you at so we can serve you from the nearest outlet?\n\n"
+          . "_(Reply with your neighborhood, town, or postcode — e.g. Bangsar, TTDI, 46200)_"
+        ]);
+        $nWaitLoc  = $node('wait_reply', 'Wait for location',
+            ['var_name' => 'customer_location']);
+        $nRoute    = $node('assign_nearest_branch', '🗺 Assign to nearest branch',
+            ['location_var' => 'customer_location', 'fallback_branch_id' => $fallbackBranch]);
+        $nConfirm  = $node('send_message', 'Confirm branch + ask order type', ['text' =>
+            "✅ Routed to *{{assigned_branch_name}}*\n"
+          . "📍 {{assigned_branch_address}}\n\n"
+          . "How would you like your order?\n\n"
+          . "1. Delivery\n2. Self-pickup\n\n"
+          . "_Reply with 1 or 2._"
+        ]);
+        $nWaitType = $node('wait_reply', 'Wait for order type',
+            ['var_name' => 'order_type']);
+        $nSendMenu = $node('fnb_send_menu', 'Send menu');
+        $nWaitOrd  = $node('wait_reply', 'Wait for order details',
+            ['var_name' => 'raw_order']);
+        $nCart     = $node('fnb_cart_add', 'AI: parse into cart');
+        $nWaitDone = $node('wait_reply', 'Wait for done or more items',
+            ['var_name' => 'more_items']);
+        $nDoneBr   = $node('branch', 'Done or add more?');
+        $nAskName  = $node('send_message', 'Ask for customer name',
+            ['text' => "Got it. What name should we put on the order?"]);
+        $nWaitName = $node('wait_reply', 'Wait for name',
+            ['var_name' => 'customer_name']);
+        $nAskAddr  = $node('send_message', 'Ask for address / pickup time',
+            ['text' => "Please share your *delivery address* (or *pickup time* if picking up)."]);
+        $nWaitAddr = $node('wait_reply', 'Wait for address',
+            ['var_name' => 'delivery_address']);
+        $nCreate   = $node('fnb_create_order', 'Create the order');
+        $nEnd      = $node('end', 'End');
+
+        $wire([
+            $nHello    => $nWaitLoc,   $nWaitLoc  => $nRoute,     $nRoute    => $nConfirm,
+            $nConfirm  => $nWaitType,  $nWaitType => $nSendMenu,  $nSendMenu => $nWaitOrd,
+            $nWaitOrd  => $nCart,      $nCart     => $nWaitDone,  $nWaitDone => $nDoneBr,
+            $nAskName  => $nWaitName,  $nWaitName => $nAskAddr,   $nAskAddr  => $nWaitAddr,
+            $nWaitAddr => $nCreate,    $nCreate   => $nEnd,
+        ]);
+
+        // Branch 'done' → collect name; anything else → re-parse as more items
+        $eIns = $db->prepare(
+            'INSERT INTO flow_edges (flow_id, from_node_id, to_node_id, condition_type, condition_value, sort_order)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $eIns->execute([$fid, $nDoneBr, $nAskName, 'keyword', 'done',    1]);
+        $eIns->execute([$fid, $nDoneBr, $nAskName, 'keyword', 'confirm', 2]);
+        $eIns->execute([$fid, $nDoneBr, $nAskName, 'keyword', 'yes',     3]);
+        $eIns->execute([$fid, $nDoneBr, $nCart,    'default', null,      4]);
+
+        flow_template_finalize($db, $fid, $nHello);
+        $db->commit();
+        return $fid;
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+
+/**
+ * Furniture showroom lead capture — for multi-outlet furniture /
+ * home retail (sofa, mattress, kitchen, tiles).
+ *
+ * Welcome → ask area → 🗺 AI-map to nearest showroom → confirm branch
+ * + ask the customer what they need (numbered choices: showroom visit,
+ * home consult, catalogue, trade quote) → branch on choice → capture
+ * name + interest details → save a qualified lead note → assign to
+ * Sales department for follow-up.
+ *
+ * Uses no F&B nodes — safe for any workspace regardless of fnb_plan.
+ */
+function flow_template_furniture_showroom(PDO $db, int $companyId, int $userId, bool $goLive): int
+{
+    $db->beginTransaction();
+    try {
+        [$fid, $node, $wire] = flow_template_bootstrap(
+            $db, $companyId, $userId,
+            'Furniture showroom lead capture (starter)',
+            $goLive,
+            'sofa,furniture,showroom,catalogue,catalog,visit,order'
+        );
+
+        // Fallback branch for the AI mapper.
+        $fallbackBranch = (int)($db->query(
+            'SELECT id FROM branches WHERE company_id = ' . (int)$companyId
+          . ' AND status = "active" ORDER BY name LIMIT 1'
+        )->fetchColumn() ?: 0);
+
+        // Prefer a Sales department for the final handoff; fall back to
+        // Enquiries / Support / first active dept if Sales isn't set up.
+        $deptId = flow_template_pick_dept($db, $companyId, ['Sales', 'Enquiries', 'Showroom', 'Support']);
+
+        $nHello    = $node('send_message', 'Welcome + ask area', ['text' =>
+            "Hi 👋 Welcome!\n\n"
+          . "Thanks for reaching out — we've got showrooms across Malaysia.\n\n"
+          . "Which area are you at so we can connect you with the nearest one?\n\n"
+          . "_(Reply with your neighborhood / town / postcode — e.g. Bangsar, TTDI, 46200)_"
+        ]);
+        $nWaitLoc  = $node('wait_reply', 'Wait for location',
+            ['var_name' => 'customer_location']);
+        $nRoute    = $node('assign_nearest_branch', '🗺 Assign to nearest showroom',
+            ['location_var' => 'customer_location', 'fallback_branch_id' => $fallbackBranch]);
+        $nConfirm  = $node('send_message', 'Confirm showroom + ask interest', ['text' =>
+            "✅ Great — nearest showroom to you:\n\n"
+          . "*{{assigned_branch_name}}*\n"
+          . "📍 {{assigned_branch_address}}\n\n"
+          . "How can we help today?\n\n"
+          . "1. 🛋 Visit the showroom\n"
+          . "2. 🏡 Home consultation / measurement\n"
+          . "3. 📖 Get our catalogue (PDF)\n"
+          . "4. 🏢 Corporate / trade quote\n"
+          . "5. 💬 Something else\n\n"
+          . "_Reply with 1, 2, 3, 4, or 5._"
+        ]);
+        $nWaitIntr = $node('wait_reply', 'Wait for interest choice',
+            ['var_name' => 'interest_choice']);
+        $nIntrBr   = $node('branch', 'Route by interest');
+
+        // Path 1 — Showroom visit
+        $nVisit    = $node('send_message', 'Ask preferred visit day', ['text' =>
+            "Great — what day works for your visit? We're open Mon–Sun 10am–8pm."
+        ]);
+        $nWVisit   = $node('wait_reply', 'Wait for visit day',
+            ['var_name' => 'visit_day']);
+        $nVisitName= $node('send_message', 'Ask name for visit',
+            ['text' => "Perfect. What name should we put down?"]);
+        $nWVName   = $node('wait_reply', 'Wait for name (visit)',
+            ['var_name' => 'customer_name']);
+
+        // Path 2 — Home consultation
+        $nHome     = $node('send_message', 'Ask home visit details', ['text' =>
+            "Nice — home consult includes free measurement + 3D rendering (RM 500 deductible from purchase over RM 8,000).\n\n"
+          . "What's the area you'd like designed? (e.g. living room, master bedroom, kitchen)"
+        ]);
+        $nWHome    = $node('wait_reply', 'Wait for home area',
+            ['var_name' => 'home_area']);
+        $nHomeAddr = $node('send_message', 'Ask home address',
+            ['text' => "Got it. What's the full address for the consultation?"]);
+        $nWHAddr   = $node('wait_reply', 'Wait for home address',
+            ['var_name' => 'home_address']);
+        $nHomeName = $node('send_message', 'Ask name for home consult',
+            ['text' => "And your name + best phone number?"]);
+        $nWHName   = $node('wait_reply', 'Wait for name (home)',
+            ['var_name' => 'customer_name']);
+
+        // Path 3 — Catalogue
+        $nCat      = $node('send_message', 'Ask catalogue category', ['text' =>
+            "Which range would you like?\n\n"
+          . "1. Sofa / living\n"
+          . "2. Bedroom / mattress\n"
+          . "3. Dining\n"
+          . "4. Everything (full catalogue)"
+        ]);
+        $nWCat     = $node('wait_reply', 'Wait for catalogue pick',
+            ['var_name' => 'catalog_pick']);
+        $nCatName  = $node('send_message', 'Ask name for catalogue',
+            ['text' => "Great, sending over shortly. What name + email should we send it to?"]);
+        $nWCName   = $node('wait_reply', 'Wait for name (catalogue)',
+            ['var_name' => 'customer_name']);
+
+        // Path 4 — Corporate / trade
+        $nTrade    = $node('send_message', 'Ask trade / corporate info', ['text' =>
+            "Fantastic — for corporate / trade we offer 10–20% off on orders above RM 15,000 (offices, hotels, cafés).\n\n"
+          . "What's the project? (e.g. \"20 chairs + 6 tables for new café in Bangsar, ready in 6 weeks\")"
+        ]);
+        $nWTrade   = $node('wait_reply', 'Wait for trade brief',
+            ['var_name' => 'trade_brief']);
+        $nTradeCo  = $node('send_message', 'Ask company + contact',
+            ['text' => "Your company name + best contact person + email please?"]);
+        $nWTradeCo = $node('wait_reply', 'Wait for company info',
+            ['var_name' => 'customer_name']);
+
+        // Path 5 — Other
+        $nOther    = $node('send_message', 'Ask free-text query', ['text' =>
+            "Sure — in a sentence or two, what are you looking for? A team member will get back to you shortly."
+        ]);
+        $nWOther   = $node('wait_reply', 'Wait for free-text',
+            ['var_name' => 'other_query']);
+        $nOtherNm  = $node('send_message', 'Ask name (other)',
+            ['text' => "Got it. And your name?"]);
+        $nWOName   = $node('wait_reply', 'Wait for name (other)',
+            ['var_name' => 'customer_name']);
+
+        // Convergent save-note + handoff (renders whatever vars were captured).
+        $nNote     = $node('save_note', 'Save qualified lead note', ['template' =>
+            "🛋 Furniture lead — {{customer_name}}\n"
+          . "Nearest showroom: {{assigned_branch_name}} — {{assigned_branch_address}}\n"
+          . "Location: {{customer_location}}\n"
+          . "Interest: {{interest_choice}}\n"
+          . "\n— Visit day: {{visit_day}}"
+          . "\n— Home area: {{home_area}} · address: {{home_address}}"
+          . "\n— Catalogue pick: {{catalog_pick}}"
+          . "\n— Trade brief: {{trade_brief}}"
+          . "\n— Other query: {{other_query}}"
+        ]);
+        $nAssign   = $node('assign_dept', 'Route to Sales / Showroom',
+            $deptId > 0 ? ['department_id' => $deptId] : []);
+        $nBye      = $node('send_message', 'Confirm and hand off', ['text' =>
+            "Thanks {{customer_name}}! 🙌 Your details are saved and our *{{assigned_branch_name}}* team will WhatsApp you shortly to follow up.\n\n"
+          . "📍 {{assigned_branch_address}}\n\n"
+          . "Anything else, just message anytime."
+        ]);
+        $nEnd      = $node('end', 'End');
+
+        // Linear next-node wiring (except the branch node which is edges-only).
+        $wire([
+            $nHello    => $nWaitLoc,   $nWaitLoc  => $nRoute,   $nRoute    => $nConfirm,
+            $nConfirm  => $nWaitIntr,  $nWaitIntr => $nIntrBr,
+
+            // Path 1 — Visit
+            $nVisit    => $nWVisit,    $nWVisit   => $nVisitName, $nVisitName => $nWVName,
+            $nWVName   => $nNote,
+
+            // Path 2 — Home
+            $nHome     => $nWHome,     $nWHome    => $nHomeAddr,  $nHomeAddr  => $nWHAddr,
+            $nWHAddr   => $nHomeName,  $nHomeName => $nWHName,    $nWHName    => $nNote,
+
+            // Path 3 — Catalogue
+            $nCat      => $nWCat,      $nWCat     => $nCatName,   $nCatName   => $nWCName,
+            $nWCName   => $nNote,
+
+            // Path 4 — Trade
+            $nTrade    => $nWTrade,    $nWTrade   => $nTradeCo,   $nTradeCo   => $nWTradeCo,
+            $nWTradeCo => $nNote,
+
+            // Path 5 — Other
+            $nOther    => $nWOther,    $nWOther   => $nOtherNm,   $nOtherNm   => $nWOName,
+            $nWOName   => $nNote,
+
+            // Converge
+            $nNote     => $nAssign,    $nAssign   => $nBye,       $nBye       => $nEnd,
+        ]);
+
+        // Branch edges — match on the customer's number choice OR any
+        // reasonable keyword. Default = the "Other" free-text path so
+        // no reply falls through the cracks.
+        $eIns = $db->prepare(
+            'INSERT INTO flow_edges (flow_id, from_node_id, to_node_id, condition_type, condition_value, sort_order)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $sort = 0;
+        // Path 1 — Visit
+        foreach (['1', 'visit', 'showroom', 'come'] as $kw) $eIns->execute([$fid, $nIntrBr, $nVisit,  'keyword', $kw, ++$sort]);
+        // Path 2 — Home
+        foreach (['2', 'home',  'consult', 'measure']  as $kw) $eIns->execute([$fid, $nIntrBr, $nHome,   'keyword', $kw, ++$sort]);
+        // Path 3 — Catalogue
+        foreach (['3', 'catalog','catalogue','pdf']    as $kw) $eIns->execute([$fid, $nIntrBr, $nCat,    'keyword', $kw, ++$sort]);
+        // Path 4 — Trade / corporate
+        foreach (['4', 'trade', 'corporate', 'bulk', 'office'] as $kw) $eIns->execute([$fid, $nIntrBr, $nTrade, 'keyword', $kw, ++$sort]);
+        // Path 5 / default — Other
+        $eIns->execute([$fid, $nIntrBr, $nOther, 'keyword', '5',     ++$sort]);
+        $eIns->execute([$fid, $nIntrBr, $nOther, 'default', null,    ++$sort]);
+
+        flow_template_finalize($db, $fid, $nHello);
         $db->commit();
         return $fid;
     } catch (Throwable $e) {

@@ -400,7 +400,7 @@ Portal AND per-channel widget both installable:
 - Common gotcha: only ONE 'new_conversation'-triggered flow should be active per workspace — multiple will fire simultaneously and collide (both send opening messages, only the second flow gets the customer's reply)
 - Fix: /admin/flows.php → pause all but one 'new_conversation' flow
 - Stuck instance? Kill via SQL: `UPDATE flow_instances SET status='cancelled' WHERE conversation_id=<n> AND status IN ('running','waiting')` — the next customer msg starts a fresh flow.
-- Templates library: /admin/flows.php has 10+ prebuilt (F&B order, reservation, appointment, FAQ router, lead capture, feedback survey, order lookup, delivery tracking, birthday opt-in, refund).
+- Templates library: /admin/flows.php has 12 prebuilt seeds — F&B ordering (single-outlet), 🗺 F&B ordering with branch router (multi-outlet, AI picks nearest branch), 🛋 Furniture showroom lead capture (multi-outlet retail, welcome → nearest showroom → interest picker → save lead), restaurant reservation, appointment booking, FAQ triage, lead qualifier, feedback survey, order status lookup, delivery tracking, birthday opt-in, refund request. Each seeds a fully-wired flow in one click.
 
 ## Recipe: route a customer to a branch by keyword
 

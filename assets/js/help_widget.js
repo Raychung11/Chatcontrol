@@ -260,11 +260,29 @@
           },
         }),
       });
-      var data = await res.json().catch(function () { return { ok: false, error: 'Bad response' }; });
+      // Read as text first so we can surface HTML error pages (PHP
+      // fatals return text/html, not JSON) — the previous "Bad response"
+      // fallback hid the real cause. Show status + first 200 chars of
+      // the body so a fatal is visible right in the widget.
+      var raw  = await res.text();
+      var data = null;
+      try { data = JSON.parse(raw); } catch (e) { /* not JSON */ }
       typingRow.remove();
 
-      if (!data.ok) {
-        appendMsg({ role: 'assistant', content: '⚠ ' + (data.error || 'Something went wrong.') }, { error: true });
+      if (!data || !data.ok) {
+        var msg;
+        if (data && data.error) {
+          msg = '⚠ ' + data.error;
+        } else if (!res.ok) {
+          // HTTP-level failure — show the status + a preview of the body
+          // so operator / dev can spot a "Undefined function foo()" line
+          // straight from the widget.
+          var preview = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+          msg = '⚠ Server error (HTTP ' + res.status + ')' + (preview ? ': ' + preview : '');
+        } else {
+          msg = '⚠ Unexpected response (not JSON): ' + raw.slice(0, 200);
+        }
+        appendMsg({ role: 'assistant', content: msg }, { error: true });
         return;
       }
       history.push({ role: 'assistant', content: data.reply });

@@ -64,6 +64,7 @@ function layout_end(): void
 <script src="<?= e(asset_url('/assets/js/app.js')) ?>" defer></script>
 <script src="<?= e(asset_url('/assets/js/pwa.js')) ?>" defer></script>
 <script src="<?= e(asset_url('/assets/js/password_toggle.js')) ?>" defer></script>
+<script src="<?= e(asset_url('/assets/js/help_widget.js')) ?>" defer></script>
 </body>
 </html>
 <?php

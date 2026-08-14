@@ -533,9 +533,14 @@ layout_start($current_user, 'Reports', 'reports');
 }
 
 /* Daily bars — keep the old horizontal list vibe, tighter */
-.rp-daily { display: grid; gap: 4px; max-height: 320px; overflow-y: auto; }
+.rp-daily {
+  display: grid; gap: 4px; max-height: 320px; overflow-y: auto;
+  /* Leave room for the scrollbar so it doesn't clip the count column. */
+  padding-right: 6px;
+}
 .rp-daily-row {
-  display: grid; grid-template-columns: 70px 1fr 40px;
+  /* Wider count column + right-aligned so 3-4 digit values fit. */
+  display: grid; grid-template-columns: 70px 1fr 56px;
   gap: 8px; align-items: center; font-size: 12.5px;
 }
 .rp-daily-row .lbl { color: var(--rp-muted); }
@@ -545,6 +550,10 @@ layout_start($current_user, 'Reports', 'reports');
 }
 .rp-daily-row .bar > span {
   display: block; height: 100%; background: var(--rp-brand);
+}
+.rp-daily-row .n {
+  color: var(--rp-ink); text-align: right;
+  font-variant-numeric: tabular-nums; font-weight: 600;
 }
 
 /* Heatmap grid */

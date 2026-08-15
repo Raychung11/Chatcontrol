@@ -477,7 +477,7 @@ The node calls Claude with the branch list + the customer's text and gets back a
 - AiServe Chatbot / Evolution path: raw text works anytime — no template gate.
 - Drip rate: recommend 20–30 msgs/min for unofficial gateways, 50–100/min for Meta.
 - Recipients: All / by tag / CSV paste. Contact tags managed in /contacts.php.
-- CSV import format for contacts: header `wa_id,name,tag` — `wa_id` is international digits with no + (e.g. 60123456789).
+- Contact import at /contact_import.php accepts **CSV or XLSX**. Recognised headers include phone / mobile / mobile no / hp / handphone / whatsapp (all map to phone), name / fullname / printed name / customer name / member name, tag(s), branch / office / outlet, email, and external id / customer no / membership no / card no. Report-chrome rows above the header (title, "Printed on…", filter descriptions) auto-skipped. Malaysian local numbers like 0123456789 auto-prefixed to 60123456789. Optional "Skip inactive rows" checkbox filters rows whose Status Flag ≠ 1. Enrichment fields (email, external_id) live on contacts.email + contacts.external_id after phase 51 migration.
 - Progress board: /admin/broadcasts.php → row shows queued/sending/sent/failed counts. Click row for per-recipient breakdown at /admin/broadcast_view.php?id=N.
 
 ## Common troubleshooting (top hits)

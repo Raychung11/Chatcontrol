@@ -1,22 +1,31 @@
 <?php
 /**
- * Bulk contact import via CSV.
+ * Bulk contact import via CSV or XLSX.
  *
- * Accepts a flexible CSV shape — we look at the first row and:
- *   - If it contains header names (phone/name/tags), match columns by
- *     name (case-insensitive, punctuation-tolerant).
- *   - Otherwise treat the first row as data and assume phone, name, tags
- *     in that order.
+ * Accepts a flexible shape — we scan for the first row that looks like
+ * a header (has a phone-alias in one of its cells), then:
+ *   - Match columns by name (case-insensitive, punctuation-tolerant).
+ *   - If no header row is detectable, treat every row as data assuming
+ *     phone, name, tags, branch in that order.
  *
- * Phone numbers are normalized (digits only, drops leading + and 0)
- * and validated to look like a real E.164-ish number (8-15 digits).
+ * Broad alias set — the same importer handles hand-rolled CSVs AND
+ * CRM exports like MemberReport.xlsx (columns: CustomerNo,
+ * Membership Code, Membership No, Card No, Printed Name, Status Flag,
+ * Join Date, Expiry Date, Date Of Birth, Email, Mobile No). Chrome
+ * rows above the header (report title, printed-on, filters) are
+ * auto-skipped.
+ *
+ * Malaysian-friendly phone normalization: strips + / 0 / spaces /
+ * dashes, and auto-prefixes a 10-digit local number with 60 when the
+ * country code is missing.
  *
  * Every row becomes an upsert against contacts keyed on
- * (company_id, wa_id, platform=whatsapp). Duplicates within the CSV
+ * (company_id, wa_id, platform=whatsapp). Duplicates within the file
  * itself are silently dedupped.
  */
 
 require_once __DIR__ . '/inc/layout.php';
+require_once __DIR__ . '/inc/xlsx_reader.php';
 
 $current_user = require_role(['super_admin', 'manager']);
 $companyId    = (int)$current_user['company_id'];
@@ -63,10 +72,12 @@ layout_start($current_user, 'Import contacts', 'contacts');
 
   <form method="post" enctype="multipart/form-data" class="form-grid">
     <?= csrf_field() ?>
-    <label>CSV file
-      <input type="file" name="csv" accept=".csv,text/csv,text/plain" required>
+    <label>File
+      <input type="file" name="csv" accept=".csv,.xlsx,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
       <small class="muted">
-        Max 5 MB. Also accepts a plain <code>.txt</code> if it's comma or tab-separated.
+        Max 5 MB. Accepts <code>.csv</code>, <code>.xlsx</code>, or a plain <code>.txt</code>
+        (comma or tab-separated). Report chrome rows above the header
+        (title, "Printed on…", filter descriptions) are auto-skipped.
       </small>
     </label>
 
@@ -76,10 +87,20 @@ layout_start($current_user, 'Import contacts', 'contacts');
       <small class="muted">If unticked, contacts already in the system are skipped instead of updated.</small>
     </label>
 
+    <label class="check-row">
+      <input type="checkbox" name="active_only" value="1">
+      <span>Skip inactive rows <small class="muted">(Status Flag ≠ 1)</small></span>
+      <small class="muted">
+        For CRM exports with a <code>Status Flag</code> column: only import rows where the flag
+        is <code>1</code>, <code>active</code>, <code>yes</code>, or <code>true</code>.
+        Ignored if the file has no status column.
+      </small>
+    </label>
+
     <label>Default tag <small class="muted">(optional)</small>
       <input type="text" name="default_tag" maxlength="60" placeholder="e.g. imported-2026-07">
       <small class="muted">
-        Applied to every imported contact. Combined with tags in the CSV's <code>tags</code>
+        Applied to every imported contact. Combined with tags in the file's <code>tags</code>
         column. Useful for tracking which upload a contact came from.
       </small>
     </label>
@@ -89,11 +110,11 @@ layout_start($current_user, 'Import contacts', 'contacts');
 
   <hr style="margin: 24px 0; border:none; border-top:1px solid var(--c-border);">
 
-  <h3>CSV format</h3>
+  <h3>File format</h3>
   <p class="muted small">
-    Recommended: a header row with column names <code>phone</code>, <code>name</code>,
-    <code>tags</code>, <code>branch</code>. Column order doesn't matter and matching is case-insensitive.
-    <code>tags</code> can be one tag or several separated by <code>|</code>.
+    <strong>Recommended headers:</strong> <code>phone</code>, <code>name</code>,
+    <code>tags</code>, <code>branch</code>. Column order doesn't matter — matching is case-insensitive
+    and punctuation-tolerant. <code>tags</code> can be one tag or several separated by <code>|</code>.
     <code>branch</code> takes a branch name — if it doesn't exist yet, we auto-create it.
   </p>
   <pre style="background:#f6f9fb; border:1px solid #e3e8ee; border-radius:6px; padding:12px; overflow-x:auto;">phone,name,tags,branch
@@ -101,13 +122,28 @@ layout_start($current_user, 'Import contacts', 'contacts');
 60198765432,Ali Rahman,new-lead,Penang Office
 6591234567,Jane Doe,,</pre>
 
-  <p class="muted small">
-    <strong>No header row?</strong> That's fine — the importer assumes the order
-    <code>phone, name, tags, branch</code>.<br>
-    <strong>Phone format:</strong> country code + number, digits only. No <code>+</code>,
-    no leading zero. e.g. <code>60123456789</code>, not <code>+60 12-345 6789</code> or
-    <code>0123456789</code>. Malformed rows are logged as errors and skipped, the rest
-    still import.
+  <p class="muted small" style="margin-top:14px;">
+    <strong>Also recognised (CRM-export style):</strong>
+  </p>
+  <table class="data-table small" style="max-width: 720px;">
+    <thead><tr><th>Field</th><th>Any of these headers match</th></tr></thead>
+    <tbody>
+      <tr><td>phone</td><td><code>phone</code>, <code>mobile</code>, <code>mobile no</code>, <code>mobileno</code>, <code>hp</code>, <code>handphone</code>, <code>number</code>, <code>whatsapp</code>, <code>wa</code>, <code>waid</code>, <code>msisdn</code>, <code>contactno</code></td></tr>
+      <tr><td>name</td><td><code>name</code>, <code>fullname</code>, <code>displayname</code>, <code>contactname</code>, <code>printedname</code>, <code>printname</code>, <code>customername</code>, <code>membername</code></td></tr>
+      <tr><td>tags</td><td><code>tag</code>, <code>tags</code>, <code>label</code>, <code>labels</code></td></tr>
+      <tr><td>branch</td><td><code>branch</code>, <code>office</code>, <code>location</code>, <code>businessunit</code>, <code>outlet</code>, <code>shop</code>, <code>store</code></td></tr>
+      <tr><td>email</td><td><code>email</code>, <code>emailaddress</code>, <code>mail</code></td></tr>
+      <tr><td>external id</td><td><code>customerno</code>, <code>membershipno</code>, <code>memberno</code>, <code>membercode</code>, <code>cardno</code>, <code>id</code>, <code>code</code>, <code>externalid</code></td></tr>
+      <tr><td>status</td><td><code>status</code>, <code>statusflag</code>, <code>active</code></td></tr>
+    </tbody>
+  </table>
+
+  <p class="muted small" style="margin-top:14px;">
+    <strong>Phone format:</strong> country code + number, digits only.
+    <code>+</code>, spaces, dashes, and a leading <code>00</code> are stripped automatically.
+    <strong>10-digit Malaysian numbers starting with 0 (like <code>0123456789</code>) get
+    auto-prefixed with 60</strong> → <code>60123456789</code>. E.164 range check: 8–15 digits.
+    Malformed rows are logged as errors and skipped, the rest still import.
   </p>
 </div>
 
@@ -122,88 +158,79 @@ layout_start($current_user, 'Import contacts', 'contacts');
  */
 function contact_import_run(int $companyId, int $userId): array
 {
+    $blank = ['created' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => []];
+
     if (empty($_FILES['csv']) || (int)($_FILES['csv']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
-        return ['ok' => false, 'error' => 'No file uploaded (or upload failed).',
-                'created' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => []];
+        return ['ok' => false, 'error' => 'No file uploaded (or upload failed).'] + $blank;
     }
     $file = $_FILES['csv'];
     if ((int)$file['size'] > 5 * 1024 * 1024) {
-        return ['ok' => false, 'error' => 'File too big (max 5 MB).',
-                'created' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => []];
+        return ['ok' => false, 'error' => 'File too big (max 5 MB).'] + $blank;
     }
     $updateExisting = !empty($_POST['update_existing']);
+    $activeOnly     = !empty($_POST['active_only']);
     $defaultTag     = trim((string)($_POST['default_tag'] ?? ''));
 
-    $fh = @fopen($file['tmp_name'], 'r');
-    if (!$fh) {
-        return ['ok' => false, 'error' => 'Could not read the uploaded file.',
-                'created' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => []];
+    // Route on extension + magic bytes. xlsx = zip (starts with "PK");
+    // csv/txt = plain text.
+    $origName = (string)($file['name'] ?? '');
+    $ext      = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
+    $isXlsx   = $ext === 'xlsx' || contact_import_looks_like_zip($file['tmp_name']);
+
+    if ($isXlsx) {
+        $x = xlsx_read_rows($file['tmp_name']);
+        if (!$x['ok']) {
+            return ['ok' => false, 'error' => 'Could not read xlsx: ' . (string)$x['error']] + $blank;
+        }
+        $rowsRead = $x['rows'];
+    } else {
+        $rowsRead = contact_import_read_csv($file['tmp_name']);
+        if ($rowsRead === null) {
+            return ['ok' => false, 'error' => 'CSV appears to be empty or unreadable.'] + $blank;
+        }
     }
-
-    // Sniff delimiter: comma, semicolon, or tab.
-    $first = fgets($fh);
-    if ($first === false) {
-        fclose($fh);
-        return ['ok' => false, 'error' => 'CSV appears to be empty.',
-                'created' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => []];
-    }
-    // Strip BOM if present (Excel exports).
-    if (strncmp($first, "\xEF\xBB\xBF", 3) === 0) $first = substr($first, 3);
-
-    $counts = ['comma' => substr_count($first, ','),
-               'semi'  => substr_count($first, ';'),
-               'tab'   => substr_count($first, "\t")];
-    arsort($counts);
-    $delim = ['comma' => ',', 'semi' => ';', 'tab' => "\t"][array_key_first($counts)];
-
-    rewind($fh);
-    // Re-read + BOM strip on the first row (the fgets above ate it).
-    stream_filter_prepend($fh, 'convert.iconv.UTF-8-MAC/UTF-8'); // no-op on Linux
-    // Actually simpler: parse the sniffed line ourselves, then loop.
-    $rowsRead = [];
-    $rowsRead[] = str_getcsv(rtrim($first, "\r\n"), $delim);
-    while (($row = fgetcsv($fh, 0, $delim)) !== false) {
-        $rowsRead[] = $row;
-    }
-    fclose($fh);
-
     if (!$rowsRead) {
-        return ['ok' => false, 'error' => 'CSV appears to be empty.',
-                'created' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => []];
+        return ['ok' => false, 'error' => 'File contains no rows.'] + $blank;
     }
 
-    // Header detection: if the first row's "phone" candidate cell doesn't
-    // contain enough digits to be a real phone, treat the row as headers.
-    $firstRow = array_map(function ($x) { return trim((string)$x); }, $rowsRead[0]);
-    $isHeader = false;
-    if (!empty($firstRow[0])) {
-        $digitCount = strlen(preg_replace('/\D/', '', $firstRow[0]));
-        if ($digitCount < 6) $isHeader = true;
-    }
-
-    // Column mapping: default (no header) is phone / name / tags / branch.
-    $col = ['phone' => 0, 'name' => 1, 'tags' => 2, 'branch' => 3];
-    if ($isHeader) {
-        $col = ['phone' => -1, 'name' => -1, 'tags' => -1, 'branch' => -1];
-        foreach ($firstRow as $i => $h) {
-            $norm = strtolower(trim(preg_replace('/[^a-z0-9]+/i', '', $h)));
-            if (in_array($norm, ['phone','mobile','number','whatsapp','wa','waid','msisdn'], true)) {
-                $col['phone'] = $i;
-            } elseif (in_array($norm, ['name','fullname','displayname','contactname'], true)) {
-                $col['name'] = $i;
-            } elseif (in_array($norm, ['tag','tags','label','labels'], true)) {
-                $col['tags'] = $i;
-            } elseif (in_array($norm, ['branch','office','location','businessunit'], true)) {
-                $col['branch'] = $i;
-            }
+    // Header detection: scan the first ~20 rows for one that contains a
+    // recognisable phone-alias header. Rows above it are treated as
+    // chrome (report title, "Printed on…", filter descriptions) and
+    // skipped. If no row looks like a header, fall through to the
+    // legacy 'phone,name,tags,branch' positional assumption.
+    $headerRowIndex = null;
+    $col = null;
+    $scanLimit = min(20, count($rowsRead));
+    for ($i = 0; $i < $scanLimit; $i++) {
+        $candidate = array_map(fn($v) => trim((string)$v), $rowsRead[$i]);
+        // Skip visibly-chrome rows (0 or 1 non-empty cells).
+        $nonEmpty = array_filter($candidate, fn($v) => $v !== '');
+        if (count($nonEmpty) < 2) continue;
+        // Pass the first 5 rows AFTER the candidate so the mapper can
+        // pick the most-populated column when multiple columns match the
+        // same field (e.g. Membership No wins over an empty CustomerNo).
+        $sample = array_slice($rowsRead, $i + 1, 5);
+        $mapped = contact_import_map_columns($candidate, $sample);
+        if ($mapped !== null && $mapped['phone'] !== -1) {
+            $headerRowIndex = $i;
+            $col = $mapped;
+            break;
         }
-        if ($col['phone'] === -1) {
-            return ['ok' => false,
-                    'error' => 'Could not find a phone column. Expected one of: phone, mobile, number, whatsapp, msisdn.',
-                    'created' => 0, 'updated' => 0, 'skipped' => 0, 'errors' => []];
-        }
-        array_shift($rowsRead);
     }
+    if ($headerRowIndex === null) {
+        // No header found — assume positional order: phone / name / tags / branch.
+        $col = ['phone' => 0, 'name' => 1, 'tags' => 2, 'branch' => 3,
+                'email' => -1, 'external_id' => -1, 'status' => -1];
+        $dataStart = 0;
+    } else {
+        $dataStart = $headerRowIndex + 1;
+    }
+    // Discard chrome + header rows so the loop below only sees data.
+    $chromeSkipped = $dataStart;
+    $rowsRead = array_slice($rowsRead, $dataStart);
+    // Track absolute line numbers for error messages so operators can
+    // find the row in their original file.
+    $lineOffset = $chromeSkipped;   // first data row's absolute index = $chromeSkipped + 1
 
     // Pre-load workspace branches so we can resolve names -> ids without
     // hitting the DB per row. Also auto-create any branch name seen in
@@ -235,17 +262,40 @@ function contact_import_run(int $companyId, int $userId): array
     $updNameStmt = $db->prepare(
         'UPDATE contacts SET display_name = ?, phone = COALESCE(NULLIF(?, ""), phone) WHERE id = ?'
     );
+    // email + external_id live behind phase-51. Skip these updates
+    // silently on pre-migration DBs so the importer still works.
+    $hasEnrichCols = contact_import_has_enrich_columns($db);
+    $updEmailStmt  = $hasEnrichCols
+        ? $db->prepare('UPDATE contacts SET email = COALESCE(NULLIF(?, ""), email) WHERE id = ?')
+        : null;
+    $updExtIdStmt  = $hasEnrichCols
+        ? $db->prepare('UPDATE contacts SET external_id = COALESCE(NULLIF(?, ""), external_id) WHERE id = ?')
+        : null;
 
-    $lineNum = $isHeader ? 2 : 1;
-    foreach ($rowsRead as $row) {
-        $lineNum++;
+    foreach ($rowsRead as $rowIdx => $row) {
+        $lineNum = $lineOffset + $rowIdx + 1;   // absolute line number in the original file
         if (!is_array($row) || count(array_filter($row, fn($x) => trim((string)$x) !== '')) === 0) {
             continue; // blank row
         }
         $rawPhone  = trim((string)($row[$col['phone']]  ?? ''));
         $rawName   = trim((string)($row[$col['name']]   ?? ''));
-        $rawTags   = trim((string)($row[$col['tags']]   ?? ''));
-        $rawBranch = $col['branch'] >= 0 ? trim((string)($row[$col['branch']] ?? '')) : '';
+        $rawTags   = $col['tags']        >= 0 ? trim((string)($row[$col['tags']]        ?? '')) : '';
+        $rawBranch = $col['branch']      >= 0 ? trim((string)($row[$col['branch']]      ?? '')) : '';
+        $rawEmail  = $col['email']       >= 0 ? trim((string)($row[$col['email']]       ?? '')) : '';
+        $rawExtId  = $col['external_id'] >= 0 ? trim((string)($row[$col['external_id']] ?? '')) : '';
+        $rawStatus = $col['status']      >= 0 ? trim((string)($row[$col['status']]      ?? '')) : '';
+
+        // Active-only filter: skip rows whose status column doesn't look
+        // active ('1', 'active', 'yes', 'true'). Only applies when the
+        // file actually has a status column AND the operator ticked the
+        // checkbox — otherwise every row is treated as active.
+        if ($activeOnly && $col['status'] >= 0) {
+            $s = mb_strtolower($rawStatus);
+            if (!in_array($s, ['1', 'active', 'yes', 'true', 'y', 't'], true)) {
+                $skipped++;
+                continue;
+            }
+        }
 
         $waId = contact_normalize_phone($rawPhone);
         if ($waId === '') {
@@ -257,6 +307,9 @@ function contact_import_run(int $companyId, int $userId): array
             continue;
         }
         $seenInFile[$waId] = true;
+
+        // Basic email sanity — silently drop if it doesn't look like one.
+        if ($rawEmail !== '' && !filter_var($rawEmail, FILTER_VALIDATE_EMAIL)) $rawEmail = '';
 
         try {
             $findStmt->execute([$companyId, $waId]);
@@ -314,7 +367,18 @@ function contact_import_run(int $companyId, int $userId): array
                 $created++;
             }
 
-            // Tags — assemble from CSV column + default tag.
+            // Email + external_id — always update when the row has a
+            // value (regardless of updateExisting, since these are new
+            // fields never previously populated). COALESCE(NULLIF, existing)
+            // in the statements means empty values leave old data alone.
+            if ($updEmailStmt && $rawEmail !== '') {
+                $updEmailStmt->execute([$rawEmail, $contactId]);
+            }
+            if ($updExtIdStmt && $rawExtId !== '') {
+                $updExtIdStmt->execute([mb_substr($rawExtId, 0, 120), $contactId]);
+            }
+
+            // Tags — assemble from file column + default tag.
             $tags = [];
             if ($rawTags !== '') {
                 foreach (preg_split('/[|,;]+/', $rawTags) as $t) {
@@ -345,8 +409,10 @@ function contact_import_run(int $companyId, int $userId): array
 }
 
 /**
- * Strip everything but digits. Drop a leading + or 00. Reject if too
- * short or too long to be a real number. Returns '' on invalid.
+ * Strip everything but digits. Drop a leading + or 00. Auto-prefix
+ * local Malaysian numbers (10-11 digits starting with 0) with 60,
+ * so `0123456789` becomes `60123456789`. Reject if too short or too
+ * long to be a real number. Returns '' on invalid.
  */
 function contact_normalize_phone(string $raw): string
 {
@@ -356,11 +422,147 @@ function contact_normalize_phone(string $raw): string
     if (strlen($digits) > 10 && strncmp($digits, '00', 2) === 0) {
         $digits = substr($digits, 2);
     }
+    // Malaysian local shorthand: numbers like 0123456789 (mobile) or
+    // 0388887777 (landline) — start with 0 and are 9–11 digits. Prepend
+    // 60 and drop the leading 0 so they land in international form.
+    if (strlen($digits) >= 9 && strlen($digits) <= 11 && $digits[0] === '0') {
+        $digits = '60' . substr($digits, 1);
+    }
     // 8 digits is the minimum for any country code + local number
     // 15 is the E.164 max.
     $len = strlen($digits);
     if ($len < 8 || $len > 15) return '';
     return $digits;
+}
+
+/**
+ * Return true if the uploaded file starts with the ZIP magic bytes
+ * "PK\x03\x04" — an xlsx is a zip so this is the most reliable format
+ * detector even when the extension is missing / wrong.
+ */
+function contact_import_looks_like_zip(string $localPath): bool
+{
+    $fh = @fopen($localPath, 'rb');
+    if (!$fh) return false;
+    $sig = fread($fh, 4);
+    fclose($fh);
+    return $sig === "PK\x03\x04";
+}
+
+/**
+ * Cached check: does the contacts table have the phase-51 enrichment
+ * columns? Static per request so we don't hit information_schema per
+ * row on a 16k-row import.
+ */
+function contact_import_has_enrich_columns(PDO $db): bool
+{
+    static $has = null;
+    if ($has !== null) return $has;
+    try {
+        $r = $db->query(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'contacts'
+               AND COLUMN_NAME IN ('email', 'external_id')"
+        )->fetchColumn();
+        $has = ((int)$r) === 2;
+    } catch (Throwable $e) {
+        $has = false;
+    }
+    return $has;
+}
+
+/**
+ * Read a CSV / TSV / semi-delimited file into a 2D string array —
+ * same shape xlsx_read_rows returns, so the row-processing loop
+ * doesn't care which format the operator uploaded.
+ *
+ * Returns null on unreadable / empty file.
+ */
+function contact_import_read_csv(string $localPath): ?array
+{
+    $fh = @fopen($localPath, 'r');
+    if (!$fh) return null;
+    $first = fgets($fh);
+    if ($first === false) { fclose($fh); return null; }
+    if (strncmp($first, "\xEF\xBB\xBF", 3) === 0) $first = substr($first, 3);   // BOM
+    // Sniff delimiter — comma / semicolon / tab, whichever appears most.
+    $counts = ['comma' => substr_count($first, ','),
+               'semi'  => substr_count($first, ';'),
+               'tab'   => substr_count($first, "\t")];
+    arsort($counts);
+    $delim = ['comma' => ',', 'semi' => ';', 'tab' => "\t"][array_key_first($counts)];
+    $rows  = [str_getcsv(rtrim($first, "\r\n"), $delim)];
+    while (($r = fgetcsv($fh, 0, $delim)) !== false) $rows[] = $r;
+    fclose($fh);
+    return $rows;
+}
+
+/**
+ * Given a candidate header row and (optionally) the first few data
+ * rows, return the column index map — or NULL if the header doesn't
+ * qualify. A row qualifies as a header only if at least one cell
+ * matches a phone alias, so chrome rows like ["Member Report"] and
+ * data rows like ["ER","ER00000017",…] don't false-positive.
+ *
+ * When multiple columns match the same field (e.g. CustomerNo,
+ * Membership No, and Card No all match external_id), we look at the
+ * first ~5 data rows and pick whichever candidate is most consistently
+ * populated. This handles CRM exports where the "official" ID column
+ * is left blank and the useful id sits in a secondary column.
+ *
+ * @return array{phone:int,name:int,tags:int,branch:int,email:int,external_id:int,status:int}|null
+ */
+function contact_import_map_columns(array $headerCells, array $sampleRows = []): ?array
+{
+    static $aliases = null;
+    if ($aliases === null) {
+        $aliases = [
+            'phone'       => ['phone','mobile','mobileno','number','whatsapp','wa','waid','msisdn','hp','handphone','contactno','phoneno'],
+            'name'        => ['name','fullname','displayname','contactname','printedname','printname','customername','membername'],
+            'tags'        => ['tag','tags','label','labels'],
+            'branch'      => ['branch','office','location','businessunit','outlet','shop','store'],
+            'email'       => ['email','emailaddress','mail'],
+            'external_id' => ['customerno','membershipno','memberno','membercode','cardno','id','code','externalid','custid','memberid'],
+            'status'      => ['status','statusflag','active'],
+        ];
+    }
+
+    // First pass — collect ALL candidate columns per field.
+    // (Same header word can only bind one field — the first match wins,
+    //  same as before — but multiple different columns can bind to the
+    //  same field via different aliases.)
+    $candidates = array_fill_keys(array_keys($aliases), []);
+    $used = [];   // column index → field it's already bound to
+    foreach ($headerCells as $i => $h) {
+        $norm = strtolower(trim(preg_replace('/[^a-z0-9]+/i', '', (string)$h)));
+        if ($norm === '') continue;
+        foreach ($aliases as $field => $words) {
+            if (in_array($norm, $words, true) && !isset($used[$i])) {
+                $candidates[$field][] = $i;
+                $used[$i] = $field;
+                break;
+            }
+        }
+    }
+
+    // Second pass — for each field with multiple candidates, prefer the
+    // column that's populated in the sample data. Falls back to the
+    // first candidate when we have no samples or all are equally empty.
+    $map = [];
+    foreach ($candidates as $field => $cols) {
+        if (!$cols) { $map[$field] = -1; continue; }
+        if (count($cols) === 1 || !$sampleRows) { $map[$field] = $cols[0]; continue; }
+        $best = $cols[0]; $bestScore = -1;
+        foreach ($cols as $c) {
+            $score = 0;
+            foreach ($sampleRows as $r) {
+                if (trim((string)($r[$c] ?? '')) !== '') $score++;
+            }
+            if ($score > $bestScore) { $bestScore = $score; $best = $c; }
+        }
+        $map[$field] = $best;
+    }
+    return $map['phone'] !== -1 ? $map : null;
 }
 
 /**

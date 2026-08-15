@@ -26,6 +26,7 @@
 
 require_once __DIR__ . '/inc/layout.php';
 require_once __DIR__ . '/inc/xlsx_reader.php';
+require_once __DIR__ . '/inc/contacts_tags.php';
 
 $current_user = require_role(['super_admin', 'manager']);
 $companyId    = (int)$current_user['company_id'];
@@ -670,57 +671,6 @@ function contact_import_map_columns(array $headerCells, array $sampleRows = []):
     return $map['phone'] !== -1 ? $map : null;
 }
 
-/**
- * Ensure a tag exists on the workspace, then attach it to the contact via
- * conversation_tag_map. Tag-to-contact routing goes through the
- * contact's most-recent conversation. If the contact has no conversation
- * yet (new import row), we open a placeholder conversation so the tag
- * has somewhere to hang.
- */
-function contact_ensure_tagged(PDO $db, int $companyId, int $contactId, string $tagName, array &$cache): void
-{
-    $tagName = mb_substr($tagName, 0, 60);
-    if (!isset($cache[$tagName])) {
-        $s = $db->prepare(
-            'SELECT id FROM conversation_tags WHERE company_id = ? AND name = ? LIMIT 1'
-        );
-        $s->execute([$companyId, $tagName]);
-        $tid = (int)$s->fetchColumn();
-        if (!$tid) {
-            $db->prepare(
-                'INSERT INTO conversation_tags (company_id, name, color) VALUES (?, ?, "#25D366")'
-            )->execute([$companyId, $tagName]);
-            $tid = (int)$db->lastInsertId();
-        }
-        $cache[$tagName] = $tid;
-    }
-    $tid = $cache[$tagName];
-
-    // Find (or open) a conversation to hang the tag on.
-    $s = $db->prepare(
-        'SELECT id FROM conversations WHERE company_id = ? AND contact_id = ?
-         ORDER BY id DESC LIMIT 1'
-    );
-    $s->execute([$companyId, $contactId]);
-    $convId = (int)$s->fetchColumn();
-    if (!$convId) {
-        // No channel context for pure imports — pick the workspace's
-        // default channel so the placeholder conversation isn't orphaned.
-        $chId = (int)$db->query(
-            'SELECT id FROM channels WHERE company_id = ' . $companyId
-            . ' AND status = "active" ORDER BY is_default DESC, id ASC LIMIT 1'
-        )->fetchColumn();
-        if (!$chId) return; // no channels yet — skip tagging, contact still saved.
-        $db->prepare(
-            'INSERT INTO conversations
-                (company_id, channel_id, contact_id, status,
-                 last_message_text, last_message_at, unread_count)
-             VALUES (?, ?, ?, "open", "(imported contact)", NOW(), 0)'
-        )->execute([$companyId, $chId, $contactId]);
-        $convId = (int)$db->lastInsertId();
-    }
-
-    $db->prepare(
-        'INSERT IGNORE INTO conversation_tag_map (conversation_id, tag_id) VALUES (?, ?)'
-    )->execute([$convId, $tid]);
-}
+// contact_ensure_tagged lives in inc/contacts_tags.php now — required at
+// the top of this file so both the import path and the bulk-tag UI on
+// /contacts.php stay in sync.

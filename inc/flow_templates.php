@@ -899,9 +899,18 @@ function flow_template_furniture_showroom(PDO $db, int $companyId, int $userId, 
         ]);
         $nWTrade   = $node('wait_reply', 'Wait for trade brief',
             ['var_name' => 'trade_brief']);
-        $nTradeCo  = $node('send_message', 'Ask company + contact',
-            ['text' => "Your company name + best contact person + email please?"]);
+        // Ask company info first (goes into its OWN var so the compound
+        // "Acme Corp, John Doe, john@acme.com" reply doesn't get rendered
+        // as {{customer_name}} in the save-note + hand-off template),
+        // then ask for the contact person's actual name separately so
+        // downstream {{customer_name}} substitutions stay clean.
+        $nTradeCo  = $node('send_message', 'Ask company + email',
+            ['text' => "Your company name + best contact email please?"]);
         $nWTradeCo = $node('wait_reply', 'Wait for company info',
+            ['var_name' => 'trade_company']);
+        $nTradeNm  = $node('send_message', 'Ask trade contact name',
+            ['text' => "And who's the best person to reach at your side?"]);
+        $nWTradeNm = $node('wait_reply', 'Wait for trade contact name',
             ['var_name' => 'customer_name']);
 
         // Path 5 — Other
@@ -925,6 +934,7 @@ function flow_template_furniture_showroom(PDO $db, int $companyId, int $userId, 
           . "\n— Home area: {{home_area}} · address: {{home_address}}"
           . "\n— Catalogue pick: {{catalog_pick}}"
           . "\n— Trade brief: {{trade_brief}}"
+          . "\n— Trade company / email: {{trade_company}}"
           . "\n— Other query: {{other_query}}"
         ]);
         $nAssign   = $node('assign_dept', 'Route to Sales / Showroom',
@@ -955,7 +965,7 @@ function flow_template_furniture_showroom(PDO $db, int $companyId, int $userId, 
 
             // Path 4 — Trade
             $nTrade    => $nWTrade,    $nWTrade   => $nTradeCo,   $nTradeCo   => $nWTradeCo,
-            $nWTradeCo => $nNote,
+            $nWTradeCo => $nTradeNm,   $nTradeNm  => $nWTradeNm,  $nWTradeNm  => $nNote,
 
             // Path 5 — Other
             $nOther    => $nWOther,    $nWOther   => $nOtherNm,   $nOtherNm   => $nWOName,

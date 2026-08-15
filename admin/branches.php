@@ -35,9 +35,11 @@ if (is_post()) {
                 ? 'A branch with that name already exists.'
                 : 'Could not create branch.';
         }
-    } elseif ($action === 'save_details' && $branchId > 0) {
+    } elseif ($action === 'save_details' && $branchId > 0 && $name !== '') {
         // Save name + address + area_keywords in one pass. Handles the
-        // 'edit branch' inline form below each row.
+        // 'edit branch' inline form below each row. HTML `required` is
+        // client-side only, so an empty name check is enforced here
+        // too — otherwise a curl or dev-tools POST could blank the name.
         $addr = mb_substr(trim((string)($_POST['address']       ?? '')), 0, 500);
         $kw   = mb_substr(trim((string)($_POST['area_keywords'] ?? '')), 0, 2000);
         try {
@@ -50,16 +52,6 @@ if (is_post()) {
             $msg = 'Branch updated.';
         } catch (PDOException $e) {
             $err = 'Could not save (name may already be in use).';
-        }
-    } elseif ($action === 'rename' && $branchId > 0 && $name !== '') {
-        try {
-            $db->prepare('UPDATE branches SET name = ? WHERE id = ? AND company_id = ?')
-               ->execute([$name, $branchId, $companyId]);
-            log_activity($companyId, (int)$current_user['id'], 'branch_renamed',
-                'branch', $branchId, $name);
-            $msg = 'Branch renamed.';
-        } catch (PDOException $e) {
-            $err = 'Could not rename (name may already be in use).';
         }
     } elseif ($action === 'toggle' && $branchId > 0) {
         $db->prepare(
@@ -114,22 +106,16 @@ layout_start($current_user, 'Branches', 'branches');
   </form>
 
   <table class="data-table">
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Contacts</th>
-        <th>Status</th>
-        <th>Created</th>
-        <th></th>
-      </tr>
-    </thead>
+    <!-- No <thead> — the row body is a single full-width <details> editor
+         card per branch (name/status/count are shown inside the <summary>),
+         so a fixed column header row would misalign with everything below it. -->
     <tbody>
       <?php if (!$branches): ?>
-        <tr><td colspan="5" class="muted">No branches yet — create your first above.</td></tr>
+        <tr><td class="muted">No branches yet — create your first above.</td></tr>
       <?php endif; ?>
       <?php foreach ($branches as $b): ?>
         <tr>
-          <td colspan="5" style="padding: 12px 14px;">
+          <td style="padding: 12px 14px;">
             <details <?= empty($b['address']) && empty($b['area_keywords']) ? 'open' : '' ?>
                      style="background:#fafbfc; border:1px solid #e3e8ee; border-radius:8px; padding: 10px 12px;">
               <summary style="cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">

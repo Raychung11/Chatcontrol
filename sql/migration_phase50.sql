@@ -18,14 +18,24 @@ BEGIN
 
   -- 1. branches gets a mailing address + a serves-these-areas list.
   --    Both optional — populated per-branch in /admin/branches.php.
+  --    Each column guarded INDEPENDENTLY so a partial prior run (e.g.
+  --    the two-column ALTER threw between the two ADD COLUMN clauses,
+  --    or a hand-added column) can still be reconciled by re-running
+  --    this migration.
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'branches'
       AND COLUMN_NAME = 'address'
   ) THEN
-    ALTER TABLE branches
-      ADD COLUMN address       VARCHAR(500) DEFAULT NULL,
-      ADD COLUMN area_keywords TEXT         DEFAULT NULL;
+    ALTER TABLE branches ADD COLUMN address VARCHAR(500) DEFAULT NULL;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'branches'
+      AND COLUMN_NAME = 'area_keywords'
+  ) THEN
+    ALTER TABLE branches ADD COLUMN area_keywords TEXT DEFAULT NULL;
   END IF;
 
   -- 2. flow_nodes.node_type ENUM gets the new type.

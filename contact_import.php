@@ -34,6 +34,11 @@ $result = null;   // filled on POST after the import runs
 
 if (is_post()) {
     csrf_check();
+    // 30 s isn't enough for a 50 k-row xlsx. Give the importer 5 min
+    // and lift memory temporarily — big xlsx sharedStrings can pull
+    // 100 MB+ into RAM even after we parse.
+    @set_time_limit(300);
+    @ini_set('memory_limit', '512M');
     $result = contact_import_run($companyId, (int)$current_user['id']);
 }
 
@@ -70,15 +75,19 @@ layout_start($current_user, 'Import contacts', 'contacts');
     <?php endif; ?>
   <?php endif; ?>
 
-  <form method="post" enctype="multipart/form-data" class="form-grid">
+  <form method="post" enctype="multipart/form-data" class="form-grid" id="import-form">
     <?= csrf_field() ?>
     <label>File
-      <input type="file" name="csv" accept=".csv,.xlsx,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+      <input type="file" name="csv" id="import-file"
+             accept=".csv,.xlsx,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
       <small class="muted">
         Max 5 MB. Accepts <code>.csv</code>, <code>.xlsx</code>, or a plain <code>.txt</code>
         (comma or tab-separated). Report chrome rows above the header
         (title, "Printed on…", filter descriptions) are auto-skipped.
       </small>
+      <div id="file-hint" style="display:none; margin-top:6px; padding:8px 12px;
+           background:#eff6ff; border:1px solid #dbeafe; border-radius:6px;
+           font-size:13px; color:#1e3a8a;"></div>
     </label>
 
     <label class="check-row">
@@ -105,8 +114,104 @@ layout_start($current_user, 'Import contacts', 'contacts');
       </small>
     </label>
 
-    <button type="submit" class="btn btn-primary">Import</button>
+    <button type="submit" class="btn btn-primary" id="import-btn">Import</button>
   </form>
+
+  <!-- Full-screen overlay while the POST is in flight -->
+  <div id="import-overlay" style="display:none; position:fixed; inset:0;
+       background:rgba(15,23,42,0.72); z-index:9999; align-items:center;
+       justify-content:center; padding:20px;">
+    <div style="background:#fff; border-radius:12px; padding:28px 32px;
+         max-width:440px; width:100%; box-shadow:0 20px 40px rgba(0,0,0,.28);
+         text-align:center;">
+      <div style="width:56px; height:56px; margin:0 auto 18px; border-radius:50%;
+           border:5px solid #dbeafe; border-top-color:#0072B2;
+           animation:hw-spin 1s linear infinite;"></div>
+      <h3 style="margin:0 0 8px; font-size:18px; color:#0f172a;">Importing contacts…</h3>
+      <p id="import-hint-msg" style="margin:0 0 6px; color:#475569; font-size:14px;">
+        Reading your file and creating contacts.
+      </p>
+      <p class="muted small" style="margin:14px 0 0; padding-top:14px; border-top:1px solid #eef2f7;">
+        ⚠️ Please don't close this tab or hit Back — the import runs
+        as one server request. Bigger files take longer:
+        <br>~1,000 rows ≈ 5 sec · ~10,000 rows ≈ 30 sec · ~50,000 rows ≈ 2 min
+      </p>
+    </div>
+  </div>
+  <style>@keyframes hw-spin { to { transform: rotate(360deg); } }</style>
+
+  <script>
+  (function () {
+    var fileEl = document.getElementById('import-file');
+    var hintEl = document.getElementById('file-hint');
+    var msgEl  = document.getElementById('import-hint-msg');
+    var form   = document.getElementById('import-form');
+    var btn    = document.getElementById('import-btn');
+    var overlay= document.getElementById('import-overlay');
+
+    // Live preview when the user picks a file: shows filename, size,
+    // rough row count (CSV only — xlsx would need a parser in the browser)
+    // and estimated import time.
+    fileEl.addEventListener('change', function () {
+      var f = fileEl.files && fileEl.files[0];
+      if (!f) { hintEl.style.display = 'none'; return; }
+
+      var sizeKB = Math.round(f.size / 1024);
+      var sizeText = sizeKB >= 1024
+        ? (sizeKB / 1024).toFixed(1) + ' MB'
+        : sizeKB + ' KB';
+      var ext = (f.name.split('.').pop() || '').toLowerCase();
+
+      // For CSV / TXT / TSV we can peek at the file and count lines
+      // for a quick row estimate. XLSX is a zip so we can't peek in
+      // the browser without a library — fall back to size-based hint.
+      if (['csv','txt','tsv'].indexOf(ext) !== -1 && f.size < 20 * 1024 * 1024) {
+        var reader = new FileReader();
+        reader.onload = function () {
+          var text = String(reader.result || '');
+          // Rough row count: count newlines. Minus 1 for the (likely) header.
+          var lines = (text.match(/\n/g) || []).length + (text.length > 0 ? 1 : 0);
+          var rows  = Math.max(0, lines - 1);
+          renderHint(f.name, sizeText, rows);
+        };
+        reader.onerror = function () { renderHint(f.name, sizeText, null); };
+        reader.readAsText(f);
+      } else {
+        renderHint(f.name, sizeText, null);
+      }
+    });
+
+    function renderHint(name, sizeText, rowCount) {
+      var estSec = null;
+      if (rowCount !== null) {
+        // ~200 rows/sec locally on the VPS (from smoke test).
+        estSec = Math.max(1, Math.ceil(rowCount / 200));
+      }
+      var human = '';
+      if (rowCount !== null) {
+        human = ' · ~' + rowCount.toLocaleString() + ' row(s)';
+        if (estSec !== null) {
+          if (estSec < 60) human += ' · ~' + estSec + 's to import';
+          else             human += ' · ~' + Math.round(estSec / 60) + ' min to import';
+        }
+      }
+      hintEl.textContent = '📄 ' + name + ' · ' + sizeText + human;
+      hintEl.style.display = '';
+    }
+
+    form.addEventListener('submit', function () {
+      // Personalise the overlay message with the row count if we have one.
+      var text = hintEl.textContent || '';
+      var m = text.match(/~([\d,]+) row/);
+      if (m) msgEl.textContent = 'Importing ~' + m[1] + ' rows into your contacts…';
+      overlay.style.display = 'flex';
+      btn.disabled = true;
+      btn.textContent = 'Importing…';
+      // Note: no return false — form still submits normally to the same URL.
+      // The response HTML replaces the whole page and the overlay dies with it.
+    });
+  })();
+  </script>
 
   <hr style="margin: 24px 0; border:none; border-top:1px solid var(--c-border);">
 

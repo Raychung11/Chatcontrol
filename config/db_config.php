@@ -14,6 +14,13 @@ $DB_NAME = getenv('AISERVE_DB_NAME') ?: 'aiserve_inbox';
 $DB_USER = getenv('AISERVE_DB_USER') ?: 'aiserve';
 $DB_PASS = getenv('AISERVE_DB_PASS') ?: 'change_me_db_password';
 
+// Per-environment override — kept out of git, edited by ops on the VPS.
+// Loaded here so BOTH web-request paths AND CLI (cron) paths pick it up,
+// since env vars set via nginx fastcgi_param aren't inherited by cron.
+if (is_file(__DIR__ . '/db_config.local.php')) {
+    require __DIR__ . '/db_config.local.php';
+}
+
 // Single-tenant MVP: every record is tied to this company id.
 // Future SaaS: resolve company_id from authenticated user / domain.
 if (!defined('ACTIVE_COMPANY_ID')) {

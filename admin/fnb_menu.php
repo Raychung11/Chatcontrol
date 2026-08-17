@@ -191,14 +191,22 @@ layout_start($current_user, 'F&B · Menu', 'fnb_menu');
   <?php if ($msg): ?><div class="alert alert-success"><?= e($msg) ?></div><?php endif; ?>
   <?php if ($err): ?><div class="alert alert-error"><?= e($err) ?></div><?php endif; ?>
 
+  <!-- Import + template + demo-seed shortcuts. Sits above categories so
+       operators setting up a new workspace hit them first. -->
+  <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom: 12px;">
+    <a class="btn btn-sm btn-primary" href="/admin/fnb_menu_import.php"
+       title="Bulk-import your menu from CSV or XLSX">📄 Import menu</a>
+    <a class="btn btn-sm" href="/assets/templates/fnb_menu_import_template.xlsx"
+       download="fnb_menu_import_template.xlsx"
+       title="Download the menu import template — 10 sample items + format guide">📥 Template</a>
+    <a class="btn btn-sm" href="/admin/fnb_demo_seed.php"
+       title="One-click Malaysian demo menu + sample orders">🍜 Seed demo data</a>
+  </div>
+
   <!-- ============ Categories ============ -->
   <div class="fnb-card">
     <h2 style="display:flex; justify-content:space-between; align-items:center;">
       <span>Categories <small class="muted">(<?= count($categories) ?>)</small></span>
-      <?php if (!$categories): ?>
-        <a class="btn btn-sm" href="/admin/fnb_demo_seed.php"
-           title="Quickly populate a Malaysian-style demo menu">🍜 Seed demo data</a>
-      <?php endif; ?>
     </h2>
 
     <form method="post" style="display:flex; gap:6px; margin-bottom:12px;">

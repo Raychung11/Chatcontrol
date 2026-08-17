@@ -266,6 +266,8 @@ Top-level (always visible to logged-in operators):
 - 📋 Orders → /admin/fnb_orders.php
 - 🍜 Menu → /admin/fnb_menu.php
 - 📊 Analytics → /admin/fnb_analytics.php
+- 📄 Import menu (CSV/XLSX) → /admin/fnb_menu_import.php (template: /assets/templates/fnb_menu_import_template.xlsx — 10 sample Malaysian items + format guide sheet). Row format: `category, name, description, price, variants, addons, status`. Variants encoded as `Group:Opt1=+0*|Opt2=+3.00` (`*` = default; multiple groups separated by `;`). Addons pipe-separated `Extra egg=+1.50|No cockles=0`. Products upsert on name; variants/addons rebuilt from each row.
+- 🍜 Seed demo data (15 items + 8 sample orders) → /admin/fnb_demo_seed.php
 
 🛠 Platform group  *(platform admin only; hidden while impersonating a workspace)*:
 - Workspaces → /admin/workspaces.php

@@ -63,6 +63,14 @@ if (is_post() && $canManage) {
 $search   = trim((string)($_GET['q'] ?? ''));
 $branchId = (int)($_GET['branch_id'] ?? 0);
 $tagId    = (int)($_GET['tag_id'] ?? 0);
+// Date filter — "which date to filter on" + from + to
+$dateField = (string)($_GET['date_field'] ?? '');  // '' | 'created' | 'last_msg'
+if (!in_array($dateField, ['created', 'last_msg'], true)) $dateField = '';
+$dateFrom  = trim((string)($_GET['date_from'] ?? ''));
+$dateTo    = trim((string)($_GET['date_to']   ?? ''));
+// Basic sanity — must be YYYY-MM-DD else treat as empty.
+if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateFrom)) $dateFrom = '';
+if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateTo))   $dateTo   = '';
 
 $where  = ['c.company_id = ?'];
 $params = [$companyId];
@@ -76,6 +84,18 @@ if ($search !== '') {
 if ($branchId > 0) {
     $where[]  = 'c.branch_id = ?';
     $params[] = $branchId;
+}
+if ($dateField !== '' && ($dateFrom !== '' || $dateTo !== '')) {
+    // Map the UI value to the actual column name.
+    $col = $dateField === 'last_msg' ? 'c.last_message_at' : 'c.created_at';
+    if ($dateFrom !== '') {
+        $where[]  = "$col >= ?";
+        $params[] = $dateFrom . ' 00:00:00';
+    }
+    if ($dateTo !== '') {
+        $where[]  = "$col <= ?";
+        $params[] = $dateTo . ' 23:59:59';
+    }
 }
 if ($tagId > 0) {
     // Tags are on conversations; filter contacts that have ANY conversation
@@ -146,7 +166,7 @@ layout_start($current_user, 'Contacts', 'contacts');
   <?php if ($msg): ?><div class="alert alert-success"><?= e($msg) ?></div><?php endif; ?>
   <?php if ($err): ?><div class="alert alert-error"><?= e($err) ?></div><?php endif; ?>
 
-  <form method="get" class="inline-form" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom: 10px;">
+  <form method="get" class="inline-form" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom: 10px; align-items:center;">
     <input type="search" name="q" placeholder="Search by name / phone…" value="<?= e($search) ?>" style="min-width:220px;">
     <select name="branch_id" onchange="this.form.submit()">
       <option value="0">All branches</option>
@@ -164,11 +184,63 @@ layout_start($current_user, 'Contacts', 'contacts');
         </option>
       <?php endforeach; ?>
     </select>
+
+    <!-- Date filter — dropdown picks which column to filter on -->
+    <span style="display:inline-flex; gap:4px; align-items:center; padding:4px 8px; background:#f6f9fb; border:1px solid #e3e8ee; border-radius:6px;">
+      <select name="date_field" onchange="onDateFieldChange(this)" style="border:none; background:transparent; padding:2px 4px;">
+        <option value="">Date: —</option>
+        <option value="created"  <?= $dateField === 'created'  ? 'selected' : '' ?>>Created</option>
+        <option value="last_msg" <?= $dateField === 'last_msg' ? 'selected' : '' ?>>Last msg</option>
+      </select>
+      <input type="date" name="date_from" value="<?= e($dateFrom) ?>"
+             <?= $dateField === '' ? 'disabled' : '' ?>
+             style="padding:3px 6px; font-size:12.5px;" title="From (inclusive)">
+      <span class="muted small">→</span>
+      <input type="date" name="date_to" value="<?= e($dateTo) ?>"
+             <?= $dateField === '' ? 'disabled' : '' ?>
+             style="padding:3px 6px; font-size:12.5px;" title="To (inclusive)">
+    </span>
+
+    <!-- Quick-picks (JS sets from+to and submits) -->
+    <span style="display:inline-flex; gap:4px;">
+      <button type="button" class="btn btn-sm" onclick="quickDate(7)"  title="Last 7 days">7d</button>
+      <button type="button" class="btn btn-sm" onclick="quickDate(30)" title="Last 30 days">30d</button>
+      <button type="button" class="btn btn-sm" onclick="quickDate(90)" title="Last 90 days">90d</button>
+    </span>
+
     <button class="btn btn-primary" type="submit">Search</button>
-    <?php if ($search !== '' || $branchId > 0 || $tagId > 0): ?>
+    <?php if ($search !== '' || $branchId > 0 || $tagId > 0 || $dateField !== ''): ?>
       <a class="btn btn-sm" href="/contacts.php">Clear</a>
     <?php endif; ?>
   </form>
+
+  <script>
+  // Disable the two date inputs until the user picks WHICH date to filter on.
+  window.onDateFieldChange = function (sel) {
+    var f = sel.form;
+    var disabled = !sel.value;
+    f.querySelector('input[name="date_from"]').disabled = disabled;
+    f.querySelector('input[name="date_to"]').disabled   = disabled;
+  };
+  // Quick-pick: last N days. Defaults date_field to 'last_msg' if unset —
+  // that's what operators usually mean by "recent activity".
+  window.quickDate = function (days) {
+    var f = document.querySelector('form.inline-form');
+    var df = f.querySelector('select[name="date_field"]');
+    if (!df.value) df.value = 'last_msg';
+    var to   = new Date();
+    var from = new Date(); from.setDate(from.getDate() - days);
+    var ymd = function (d) {
+      return d.getFullYear() + '-' +
+        String(d.getMonth() + 1).padStart(2, '0') + '-' +
+        String(d.getDate()).padStart(2, '0');
+    };
+    f.querySelector('input[name="date_from"]').value = ymd(from);
+    f.querySelector('input[name="date_to"]').value   = ymd(to);
+    onDateFieldChange(df);   // enable inputs
+    f.submit();
+  };
+  </script>
 
   <?php if ($canManage && $tagId > 0): ?>
     <div style="margin: 6px 0 12px; padding: 10px 12px; background:#eff6ff; border-radius:8px; font-size:13px;">

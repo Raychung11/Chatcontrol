@@ -100,11 +100,34 @@ if (!hash_equals($expected, $sig)) {
 }
 
 $uploadsDir = realpath(__DIR__ . '/../uploads');
-$abs        = realpath($uploadsDir . '/' . $companyId . '/' . $rel);
-if (!$uploadsDir || !$abs || !str_starts_with($abs, $uploadsDir . '/' . $companyId . '/') || !is_readable($abs)) {
+
+// $rel is the FULL path under /uploads (signer sends it exactly this way).
+// Two shapes both work:
+//   • '<companyId>/foo.png'                — old chat media
+//   • 'broadcasts/<companyId>/foo.png'     — broadcast attachments
+// Legacy shape kept for the ?c= flow: rel does NOT include the companyId
+// segment there (URL was ?c=X&p=foo.png). Detect that by trying rel as-is
+// first and falling back to companyId/rel for legacy links.
+$abs = $uploadsDir ? realpath($uploadsDir . '/' . $rel) : false;
+if (!$abs) {
+    // Legacy fallback: signer prefixed companyId/ before rel.
+    $abs = $uploadsDir ? realpath($uploadsDir . '/' . $companyId . '/' . $rel) : false;
+}
+
+// Security: require the companyId to appear as one of the path segments
+// under uploads/ AND ensure the resolved file is inside uploads/. Prevents
+// cross-company file serving even if an attacker guessed the HMAC.
+$segments = $abs && $uploadsDir
+    ? explode('/', substr($abs, strlen($uploadsDir) + 1))
+    : [];
+$cidInSegments = in_array((string)$companyId, $segments, true);
+if (!$uploadsDir || !$abs || !$cidInSegments
+    || !str_starts_with($abs, $uploadsDir . '/')
+    || !is_readable($abs)) {
     _media_log('404_not_found', $companyId, $channelId, $rel,
         'exists=' . ($abs && file_exists($abs) ? '1' : '0')
-        . ' readable=' . ($abs && is_readable($abs) ? '1' : '0'));
+        . ' readable=' . ($abs && is_readable($abs) ? '1' : '0')
+        . ' cid_seg=' . ($cidInSegments ? '1' : '0'));
     http_response_code(404);
     exit('Not found.');
 }

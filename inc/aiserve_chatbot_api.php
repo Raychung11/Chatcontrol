@@ -122,9 +122,15 @@ function chatbot_send_media(array $company, string $waId, string $kind, string $
     }
     $publicUrl = chatbot_public_media_url($company, $localPath); // $company here is actually the channel
     if ($publicUrl === null) {
+        // The old wording blamed the webhook_verify_token, but by far
+        // the most common cause is a path-layout mismatch (file lives
+        // under uploads/broadcasts/<cid>/ but companyId isn't a segment,
+        // or the file was moved/deleted). See nginx error log for the
+        // '[AiServe chatbot_public_media_url]' line naming the exact
+        // reason.
         return [
             'ok' => false, 'wa_message_id' => null,
-            'error' => 'Could not generate public URL for media. Set Webhook verify token in Settings (used to sign URLs).',
+            'error' => 'Could not build signed media URL. Check nginx error log for [AiServe chatbot_public_media_url] — likely the file path is missing / moved / outside the workspace uploads dir, or the channel has no webhook_token.',
             'http_code' => 500, 'raw' => null,
         ];
     }
@@ -188,6 +194,7 @@ function chatbot_public_media_url(array $channel, string $localPath): ?string
 {
     $secret = (string)($channel['webhook_token'] ?? '');
     if ($secret === '') {
+        error_log('[AiServe chatbot_public_media_url] channel has no webhook_token');
         return null;
     }
     $companyId = (int)($channel['company_id'] ?? 0);
@@ -197,19 +204,30 @@ function chatbot_public_media_url(array $channel, string $localPath): ?string
     $uploadsDir = realpath(__DIR__ . '/../uploads');
     $real       = realpath($localPath);
     if (!$uploadsDir || !$real || !str_starts_with($real, $uploadsDir . '/')) {
+        error_log('[AiServe chatbot_public_media_url] localPath outside uploads dir: '
+                 . ($localPath ?: '(empty)'));
         return null;
     }
+    // Relative path under /uploads. Accepts both layouts:
+    //   • <companyId>/foo.png          — old chat media
+    //   • broadcasts/<companyId>/foo.png — broadcast attachments
+    //   • <anything>/<companyId>/foo.png — future subdirs are fine as long
+    //     as the company_id appears as a path segment. Prevents cross-
+    //     company leaks (a file under a different company's directory can
+    //     never sign a URL for this channel's HMAC).
     $rel = substr($real, strlen($uploadsDir) + 1);
-    $prefix = $companyId . '/';
-    if (!str_starts_with($rel, $prefix)) {
+    $segments = explode('/', $rel);
+    if (!in_array((string)$companyId, $segments, true)) {
+        error_log('[AiServe chatbot_public_media_url] path does not contain companyId=' . $companyId
+                 . ' as a segment: ' . $rel);
         return null;
     }
-    $relForCompany = substr($rel, strlen($prefix));
-    $payload = $channelId . ':' . $relForCompany;
-    $sig = hash_hmac('sha256', $payload, $secret);
 
+    // Sign the FULL relative-under-uploads path — receiver side rebuilds
+    // it as uploads/<rel> and re-verifies the same HMAC.
+    $sig = hash_hmac('sha256', $channelId . ':' . $rel, $secret);
     $base = APP_BASE_URL ?: ((!empty($_SERVER['HTTPS']) ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? ''));
     return $base . '/api/media_public.php?ch=' . $channelId
-                 . '&p=' . rawurlencode($relForCompany)
+                 . '&p=' . rawurlencode($rel)
                  . '&sig=' . $sig;
 }

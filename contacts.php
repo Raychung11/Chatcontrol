@@ -157,7 +157,9 @@ layout_start($current_user, 'Contacts', 'contacts');
   <div class="card-head">
     <h2>Contacts <small class="muted">(<?= count($contacts) ?><?= count($contacts) >= 200 ? '+' : '' ?>)</small></h2>
     <?php if ($canManage): ?>
-      <div style="display:flex; gap:6px;">
+      <div style="display:flex; gap:6px; align-items:center;">
+        <a class="btn btn-sm" href="/assets/templates/contact_import_template.xlsx"
+           download="contact_import_template.xlsx" title="Download the import template — 6 example rows + instructions">📥 Template</a>
         <a class="btn btn-sm btn-primary" href="/contact_import.php">📄 Import CSV / XLSX</a>
       </div>
     <?php endif; ?>

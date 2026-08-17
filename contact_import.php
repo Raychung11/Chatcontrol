@@ -76,6 +76,30 @@ layout_start($current_user, 'Import contacts', 'contacts');
     <?php endif; ?>
   <?php endif; ?>
 
+  <!-- Template download strip — sits above the file picker so operators
+       who arrive here without a file grab a template first without
+       scrolling to find the format docs. -->
+  <div style="margin-bottom: 14px; padding: 12px 14px;
+       background: linear-gradient(135deg, #f0fdf4, #ecfdf5);
+       border: 1px solid #bbf7d0; border-radius: 8px;
+       display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+    <div style="flex: 1; min-width: 260px;">
+      <strong style="color:#14532d;">📥 First time importing?</strong>
+      <div class="muted small" style="margin-top: 2px;">
+        Download a ready-to-fill template with the correct columns + 6 example rows + a "How to use" instructions sheet.
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <a class="btn btn-sm btn-primary"
+         href="/assets/templates/contact_import_template.xlsx"
+         download="contact_import_template.xlsx"
+         style="background:#16a34a; border-color:#16a34a;">📊 XLSX (recommended)</a>
+      <a class="btn btn-sm"
+         href="/assets/templates/contact_import_template.csv"
+         download="contact_import_template.csv">📄 CSV</a>
+    </div>
+  </div>
+
   <form method="post" enctype="multipart/form-data" class="form-grid" id="import-form">
     <?= csrf_field() ?>
     <label>File

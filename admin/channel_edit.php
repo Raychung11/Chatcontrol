@@ -26,7 +26,13 @@ if (is_post()) {
     $name         = trim((string)($_POST['name']           ?? ''));
     $displayPhone = trim((string)($_POST['display_phone']  ?? ''));
     $provider     = (string)($_POST['provider']            ?? 'cloud_api');
-    if (!in_array($provider, ['cloud_api','evolution','aiserve_chatbot'], true)) $provider = 'cloud_api';
+    // Widened to match the 6 options shown in the provider picker cards below.
+    // web_chat / facebook_page / instagram_business each already have send +
+    // webhook handlers wired in inc/provider.php (see match() dispatch).
+    if (!in_array($provider, [
+        'cloud_api','evolution','aiserve_chatbot',
+        'web_chat','facebook_page','instagram_business',
+    ], true)) $provider = 'cloud_api';
 
     // Cloud API
     $phoneNumberId     = trim((string)($_POST['phone_number_id']     ?? ''));
@@ -124,15 +130,110 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
 
     <h2>Messaging provider</h2>
     <?php $cur = $row['provider'] ?? 'cloud_api'; ?>
-    <div class="provider-picker">
+    <style>
+      .provider-picker {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 12px;
+      }
+      .provider-picker .provider-radio {
+        position: relative;
+        display: block;
+        padding: 14px 14px 12px;
+        border: 1px solid var(--color-border, #e4e9ee);
+        border-radius: 8px;
+        background: var(--color-surface, #fff);
+        cursor: pointer;
+        transition: border-color .12s, background-color .12s, box-shadow .12s;
+      }
+      .provider-picker .provider-radio:hover {
+        border-color: var(--color-border-strong, #c9d2dc);
+      }
+      /* Hide the raw radio — the whole card is the hit target */
+      .provider-picker .provider-radio input[type="radio"] {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+        width: 0;
+        height: 0;
+      }
+      /* Selected state (modern browsers with :has()) */
+      .provider-picker .provider-radio:has(input:checked) {
+        border-color: var(--color-brand, #25D366);
+        background: var(--color-brand-tint, #e7faee);
+        box-shadow: 0 0 0 1px var(--color-brand, #25D366) inset;
+      }
+      /* Keyboard focus ring on the label when the hidden radio has focus */
+      .provider-picker .provider-radio:focus-within {
+        outline: 2px solid var(--color-brand, #25D366);
+        outline-offset: 2px;
+      }
+      .provider-picker .provider-name {
+        display: block;
+        font-weight: 600;
+        color: var(--color-text, #0f1722);
+        margin-bottom: 2px;
+        padding-right: 60px; /* leave room for a top-right badge */
+      }
+      .provider-picker .provider-pitch {
+        display: block;
+        color: var(--color-text-muted, #5b6772);
+        font-size: 12.5px;
+        line-height: 1.35;
+      }
+      .provider-picker .provider-badge {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        font-size: 10.5px;
+        font-weight: 600;
+        line-height: 1;
+        padding: 4px 7px;
+        border-radius: 999px;
+        letter-spacing: .01em;
+        white-space: nowrap;
+      }
+      .provider-picker .provider-badge-recommended {
+        background: var(--color-brand, #25D366);
+        color: #fff;
+      }
+      .provider-picker .provider-badge-neutral {
+        background: var(--color-surface-3, #f0f3f7);
+        color: var(--color-text-muted, #5b6772);
+        border: 1px solid var(--color-border, #e4e9ee);
+      }
+      /* Recommended card gets an extra green ring by default so it stands out
+         even before the user has clicked it. */
+      .provider-picker .provider-radio.is-recommended {
+        border-color: var(--color-brand, #25D366);
+        box-shadow: 0 0 0 1px var(--color-brand, #25D366) inset;
+      }
+      @media (max-width: 640px) {
+        .provider-picker { grid-template-columns: 1fr; }
+        .provider-picker .provider-name { padding-right: 0; }
+        .provider-picker .provider-badge {
+          position: static;
+          display: inline-block;
+          margin-top: 6px;
+        }
+      }
+    </style>
+    <div class="provider-picker" role="radiogroup" aria-label="Messaging provider">
       <?php foreach ([
-        'cloud_api'      => ['Meta Cloud API', 'official, paid per conversation, supports templates'],
-        'evolution'      => ['Evolution API', 'self-hosted Baileys / WhatsApp Web. Free messaging, ban risk'],
-        'aiserve_chatbot'=> ['AiServe Chatbot Gateway', 'partner-hosted Bearer-token gateway'],
-      ] as $k => [$label, $desc]): ?>
-        <label class="provider-radio">
+        'aiserve_chatbot'    => ['AiServe Chatbot',              'Bearer-token gateway. Raw text anytime. Simplest setup.',                       '🇲🇾 Recommended for Malaysian SMEs', 'recommended', true],
+        'evolution'          => ['Evolution API',                'Self-hosted Baileys. Raw text anytime. Requires QR pairing.',                   '',                                    '',            false],
+        'cloud_api'          => ['WhatsApp Cloud API (Meta)',    'Official Meta API. Template gate for outside-24h broadcasts. Requires Meta App setup.', 'Official',                     'neutral',     false],
+        'web_chat'           => ['Web chat widget',              'Embeddable on any website. In-browser only, no WhatsApp.',                      'Zero-setup',                          'neutral',     false],
+        'facebook_page'      => ['Facebook Page',                'Meta Messenger via Graph API.',                                                 'Meta',                                'neutral',     false],
+        'instagram_business' => ['Instagram Business',           'IG DMs via Graph API.',                                                         'Meta',                                'neutral',     false],
+      ] as $k => [$label, $pitch, $badgeText, $badgeStyle, $isRecommended]): ?>
+        <label class="provider-radio<?= $isRecommended ? ' is-recommended' : '' ?>">
           <input type="radio" name="provider" value="<?= e($k) ?>" <?= $cur === $k ? 'checked' : '' ?>>
-          <span><strong><?= e($label) ?></strong> <small class="muted">— <?= e($desc) ?></small></span>
+          <span class="provider-name"><?= e($label) ?></span>
+          <span class="provider-pitch"><?= e($pitch) ?></span>
+          <?php if ($badgeText !== ''): ?>
+            <span class="provider-badge provider-badge-<?= e($badgeStyle) ?>"><?= e($badgeText) ?></span>
+          <?php endif; ?>
         </label>
       <?php endforeach; ?>
     </div>

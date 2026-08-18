@@ -11,6 +11,14 @@ $err = '';
 if (is_post()) {
     csrf_check();
 
+    $action = (string)($_POST['action'] ?? '');
+    if ($action === 'regenerate_token') {
+        $newToken = bin2hex(random_bytes(24));
+        $db->prepare('UPDATE companies SET webhook_verify_token = ? WHERE id = ?')
+           ->execute([$newToken, $companyId]);
+        log_activity($companyId, (int)$current_user['id'], 'webhook_token_regenerated', 'company', $companyId);
+        $msg = 'New webhook_verify_token generated. Length: ' . strlen($newToken) . ' chars. Used for HMAC-signing media URLs sent to gateway providers.';
+    } else {
     // Settings is now workspace-level ONLY: company identity, brand,
     // timezone, default department, operational alerts. All WhatsApp
     // connection config (provider choice, tokens, URLs, webhook verify
@@ -77,6 +85,7 @@ if (is_post()) {
 
         log_activity($companyId, (int)$current_user['id'], 'settings_updated', 'company', $companyId, 'Workspace settings updated');
         if ($err === '') $msg = 'Settings saved.';
+    }
     }
 }
 
@@ -317,4 +326,169 @@ layout_start($current_user, 'Workspace settings', 'settings', $company['brand_co
     <button class="btn btn-primary" type="submit">Save settings</button>
   </form>
 </div>
+<div class="card" id="security-tokens" style="margin-top:20px;">
+  <h2 style="margin-top:0;">🔐 Security tokens</h2>
+  <p class="muted small" style="margin-top:0;">
+    The <code>webhook_verify_token</code> is used to HMAC-sign media URLs sent to gateway providers and to verify inbound webhook calls.
+  </p>
+
+  <?php
+    $tokStmt = $db->prepare('SELECT LENGTH(webhook_verify_token) AS tok_len, webhook_verify_token AS tok_val FROM companies WHERE id = ?');
+    $tokStmt->execute([$companyId]);
+    $tokRow = $tokStmt->fetch() ?: [];
+    $tokLen = (int)($tokRow['tok_len'] ?? 0);
+    $tokVal = (string)($tokRow['tok_val'] ?? '');
+  ?>
+
+  <?php if ($tokLen > 0): ?>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:12px 0;">
+      <span style="display:inline-block; padding:4px 10px; border-radius:12px; background:#e6f7ea; color:#1a7f37; font-weight:600; font-size:13px;">
+        ✓ Token set
+      </span>
+      <code style="background:#f4f6f8; padding:4px 8px; border-radius:4px; font-family:monospace; font-size:13px;"><?= e(substr($tokVal, 0, 8)) ?>&hellip;<?= e(substr($tokVal, -4)) ?></code>
+      <form method="post" style="display:inline; margin:0;" onsubmit="return confirm('Rotate the webhook_verify_token? Any pre-signed media URLs currently in flight will be invalidated.');">
+        <?= csrf_field() ?>
+        <input type="hidden" name="action" value="regenerate_token">
+        <button class="btn" type="submit">🔄 Rotate</button>
+      </form>
+    </div>
+  <?php else: ?>
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:12px 0;">
+      <span style="display:inline-block; padding:4px 10px; border-radius:12px; background:#fdecea; color:#b3261e; font-weight:600; font-size:13px;">
+        ⚠ Not set — required for broadcast media
+      </span>
+      <form method="post" style="display:inline; margin:0;">
+        <?= csrf_field() ?>
+        <input type="hidden" name="action" value="regenerate_token">
+        <button class="btn btn-primary" type="submit" style="background:#1a7f37; border-color:#1a7f37;">⚡ Generate token</button>
+      </form>
+    </div>
+  <?php endif; ?>
+
+  <p class="muted small" style="margin:0;">
+    Rotating invalidates any pre-signed URLs currently in flight. Only rotate if the token was leaked, or if you've never generated one.
+  </p>
+</div>
+
+<div class="card" id="background-jobs" style="margin-top:20px;">
+  <h2 style="margin-top:0;">🕐 Background jobs</h2>
+  <p class="muted small" style="margin-top:0;">
+    These are scheduled tasks that run on the server. If a job's "Last run" is older than expected, ask your ops team to check the crontab.
+  </p>
+
+  <?php
+    $jobs = [
+      ['label' => 'Broadcast worker',         'action_type' => 'broadcast_batch_processed', 'cadence_s' => 60,      'cadence_label' => 'Every 1 min',  'purpose' => 'Sends the next batch of queued recipients'],
+      ['label' => 'Google Sheets Q&A sync',   'action_type' => 'qa_sheets_synced',          'cadence_s' => 3600,    'cadence_label' => 'Every 1 hour', 'purpose' => 'Pulls Q&A from published sheets'],
+      ['label' => 'KB coverage-gap detector', 'action_type' => 'kb_coverage_detected',      'cadence_s' => 86400,   'cadence_label' => 'Daily',        'purpose' => 'Finds "I don\'t know" AI replies'],
+      ['label' => 'Auto-invoice mailer',      'action_type' => 'invoice_sent',              'cadence_s' => 86400,   'cadence_label' => 'Daily',        'purpose' => 'Emails PDF on paid upgrades'],
+      ['label' => 'Learning distillation',    'action_type' => 'learning_distilled',        'cadence_s' => 604800,  'cadence_label' => 'Weekly',       'purpose' => 'Team-style rules from agent edits'],
+    ];
+
+    $now = time();
+    foreach ($jobs as &$job) {
+      $lastRun = null;
+      try {
+        $s = $db->prepare('SELECT MAX(created_at) FROM activity_logs WHERE company_id = ? AND action_type = ?');
+        $s->execute([$companyId, $job['action_type']]);
+        $lastRun = $s->fetchColumn();
+        if ($lastRun === false) $lastRun = null;
+      } catch (Throwable $e) {
+        $lastRun = null;
+      }
+
+      if (!$lastRun) {
+        // No row ever - this is still valid data ("we've never seen this job run").
+        $job['status_label']   = '-';
+        $job['status_color']   = '#8a94a6';
+        $job['last_run_label'] = 'Never';
+        $job['last_run_color'] = '#b8860b';
+      } else {
+        $ts  = (int)strtotime((string)$lastRun);
+        $age = $now - $ts;
+        if ($age > 2 * (int)$job['cadence_s']) {
+          $job['status_label'] = '⚠ Overdue';
+          $job['status_color'] = '#b3261e';
+        } else {
+          $job['status_label'] = '✓ Running';
+          $job['status_color'] = '#1a7f37';
+        }
+        $job['last_run_label'] = fmt_dt((string)$lastRun);
+        $job['last_run_color'] = 'inherit';
+      }
+    }
+    unset($job);
+  ?>
+
+  <div style="overflow-x:auto;">
+    <table style="width:100%; border-collapse:collapse; margin:12px 0; font-size:14px;">
+      <thead>
+        <tr style="text-align:left; border-bottom:2px solid #e5e7eb;">
+          <th style="padding:8px 10px;">Job</th>
+          <th style="padding:8px 10px;">Purpose</th>
+          <th style="padding:8px 10px;">Expected cadence</th>
+          <th style="padding:8px 10px;">Last run</th>
+          <th style="padding:8px 10px;">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <?php foreach ($jobs as $j): ?>
+          <tr style="border-bottom:1px solid #f1f2f4;">
+            <td style="padding:8px 10px;"><strong><?= e($j['label']) ?></strong></td>
+            <td style="padding:8px 10px;"><?= e($j['purpose']) ?></td>
+            <td style="padding:8px 10px;"><?= e($j['cadence_label']) ?></td>
+            <td style="padding:8px 10px; color:<?= e($j['last_run_color']) ?>;"><?= e($j['last_run_label']) ?></td>
+            <td style="padding:8px 10px; color:<?= e($j['status_color']) ?>; font-weight:600;"><?= e($j['status_label']) ?></td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="margin:16px 0 6px; font-size:15px;">Install commands</h3>
+  <p class="muted small" style="margin:0 0 6px;">Copy the block below into <code>www-data</code>'s crontab.</p>
+  <div style="position:relative;">
+    <pre id="cron-install-block" style="background:#0f172a; color:#e2e8f0; padding:12px 14px; border-radius:6px; overflow-x:auto; font-family:monospace; font-size:13px; line-height:1.5; margin:0;"># Add to www-data's crontab (sudo -u www-data crontab -e):
+* * * * *  php /var/www/aiserve/cron/process_broadcasts.php &gt;/dev/null 2&gt;&amp;1
+17 * * * *  php /var/www/aiserve/cron/sync_qa_sheets.php &gt;/dev/null 2&gt;&amp;1
+45 3 * * *  php /var/www/aiserve/cron/detect_coverage_gaps.php &gt;/dev/null 2&gt;&amp;1
+# (add others as needed)</pre>
+    <button type="button" id="copy-cron-btn"
+            style="position:absolute; top:8px; right:8px; padding:4px 10px; font-size:12px; border:1px solid #334155; background:#1e293b; color:#e2e8f0; border-radius:4px; cursor:pointer;">
+      Copy
+    </button>
+  </div>
+  <script>
+    (function () {
+      var btn = document.getElementById('copy-cron-btn');
+      var pre = document.getElementById('cron-install-block');
+      if (!btn || !pre) return;
+      btn.addEventListener('click', function () {
+        var text = pre.innerText;
+        var done = function () {
+          var orig = 'Copy';
+          btn.textContent = 'Copied!';
+          setTimeout(function () { btn.textContent = orig; }, 1500);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, function () {
+            fallbackCopy();
+          });
+        } else {
+          fallbackCopy();
+        }
+        function fallbackCopy() {
+          var range = document.createRange();
+          range.selectNodeContents(pre);
+          var sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          try { document.execCommand('copy'); done(); } catch (e) {}
+          sel.removeAllRanges();
+        }
+      });
+    })();
+  </script>
+</div>
+
 <?php layout_end(); ?>

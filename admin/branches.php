@@ -111,7 +111,16 @@ layout_start($current_user, 'Branches', 'branches');
          so a fixed column header row would misalign with everything below it. -->
     <tbody>
       <?php if (!$branches): ?>
-        <tr><td class="muted">No branches yet — create your first above.</td></tr>
+        <tr><td>
+          <div style="background:#f0fdf4; border:1px solid #bbf7d0; padding:14px; border-radius:8px;">
+            <div style="font-weight:600; margin-bottom:8px;">🏢 No branches yet</div>
+            <p style="margin:0 0 8px 0;">Branches represent physical outlets (KL Sentral, Penang, Jelutong). Customers can be routed to their nearest branch, and rotation picks agents whose primary branch matches.</p>
+            <ul style="margin:0; padding-left:20px; line-height:1.7;">
+              <li>Type a branch name above and click <strong>Create</strong></li>
+              <li>Then fill in each branch's <strong>address + area keywords</strong> so the 🗺 Assign-to-nearest-branch flow node can AI-map customers</li>
+            </ul>
+          </div>
+        </td></tr>
       <?php endif; ?>
       <?php foreach ($branches as $b): ?>
         <tr>

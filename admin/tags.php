@@ -67,7 +67,17 @@ layout_start($current_user, 'Tags', 'tags');
     <thead><tr><th>Tag</th><th>Color</th><th>Used by</th><th></th></tr></thead>
     <tbody>
       <?php if (!$tags): ?>
-        <tr><td colspan="4" class="muted">No tags yet.</td></tr>
+        <tr><td colspan="4">
+          <div style="background:#f0fdf4; border:1px solid #bbf7d0; padding:14px; border-radius:8px;">
+            <div style="font-weight:600; margin-bottom:8px;">🏷 No tags yet</div>
+            <p style="margin:0 0 8px 0;">Tags help you segment customers for targeted broadcasts (VIP, hot-lead, product-interest).</p>
+            <div style="font-weight:600; margin-bottom:6px;">Two ways to create tags:</div>
+            <ul style="margin:0; padding-left:20px; line-height:1.7;">
+              <li><a href="/contact_import.php">Import contacts with a Default tag</a> — every row in the batch gets it</li>
+              <li>Bulk-tag from <a href="/contacts.php">Contacts →</a> — tick many rows → yellow bar → Apply tag(s)</li>
+            </ul>
+          </div>
+        </td></tr>
       <?php endif; ?>
       <?php foreach ($tags as $t): ?>
         <tr>

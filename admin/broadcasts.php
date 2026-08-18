@@ -96,7 +96,13 @@ layout_start($current_user, 'Broadcasts', 'broadcasts');
 <div class="card">
   <div class="card-head">
     <h2>WhatsApp broadcasts</h2>
-    <a class="btn btn-primary" href="/admin/broadcast_new.php">+ New broadcast</a>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <?php if (($current_user['role'] ?? '') === 'super_admin'): ?>
+        <a class="btn btn-sm" href="/admin/broadcast_preflight.php"
+           title="Run a system-health check before your first send">🩺 Preflight check</a>
+      <?php endif; ?>
+      <a class="btn btn-primary" href="/admin/broadcast_new.php">+ New broadcast</a>
+    </div>
   </div>
   <p class="muted small">
     Trickle a message to many recipients in small batches so the WhatsApp
@@ -120,7 +126,17 @@ layout_start($current_user, 'Broadcasts', 'broadcasts');
     </thead>
     <tbody>
       <?php if (!$rows): ?>
-        <tr><td colspan="7" class="muted">No broadcasts yet. Click "+ New broadcast" to create one.</td></tr>
+        <tr><td colspan="7">
+          <div style="background:#f0fdf4; border:1px solid #bbf7d0; padding:14px; border-radius:8px;">
+            <div style="font-weight:600; margin-bottom:8px;">📢 Send your first WhatsApp broadcast</div>
+            <ol style="margin:0 0 10px 20px; padding:0; line-height:1.7;">
+              <li>Make sure you have contacts → <a href="/contact_import.php">Import contacts →</a></li>
+              <li>Approve a template on Meta (skip if using AiServe Chatbot or Evolution) → <a href="/admin/templates.php">Templates →</a></li>
+              <li>Click <strong>+ New broadcast</strong> above</li>
+            </ol>
+            <div>First time? Run the <a href="/admin/broadcast_preflight.php">🩺 Preflight check</a> — it verifies your setup in one page.</div>
+          </div>
+        </td></tr>
       <?php endif; ?>
       <?php foreach ($rows as $b): ?>
         <tr>

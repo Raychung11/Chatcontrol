@@ -403,9 +403,15 @@ $seeded = isset($_GET['seeded']) ? (int)$_GET['seeded'] : null;
     <?php endif; ?>
 
     <?php if (!$templates): ?>
-      <p class="muted" style="margin-top:8px;">
-        <?= $allT ? 'No templates match this filter.' : 'No templates yet.' ?>
-      </p>
+      <?php if ($allT): ?>
+        <p class="muted" style="margin-top:8px;">No templates match this filter.</p>
+      <?php else: ?>
+        <div style="background:#f0fdf4; border:1px solid #bbf7d0; padding:14px; border-radius:8px; margin-top:8px;">
+          <div style="font-weight:600; margin-bottom:8px;">📨 No message templates yet</div>
+          <p style="margin:0 0 8px 0;">Templates are canned message shells you re-use across broadcasts and auto-replies.</p>
+          <p style="margin:0;">Click <strong>+ New template</strong> to write your first — WhatsApp needs Meta-approved templates for broadcasting to numbers outside the 24-hour window (raw text works on Evolution / AiServe Chatbot channels anytime).</p>
+        </div>
+      <?php endif; ?>
     <?php else: ?>
 
       <!-- Bulk action bar (hidden until something is selected) -->

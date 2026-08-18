@@ -254,19 +254,29 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
               Type
               <select name="node_type" onchange="this.form.submit()">
                 <?php foreach ([
+                  'Basic' => [
                     'send_message' => 'Send message',
                     'wait_reply'   => 'Wait for reply',
                     'branch'       => 'Branch',
-                    'assign_dept'  => 'Assign to department',
-                    'assign_branch'=> 'Assign to branch',
+                  ],
+                  'Assign &amp; save' => [
+                    'assign_dept'           => 'Assign to department',
+                    'assign_branch'         => 'Assign to branch',
                     'assign_nearest_branch' => '🗺 Assign to nearest branch (AI)',
-                    'save_note'    => 'Save internal note',
-                    'end'          => 'End',
-                ] as $k => $v): ?>
-                  <option value="<?= $k ?>" <?= $n['node_type'] === $k ? 'selected' : '' ?>><?= e($v) ?></option>
+                    'save_note'             => 'Save internal note',
+                  ],
+                  'Terminal' => [
+                    'end' => 'End',
+                  ],
+                ] as $groupLabel => $opts): ?>
+                  <optgroup label="<?= $groupLabel ?>">
+                    <?php foreach ($opts as $k => $v): ?>
+                      <option value="<?= $k ?>" <?= $n['node_type'] === $k ? 'selected' : '' ?>><?= e($v) ?></option>
+                    <?php endforeach; ?>
+                  </optgroup>
                 <?php endforeach; ?>
                 <?php if (fnb_module_active($companyId)): ?>
-                  <optgroup label="F&amp;B order-taking">
+                  <optgroup label="🍜 F&amp;B">
                     <?php foreach ([
                       'fnb_send_menu'    => 'Send menu to customer',
                       'fnb_cart_add'     => 'AI: parse reply into cart',

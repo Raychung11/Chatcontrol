@@ -317,8 +317,20 @@ layout_start($current_user, 'Contacts', 'contacts');
     </thead>
     <tbody>
       <?php if (!$contacts): ?>
-        <tr><td colspan="<?= $canManage ? ($hasEnrich ? 7 : 6) : ($hasEnrich ? 6 : 5) ?>" class="muted">
-          No contacts match this view.
+        <?php $isFiltered = $search !== '' || $branchId > 0 || $tagId > 0 || $dateField !== ''; ?>
+        <tr><td colspan="<?= $canManage ? ($hasEnrich ? 7 : 6) : ($hasEnrich ? 6 : 5) ?>">
+          <?php if ($isFiltered): ?>
+            <span class="muted">No contacts match this view.</span>
+          <?php else: ?>
+            <div style="background:#f0fdf4; border:1px solid #bbf7d0; padding:14px; border-radius:8px;">
+              <div style="font-weight:600; margin-bottom:8px;">👤 No contacts yet — three ways to add them:</div>
+              <ul style="margin:0; padding-left:20px; line-height:1.7;">
+                <li><a href="/assets/templates/contact_import_template.xlsx">📥 Download template</a> → fill it → <a href="/contact_import.php">📄 Import CSV/XLSX</a></li>
+                <li>Or wait for customers to message your WhatsApp — they auto-populate here</li>
+                <li>Or WhatsApp your own number to test (yours becomes the first contact)</li>
+              </ul>
+            </div>
+          <?php endif; ?>
         </td></tr>
       <?php endif; ?>
       <?php foreach ($contacts as $c):

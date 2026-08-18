@@ -188,7 +188,15 @@ layout_start($current_user, 'Message flows', 'flows');
     </thead>
     <tbody>
       <?php if (!$flows): ?>
-        <tr><td colspan="6" class="muted">No flows yet — create your first above.</td></tr>
+        <tr><td colspan="6">
+          <div style="background:#f0fdf4; border:1px solid #bbf7d0; padding:14px; border-radius:8px;">
+            <div style="font-weight:600; margin-bottom:8px;">🔀 Build your first flow</div>
+            <ul style="margin:0; padding-left:20px; line-height:1.7;">
+              <li>Pick a <strong>prebuilt template</strong> above (F&amp;B ordering, Reservation, FAQ router, Lead capture, Furniture showroom, etc.) — one click seeds the whole thing</li>
+              <li>Or click <strong>+ New flow</strong> to start from scratch</li>
+            </ul>
+          </div>
+        </td></tr>
       <?php endif; ?>
       <?php foreach ($flows as $f): ?>
         <tr>

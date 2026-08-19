@@ -1073,6 +1073,271 @@
   })();
 
   // ============================================================
+  // PER-MESSAGE CONTEXT MENU (⋯) — Forward / Copy / Reply / Note / Delete
+  // ============================================================
+  // Delegated so it also picks up bubbles the poll appends. The kebab
+  // trigger is in every .msg-bubble via chat_render.php; clicking it
+  // opens the shared floating menu positioned at the trigger. Copy and
+  // Reply run purely client-side; Note prefills the internal-note
+  // textarea; Forward opens a modal that lists open conversations;
+  // Delete calls /api/message_delete.php then removes the bubble.
+  (function () {
+    var menuEl = null;      // singleton floating menu
+    var overlayEl = null;   // singleton forward-modal overlay
+    var currentMsg = null;  // .msg element the menu was opened for
+
+    function ensureMenu() {
+      if (menuEl) return menuEl;
+      menuEl = document.createElement('div');
+      menuEl.className = 'msg-menu';
+      menuEl.innerHTML =
+          '<button type="button" data-act="forward">Forward</button>'
+        + '<button type="button" data-act="copy">Copy</button>'
+        + '<button type="button" data-act="reply">Reply</button>'
+        + '<button type="button" data-act="note">Note</button>'
+        + '<button type="button" data-act="delete">Delete</button>';
+      document.body.appendChild(menuEl);
+      menuEl.addEventListener('click', handleAction);
+      return menuEl;
+    }
+
+    function positionMenu(trigger) {
+      var m = ensureMenu();
+      var r = trigger.getBoundingClientRect();
+      m.style.top  = (r.bottom + window.scrollY + 4) + 'px';
+      // Anchor menu right-edge under the trigger's right-edge so it doesn't
+      // clip off-screen on outgoing bubbles.
+      m.style.left = 'auto';
+      m.style.right = (window.innerWidth - r.right - window.scrollX) + 'px';
+      m.style.display = 'block';
+    }
+
+    function closeMenu() {
+      if (menuEl) menuEl.style.display = 'none';
+      currentMsg = null;
+    }
+
+    document.addEventListener('click', function (e) {
+      var trig = e.target.closest('.msg-menu-trigger');
+      if (trig) {
+        e.stopPropagation();
+        currentMsg = trig.closest('.msg');
+        positionMenu(trig);
+        return;
+      }
+      if (!e.target.closest('.msg-menu') && !e.target.closest('.fwd-overlay')) {
+        closeMenu();
+      }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { closeMenu(); closeForwardModal(); }
+    });
+
+    async function handleAction(e) {
+      var btn = e.target.closest('button[data-act]');
+      if (!btn || !currentMsg) return;
+      var act    = btn.dataset.act;
+      var msgId  = currentMsg.dataset.msgId;
+      var text   = currentMsg.dataset.msgText || '';
+      var msg    = currentMsg;   // capture — closeMenu clears currentMsg
+      closeMenu();
+
+      switch (act) {
+        case 'copy':
+          try {
+            await navigator.clipboard.writeText(text);
+            toast('✓ Copied');
+          } catch (_) {
+            // Fallback for older browsers / non-HTTPS local dev.
+            var ta = document.createElement('textarea');
+            ta.value = text; document.body.appendChild(ta);
+            ta.select(); document.execCommand('copy'); ta.remove();
+            toast('✓ Copied');
+          }
+          break;
+
+        case 'reply':
+          insertReply(text);
+          break;
+
+        case 'note':
+          insertNote(msgId, text);
+          break;
+
+        case 'forward':
+          openForwardModal(msgId, text);
+          break;
+
+        case 'delete':
+          if (!confirm('Delete this message?\n\nIt stays in the DB for audit but disappears from the inbox. This cannot be undone from the UI.')) return;
+          await deleteMsg(msgId, msg);
+          break;
+      }
+    }
+
+    function insertReply(text) {
+      var composer = document.getElementById('composer-text');
+      if (!composer) { toast('⚠ Composer not on this page'); return; }
+      var quoted = '> ' + String(text).replace(/\n/g, '\n> ').slice(0, 500) + '\n\n';
+      composer.value = quoted + composer.value;
+      composer.focus();
+      composer.setSelectionRange(quoted.length, quoted.length);
+      composer.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+
+    function insertNote(msgId, text) {
+      var noteForm = document.querySelector('form.conv-action-form[data-action="add_note"]');
+      if (!noteForm) { toast('⚠ Notes panel not on this page'); return; }
+      var ta = noteForm.querySelector('textarea[name="note_text"]');
+      if (!ta) return;
+      var snippet = String(text).slice(0, 120).replace(/\n/g, ' ');
+      var ref = 'Re: message #' + msgId + ' — «' + snippet + '»\n\n';
+      ta.value = ref + ta.value;
+      noteForm.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      ta.focus();
+      ta.setSelectionRange(ref.length, ref.length);
+    }
+
+    async function deleteMsg(msgId, msgEl) {
+      var fd = new FormData();
+      fd.append('message_id', msgId);
+      fd.append('_csrf', csrfToken);
+      try {
+        var res = await fetch('/api/message_delete.php', { method: 'POST', body: fd });
+        var d = await res.json().catch(function () { return { ok: false, error: 'Bad response' }; });
+        if (d.ok) {
+          if (msgEl && msgEl.parentNode) msgEl.parentNode.removeChild(msgEl);
+          toast('✓ Deleted');
+        } else {
+          alert('Delete failed: ' + (d.error || 'unknown'));
+        }
+      } catch (err) {
+        alert('Delete failed: ' + err.message);
+      }
+    }
+
+    // -------------------- Forward modal --------------------
+    var fwdMsgId = null;
+    var fwdSearchTimer = null;
+
+    function ensureForwardModal() {
+      if (overlayEl) return overlayEl;
+      overlayEl = document.createElement('div');
+      overlayEl.className = 'fwd-overlay';
+      overlayEl.innerHTML =
+          '<div class="fwd-modal">'
+        + '  <h3>Forward to another conversation</h3>'
+        + '  <div class="muted small" id="fwd-source"></div>'
+        + '  <input type="search" placeholder="Search by name or phone…" id="fwd-search" autocomplete="off">'
+        + '  <div class="fwd-list" id="fwd-list"><div class="muted small">Loading…</div></div>'
+        + '  <div style="display:flex; justify-content:flex-end;">'
+        + '    <button type="button" class="btn btn-sm" id="fwd-cancel">Cancel</button>'
+        + '  </div>'
+        + '</div>';
+      document.body.appendChild(overlayEl);
+      overlayEl.addEventListener('click', function (e) {
+        if (e.target === overlayEl) closeForwardModal();
+      });
+      overlayEl.querySelector('#fwd-cancel').addEventListener('click', closeForwardModal);
+      overlayEl.querySelector('#fwd-search').addEventListener('input', function (e) {
+        clearTimeout(fwdSearchTimer);
+        fwdSearchTimer = setTimeout(function () { loadForwardTargets(e.target.value); }, 200);
+      });
+      overlayEl.querySelector('#fwd-list').addEventListener('click', function (e) {
+        var row = e.target.closest('.fwd-row');
+        if (!row) return;
+        var targetId = row.dataset.convId;
+        var name     = row.querySelector('.fwd-name').textContent;
+        submitForward(fwdMsgId, targetId, name);
+      });
+      return overlayEl;
+    }
+
+    function openForwardModal(msgId, srcText) {
+      ensureForwardModal();
+      fwdMsgId = msgId;
+      overlayEl.querySelector('#fwd-source').textContent =
+        'Message: «' + String(srcText).slice(0, 80) + (srcText.length > 80 ? '…' : '') + '»';
+      overlayEl.querySelector('#fwd-search').value = '';
+      overlayEl.classList.add('open');
+      loadForwardTargets('');
+      setTimeout(function () { overlayEl.querySelector('#fwd-search').focus(); }, 50);
+    }
+
+    function closeForwardModal() {
+      if (overlayEl) overlayEl.classList.remove('open');
+      fwdMsgId = null;
+    }
+
+    async function loadForwardTargets(q) {
+      var listEl = overlayEl.querySelector('#fwd-list');
+      listEl.innerHTML = '<div class="muted small">Loading…</div>';
+      try {
+        var url = '/api/forward_targets.php' + (q ? '?q=' + encodeURIComponent(q) : '');
+        var res = await fetch(url);
+        var d = await res.json().catch(function () { return { ok: false }; });
+        if (!d.ok || !d.items) {
+          listEl.innerHTML = '<div class="muted small">Could not load conversations.</div>';
+          return;
+        }
+        if (!d.items.length) {
+          listEl.innerHTML = '<div class="muted small">No matching open conversations.</div>';
+          return;
+        }
+        listEl.innerHTML = d.items.map(function (c) {
+          var when = c.last_message_at ? c.last_message_at.slice(0, 16) : '';
+          return '<div class="fwd-row" data-conv-id="' + c.id + '">'
+              + '<div>'
+              + '  <div class="fwd-name">' + escapeHtml(c.contact_name) + '</div>'
+              + '  <div class="fwd-meta">+' + escapeHtml(c.wa_id) + ' · ' + escapeHtml(c.channel_name) + '</div>'
+              + '</div>'
+              + '<div class="fwd-meta">' + escapeHtml(when) + '</div>'
+              + '</div>';
+        }).join('');
+      } catch (err) {
+        listEl.innerHTML = '<div class="muted small">Error: ' + err.message + '</div>';
+      }
+    }
+
+    async function submitForward(msgId, targetId, targetName) {
+      if (!confirm('Forward this message to ' + targetName + '?')) return;
+      var fd = new FormData();
+      fd.append('message_id', msgId);
+      fd.append('target_conversation_id', targetId);
+      fd.append('_csrf', csrfToken);
+      try {
+        var res = await fetch('/api/message_forward.php', { method: 'POST', body: fd });
+        var d = await res.json().catch(function () { return { ok: false, error: 'Bad response' }; });
+        closeForwardModal();
+        if (d.ok) {
+          toast('✓ Forwarded to ' + targetName);
+        } else {
+          alert('Forward failed: ' + (d.error || 'unknown'));
+        }
+      } catch (err) {
+        alert('Forward failed: ' + err.message);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function toast(msg) {
+      var t = document.createElement('div');
+      t.className = 'msg-toast';
+      t.textContent = msg;
+      document.body.appendChild(t);
+      requestAnimationFrame(function () { t.classList.add('on'); });
+      setTimeout(function () {
+        t.classList.remove('on');
+        setTimeout(function () { t.remove(); }, 300);
+      }, 1600);
+    }
+  })();
+
+  // ============================================================
   // VOICE-NOTE DURATION HINT
   // ============================================================
   // Reads audio.duration once the browser has the metadata and shows

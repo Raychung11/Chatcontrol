@@ -73,12 +73,13 @@ if ($scope === 'chat') {
         json_response(['ok' => false, 'error' => 'Forbidden.'], 403);
     }
 
-    // New messages since after_id
+    // New messages since after_id — skip soft-deleted (phase 52).
     $mstmt = $db->prepare(
         'SELECT m.*, u.name AS sender_name
          FROM messages m
          LEFT JOIN users u ON u.id = m.sender_user_id
          WHERE m.conversation_id = ? AND m.id > ?
+           AND m.deleted_at IS NULL
          ORDER BY m.id ASC LIMIT 100'
     );
     $mstmt->execute([$conversationId, $afterId]);

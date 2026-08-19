@@ -44,12 +44,17 @@ if ((int)$conv['unread_count'] > 0) {
     $conv['unread_count'] = 0;
 }
 
-// Messages
+// Messages — soft-deleted rows (phase 52) are excluded from the visible
+// stream. The `deleted_at IS NULL OR NOT EXISTS(deleted_at)` shape lets
+// this query run against pre-phase-52 databases too via a runtime column
+// check; simpler to just always include the filter now that phase 52 is
+// the baseline.
 $mstmt = $db->prepare(
     'SELECT m.*, u.name AS sender_name
      FROM messages m
      LEFT JOIN users u ON u.id = m.sender_user_id
      WHERE m.conversation_id = ?
+       AND (m.deleted_at IS NULL)
      ORDER BY m.created_at ASC, m.id ASC
      LIMIT 500'
 );

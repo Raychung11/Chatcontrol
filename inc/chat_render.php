@@ -13,8 +13,19 @@ function message_bubble_html(array $m): string
     $cls   = $isOut ? 'msg-out' : 'msg-in';
     $cls  .= ' status-' . e((string)$m['status']);
 
-    $html  = '<div class="msg ' . $cls . '" data-msg-id="' . (int)$m['id'] . '">';
+    // Cache the raw message text on the wrapper so JS can copy / reply
+    // without a round-trip. `data-msg-text` is HTML-attr-escaped, and
+    // JS reads it via .dataset — no innerText scraping (which would
+    // include translation blocks + timestamps).
+    $rawText = (string)($m['message_text'] ?? '');
+    $html  = '<div class="msg ' . $cls . '" data-msg-id="' . (int)$m['id'] . '"'
+           . ' data-msg-text="' . e($rawText) . '"'
+           . ' data-msg-out="' . ($isOut ? '1' : '0') . '">';
     $html .= '<div class="msg-bubble">';
+
+    // ⋯ Kebab trigger — always in DOM, revealed on hover via CSS. Tap
+    // on mobile still shows it because the bubble gets .msg:focus-within.
+    $html .= '<button type="button" class="msg-menu-trigger" aria-label="Message actions" title="Actions">⋯</button>';
 
     if ($isOut) {
         if (($m['sender_type'] ?? '') === 'ai') {

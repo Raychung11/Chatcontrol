@@ -15,6 +15,7 @@ $db = aiserve_db();
 
 $stmt = $db->prepare(
     'SELECT c.*, ct.wa_id, ct.display_name, ct.profile_name, ct.phone AS contact_phone,
+            ct.wa_lid AS contact_wa_lid,
             ct.branch_id AS contact_branch_id,
             u.name AS agent_name, d.name AS department_name,
             b.name AS contact_branch_name,
@@ -365,7 +366,26 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
           <?php endif; ?>
         </div>
       </form>
-      <div class="kv"><span>WhatsApp ID</span><strong>+<?= e($conv['wa_id']) ?></strong></div>
+      <?php $isLidContact = !empty($conv['contact_wa_lid']); ?>
+      <div class="kv">
+        <span>WhatsApp ID</span>
+        <strong>
+          <?php if ($isLidContact): ?>
+            <span title="This customer uses WhatsApp LID privacy. Their real phone number is masked by Meta — you can't broadcast or SMS them. Ask for phone number in-chat if you need it."
+                  style="display:inline-block; background:#fef3c7; color:#78350f; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600;">
+              🔒 Anonymous (LID)
+            </span><br>
+          <?php endif; ?>
+          <span style="<?= $isLidContact ? 'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#64748b;' : '' ?>">
+            <?= $isLidContact ? '' : '+' ?><?= e($conv['wa_id']) ?>
+          </span>
+        </strong>
+      </div>
+      <?php if ($isLidContact): ?>
+        <div class="muted small" style="padding: 6px 10px; background:#fffbeb; border-left:3px solid #f59e0b; border-radius:4px; margin: 4px 0 8px; font-size: 12px;">
+          Privacy-preserving ID from Meta. Reply works normally, but this customer <strong>can't be broadcast to</strong>. If you know their real number, use <strong>Merge…</strong> below to combine records.
+        </div>
+      <?php endif; ?>
       <?php if (!empty($conv['channel_name'])): ?>
         <div class="kv">
           <span>Channel</span>
@@ -377,6 +397,21 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
           </strong>
         </div>
       <?php endif; ?>
+
+      <?php if (in_array($current_user['role'] ?? 'agent', ['super_admin', 'manager'], true)): ?>
+        <!-- Merge-contacts button — opens a modal to pick a target contact.
+             Especially useful for LID phantom + real-phone duplicate cases,
+             but also handles any manual dedup. -->
+        <div style="margin: 6px 0 10px;">
+          <button type="button" class="btn btn-sm" id="merge-contact-btn"
+                  data-source-id="<?= (int)$conv['contact_id'] ?>"
+                  data-source-name="<?= e((string)($conv['display_name'] ?: $conv['profile_name'] ?: $conv['wa_id'])) ?>"
+                  title="Merge this contact into another one (moves all messages + conversations)">
+            🔀 Merge into another contact…
+          </button>
+        </div>
+      <?php endif; ?>
+
       <?php
         $branchList = $db->prepare(
             'SELECT id, name FROM branches WHERE company_id = ? AND status = "active" ORDER BY name'

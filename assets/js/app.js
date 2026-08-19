@@ -1338,6 +1338,126 @@
   })();
 
   // ============================================================
+  // MERGE CONTACT MODAL — pick a target contact, move everything into it
+  // ============================================================
+  (function () {
+    var btn = document.getElementById('merge-contact-btn');
+    if (!btn) return;   // only on chat page
+
+    var overlay = null;
+
+    btn.addEventListener('click', function () {
+      openMergeModal(btn.dataset.sourceId, btn.dataset.sourceName || 'this contact');
+    });
+
+    function openMergeModal(sourceId, sourceName) {
+      if (!overlay) buildOverlay();
+      overlay.querySelector('#mrg-source').textContent =
+        'Merging: ' + sourceName + ' (id ' + sourceId + ')';
+      overlay.dataset.sourceId = sourceId;
+      overlay.querySelector('#mrg-search').value = '';
+      overlay.querySelector('#mrg-list').innerHTML = '<div class="muted small">Loading…</div>';
+      overlay.classList.add('open');
+      setTimeout(function () { overlay.querySelector('#mrg-search').focus(); }, 50);
+      loadTargets('');
+    }
+
+    function buildOverlay() {
+      overlay = document.createElement('div');
+      overlay.className = 'fwd-overlay';   // reuse existing overlay css
+      overlay.innerHTML =
+          '<div class="fwd-modal">'
+        + '  <h3>🔀 Merge this contact into another</h3>'
+        + '  <div class="muted small" id="mrg-source"></div>'
+        + '  <div class="muted small" style="padding:8px 10px; background:#fef3c7; border-radius:6px;">'
+        + '    ⚠ All messages, conversations, tags, and internal notes on THIS contact will be moved into the target. This contact will then be deleted. <strong>Cannot be undone.</strong>'
+        + '  </div>'
+        + '  <input type="search" placeholder="Search target by name or phone…" id="mrg-search" autocomplete="off">'
+        + '  <div class="fwd-list" id="mrg-list"></div>'
+        + '  <div style="display:flex; justify-content:flex-end;">'
+        + '    <button type="button" class="btn btn-sm" id="mrg-cancel">Cancel</button>'
+        + '  </div>'
+        + '</div>';
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', function (e) {
+        if (e.target === overlay) closeMerge();
+      });
+      overlay.querySelector('#mrg-cancel').addEventListener('click', closeMerge);
+      var searchTimer;
+      overlay.querySelector('#mrg-search').addEventListener('input', function (e) {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(function () { loadTargets(e.target.value); }, 200);
+      });
+      overlay.querySelector('#mrg-list').addEventListener('click', function (e) {
+        var row = e.target.closest('.fwd-row');
+        if (!row) return;
+        var targetId = row.dataset.contactId;
+        var name     = row.querySelector('.fwd-name').textContent;
+        submitMerge(targetId, name);
+      });
+    }
+
+    function closeMerge() { if (overlay) overlay.classList.remove('open'); }
+
+    async function loadTargets(q) {
+      var listEl = overlay.querySelector('#mrg-list');
+      listEl.innerHTML = '<div class="muted small">Loading…</div>';
+      try {
+        var url = '/api/contact_search.php?q=' + encodeURIComponent(q)
+                + '&exclude=' + encodeURIComponent(overlay.dataset.sourceId);
+        var res = await fetch(url);
+        var d = await res.json().catch(function () { return { ok: false }; });
+        if (!d.ok || !d.items) {
+          listEl.innerHTML = '<div class="muted small">Could not load contacts.</div>';
+          return;
+        }
+        if (!d.items.length) {
+          listEl.innerHTML = '<div class="muted small">No matching contacts. Try a different search.</div>';
+          return;
+        }
+        listEl.innerHTML = d.items.map(function (c) {
+          var lidBadge = c.is_lid
+            ? '<span style="background:#fef3c7;color:#78350f;padding:1px 6px;border-radius:999px;font-size:10px;margin-left:6px;">🔒 LID</span>'
+            : '';
+          return '<div class="fwd-row" data-contact-id="' + c.id + '">'
+              + '<div>'
+              + '  <div class="fwd-name">' + escHtml(c.display_name) + lidBadge + '</div>'
+              + '  <div class="fwd-meta">+' + escHtml(c.wa_id) + (c.phone && c.phone !== c.wa_id ? ' · ' + escHtml(c.phone) : '') + '</div>'
+              + '</div>'
+              + '</div>';
+        }).join('');
+      } catch (err) {
+        listEl.innerHTML = '<div class="muted small">Error: ' + err.message + '</div>';
+      }
+    }
+
+    async function submitMerge(targetId, targetName) {
+      if (!confirm('Merge into ' + targetName + '?\n\nEverything on this contact will move to that one, then this contact is deleted. This cannot be undone.')) return;
+      var fd = new FormData();
+      fd.append('source_id', overlay.dataset.sourceId);
+      fd.append('target_id', targetId);
+      fd.append('_csrf', csrfToken);
+      try {
+        var res = await fetch('/api/contact_merge.php', { method: 'POST', body: fd });
+        var d = await res.json().catch(function () { return { ok: false, error: 'Bad response' }; });
+        if (d.ok) {
+          alert('✓ Merged. Redirecting to the target contact…');
+          window.location.href = '/inbox/';  // safe fallback — current conversation was moved
+        } else {
+          alert('Merge failed: ' + (d.error || 'unknown'));
+        }
+      } catch (err) {
+        alert('Merge failed: ' + err.message);
+      }
+    }
+
+    function escHtml(s) {
+      return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+  })();
+
+  // ============================================================
   // VOICE-NOTE DURATION HINT
   // ============================================================
   // Reads audio.duration once the browser has the metadata and shows

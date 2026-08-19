@@ -58,7 +58,8 @@ $total   = (int)$b['total_recipients'];
 $pct     = $total > 0 ? min(100, (int)round((($sent + $failed) / $total) * 100)) : 0;
 $etaMin  = broadcast_eta_minutes($queued, (int)$b['batch_size'], (int)$b['batch_interval_min']);
 
-$skippedNotChannelContact = (int)($_GET['skipped'] ?? 0);
+$skippedNotChannelContact = (int)($_GET['skipped']     ?? 0);
+$skippedLid               = (int)($_GET['skipped_lid'] ?? 0);
 
 layout_start($current_user, 'Broadcast · ' . $b['name'], 'broadcasts');
 ?>
@@ -74,6 +75,16 @@ layout_start($current_user, 'Broadcast · ' . $b['name'], 'broadcasts');
       They aren't contacts on <em><?= e((string)$b['channel_name']) ?></em> yet —
       broadcasts only go to numbers that have already messaged this channel.
       Ask them to send a message first, or pick a different channel and try again.
+    </div>
+  <?php endif; ?>
+  <?php if ($skippedLid > 0): ?>
+    <div class="alert" style="background:#fef3c7; border:1px solid #fcd34d; color:#78350f;">
+      🔒 <strong><?= (int)$skippedLid ?> anonymous contact(s) skipped.</strong>
+      These customers use WhatsApp LID privacy — Meta hides their real phone
+      number so the gateway can't route a broadcast to them. They can still receive
+      your replies inside the same chat thread. To broadcast to them anyway,
+      ask them for their phone number in-chat and <a href="/inbox/">merge the
+      LID contact into the real-phone contact</a> once you get it.
     </div>
   <?php endif; ?>
 

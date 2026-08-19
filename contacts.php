@@ -201,7 +201,7 @@ if ($tagId > 0) {
     $params = array_merge($paramsBefore, $params);
 }
 
-$sql = 'SELECT c.id, c.display_name, c.profile_name, c.wa_id, c.phone,
+$sql = 'SELECT c.id, c.display_name, c.profile_name, c.wa_id, c.wa_lid, c.phone,
                c.branch_id, c.external_id, c.email, c.last_message_at,
                b.name AS branch_name
         FROM contacts c
@@ -532,7 +532,17 @@ layout_start($current_user, 'Contacts', 'contacts');
             <?php endif; ?>
           </td>
           <td>
-            +<?= e($c['wa_id']) ?>
+            <?php if (!empty($c['wa_lid'])): ?>
+              <span title="WhatsApp LID — Meta hides this customer's real phone. They can't be broadcast to."
+                    style="background:#fef3c7; color:#78350f; padding:1px 6px; border-radius:999px; font-size:10.5px; font-weight:600;">
+                🔒 LID
+              </span>
+              <span class="muted small" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">
+                <?= e($c['wa_id']) ?>
+              </span>
+            <?php else: ?>
+              +<?= e($c['wa_id']) ?>
+            <?php endif; ?>
             <?php if (!empty($c['phone']) && $c['phone'] !== $c['wa_id']): ?>
               <div class="muted small"><?= e((string)$c['phone']) ?></div>
             <?php endif; ?>

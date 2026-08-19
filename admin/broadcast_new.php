@@ -133,12 +133,16 @@ if (is_post()) {
                 // ALSO filter by channel_id so a tag on a channel-A
                 // conversation doesn't leak into a channel-B blast (the
                 // customer may never have opted in on channel B).
+                // Exclude LID (WhatsApp anonymous ID) contacts — their real
+                // phone number is masked by Meta, so the gateway can't
+                // route a broadcast to them. wa_lid IS NOT NULL = LID row.
                 $r = $db->prepare(
                     'SELECT DISTINCT ct.wa_id, ct.display_name
                      FROM conversation_tag_map m
                      JOIN conversations c ON c.id = m.conversation_id
                        AND c.company_id = ? AND c.channel_id = ?
                      JOIN contacts ct     ON ct.id = c.contact_id     AND ct.company_id = ?
+                                        AND (ct.wa_lid IS NULL OR ct.wa_lid = "")
                      JOIN conversation_tags t ON t.id = m.tag_id
                      WHERE m.tag_id = ? AND t.company_id = ?'
                 );
@@ -168,15 +172,30 @@ if (is_post()) {
         // Skipped numbers are counted so the operator can see how many
         // fell out and why.
         $skippedNotChannelContact = 0;
+        $skippedLid = 0;
         if (!$err && $waIds) {
             $entered = array_keys($waIds);
             $placeholders = implode(',', array_fill(0, count($entered), '?'));
+            // First count how many of the entered numbers are LID contacts —
+            // they'd have made it past the tag query already if they were
+            // typed directly, but the tag-lookup already excludes them.
+            // Reported to the operator so 'why did N recipients disappear'
+            // is always answerable.
+            $ql = $db->prepare(
+                "SELECT wa_id FROM contacts
+                 WHERE company_id = ? AND wa_id IN ($placeholders)
+                   AND wa_lid IS NOT NULL AND wa_lid != ''"
+            );
+            $ql->execute(array_merge([$companyId], $entered));
+            $lidSet = array_flip(array_map(fn($r) => (string)$r['wa_id'], $ql->fetchAll()));
+
             $q = $db->prepare(
                 "SELECT DISTINCT ct.wa_id
                  FROM contacts ct
                  INNER JOIN conversations c
                     ON c.contact_id = ct.id AND c.channel_id = ? AND c.company_id = ?
                  WHERE ct.company_id = ? AND ct.platform = 'whatsapp'
+                   AND (ct.wa_lid IS NULL OR ct.wa_lid = '')
                    AND ct.wa_id IN ($placeholders)"
             );
             $q->execute(array_merge(
@@ -190,6 +209,8 @@ if (is_post()) {
             foreach ($waIds as $wa => $name) {
                 if (isset($allowedSet[$wa])) {
                     $filtered[$wa] = $name;
+                } elseif (isset($lidSet[$wa])) {
+                    $skippedLid++;
                 } else {
                     $skippedNotChannelContact++;
                 }
@@ -291,13 +312,18 @@ if (is_post()) {
             $db->commit();
             log_activity($companyId, (int)$current_user['id'], 'broadcast_created',
                 'broadcast', $bid,
-                'recipients=' . count($waIds) . ' skipped_not_channel_contact=' . $skippedNotChannelContact
+                'recipients=' . count($waIds)
+                . ' skipped_not_channel_contact=' . $skippedNotChannelContact
+                . ' skipped_lid=' . $skippedLid
                 . ' batch=' . $saved['batch_size']
                 . ' interval=' . $saved['interval_min'] . 'min'
                 . ' status=' . ($saved['start_now'] ? 'running' : 'draft'));
             $qs = '/admin/broadcast_view.php?id=' . $bid;
             if ($skippedNotChannelContact > 0) {
                 $qs .= '&skipped=' . $skippedNotChannelContact;
+            }
+            if ($skippedLid > 0) {
+                $qs .= '&skipped_lid=' . $skippedLid;
             }
             redirect($qs);
         } catch (Throwable $e) {

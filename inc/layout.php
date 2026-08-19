@@ -24,7 +24,7 @@ function layout_start(array $current_user, string $page_title = '', string $acti
   <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
   <?= pwa_head_tags() ?>
 </head>
-<body<?= is_impersonating() ? ' class="impersonating"' : '' ?>>
+<body class="<?= is_impersonating() ? 'impersonating ' : '' ?>page-<?= e($active_nav ?: 'other') ?>">
 <?php if (is_impersonating()): ?>
   <div class="impersonate-banner">
     <span>

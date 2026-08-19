@@ -81,6 +81,10 @@
     + '@media (max-width:520px){'
     +   '.hw-panel{width:calc(100vw - 20px);right:10px;bottom:70px;height:calc(100vh - 90px);border-radius:10px;}'
     +   '.hw-btn{right:12px;bottom:12px;padding:10px 14px;font-size:13px;}'
+    +   // Hide on the /inbox chat page in mobile view — the bubble
+    +   // was overlapping the composer + Attach/Record footer buttons.
+    +   // Operators can still open the widget on any other admin page.
+    +   'body.page-inbox .hw-btn,body.page-inbox .hw-panel{display:none !important;}'
     + '}';
   var style = document.createElement('style');
   style.textContent = css;

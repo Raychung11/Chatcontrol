@@ -10,6 +10,51 @@ $canManage    = in_array($current_user['role'] ?? 'agent', ['super_admin', 'mana
 $msg = '';
 $err = '';
 
+/**
+ * Build the WHERE / params / joins for the contact query from a source
+ * array (either $_GET for rendering the list, or $_POST for POST-back
+ * actions like split_batches which include the same filter as hidden
+ * inputs). Kept as a closure so both paths stay in sync when filter
+ * columns change.
+ */
+$buildFilter = function (array $src) use ($companyId) {
+    $q       = trim((string)($src['q'] ?? ''));
+    $bId     = (int)($src['branch_id'] ?? 0);
+    $tId     = (int)($src['tag_id'] ?? 0);
+    $dField  = (string)($src['date_field'] ?? '');
+    if (!in_array($dField, ['created', 'last_msg'], true)) $dField = '';
+    $dFrom   = trim((string)($src['date_from'] ?? ''));
+    $dTo     = trim((string)($src['date_to']   ?? ''));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dFrom)) $dFrom = '';
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $dTo))   $dTo   = '';
+
+    $where  = ['c.company_id = ?'];
+    $params = [$companyId];
+    $joins  = 'LEFT JOIN branches b ON b.id = c.branch_id';
+
+    if ($q !== '') {
+        $where[] = '(c.display_name LIKE ? OR c.profile_name LIKE ? OR c.phone LIKE ? OR c.wa_id LIKE ?)';
+        $like = '%' . $q . '%';
+        array_push($params, $like, $like, $like, $like);
+    }
+    if ($bId > 0) { $where[] = 'c.branch_id = ?'; $params[] = $bId; }
+    if ($dField !== '' && ($dFrom !== '' || $dTo !== '')) {
+        $col = $dField === 'last_msg' ? 'c.last_message_at' : 'c.created_at';
+        if ($dFrom !== '') { $where[] = "$col >= ?"; $params[] = $dFrom . ' 00:00:00'; }
+        if ($dTo   !== '') { $where[] = "$col <= ?"; $params[] = $dTo   . ' 23:59:59'; }
+    }
+    if ($tId > 0) {
+        $joins .= ' INNER JOIN (
+            SELECT DISTINCT cv.contact_id
+            FROM conversations cv
+            INNER JOIN conversation_tag_map ctm ON ctm.conversation_id = cv.id
+            WHERE cv.company_id = ? AND ctm.tag_id = ?
+        ) tagged ON tagged.contact_id = c.id';
+        $params = array_merge([$companyId, $tId], $params);
+    }
+    return [$where, $params, $joins];
+};
+
 // -------------------- Bulk actions --------------------
 if (is_post() && $canManage) {
     csrf_check();
@@ -39,6 +84,51 @@ if (is_post() && $canManage) {
                 null, null, count($safeIds) . ' contact(s), tags: ' . implode(', ', $tagNames));
             $msg = "Applied " . count($tagNames) . " tag(s) to " . count($safeIds) . " contact(s). "
                  . "({$applied} tag-attach operation(s) done — existing tags were skipped.)";
+        }
+    } elseif ($action === 'split_batches') {
+        // Split ALL contacts matching the (POSTed-back) filter into
+        // chunks of $batchSize, tagging each chunk 'prefix-1', 'prefix-2', …
+        // Useful when the operator wants staged rollouts (send batch-1
+        // today, batch-2 tomorrow) on a 10k+ list.
+        $batchSize = max(100, min(50000, (int)($_POST['batch_size'] ?? 5000)));
+        $prefix    = trim((string)($_POST['batch_prefix'] ?? ''));
+        // Sanitize prefix — tag-safe chars only, cap length so 'prefix-N'
+        // fits in the 60-char tags.name column even at 5 digits (batch-99999).
+        $prefix = preg_replace('/[^a-zA-Z0-9_-]/', '-', $prefix);
+        $prefix = trim($prefix, '-');
+        $prefix = mb_substr($prefix, 0, 50);
+        if ($prefix === '') $prefix = 'batch';
+
+        [$where, $params, $joins] = $buildFilter($_POST);
+        $sql = 'SELECT c.id FROM contacts c ' . $joins
+             . ' WHERE ' . implode(' AND ', $where)
+             . ' ORDER BY c.id ASC';
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $allIds = array_map('intval', array_column($stmt->fetchAll(), 'id'));
+        if (!$allIds) {
+            $err = 'No contacts match the current filter — nothing to split.';
+        } else {
+            // Bumped time + memory: 100k contacts × N inserts can take a
+            // minute. Same envelope the import uses.
+            @set_time_limit(300);
+            @ini_set('memory_limit', '512M');
+            $chunks   = array_chunk($allIds, $batchSize);
+            $cache    = [];
+            $tagged   = 0;
+            $summary  = [];
+            foreach ($chunks as $i => $chunk) {
+                $tagName = $prefix . '-' . ($i + 1);
+                foreach ($chunk as $cid) {
+                    if (contact_ensure_tagged($db, $companyId, $cid, $tagName, $cache)) $tagged++;
+                }
+                $summary[] = $tagName . ' (' . number_format(count($chunk)) . ')';
+            }
+            log_activity($companyId, (int)$current_user['id'], 'contacts_split_batches',
+                null, null, count($allIds) . ' contacts into ' . count($chunks) . ' batches, prefix=' . $prefix);
+            $msg = 'Split ' . number_format(count($allIds)) . ' contact(s) into '
+                 . count($chunks) . ' batch(es): ' . implode(' · ', $summary)
+                 . '. Filter by any of these tags on this page → 📢 Broadcast to that batch.';
         }
     } elseif ($action === 'bulk_untag' && $ids) {
         $tagId = (int)($_POST['untag_id'] ?? 0);
@@ -122,6 +212,14 @@ $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $contacts = $stmt->fetchAll();
 
+// Full count of contacts matching the current filter (page shows a max of
+// 200 for perf; the split-into-batches action operates on ALL of them so
+// operators need to see the real total up front).
+$countSql = 'SELECT COUNT(*) FROM contacts c ' . $joins . ' WHERE ' . implode(' AND ', $where);
+$countStmt = $db->prepare($countSql);
+$countStmt->execute($params);
+$totalMatching = (int)$countStmt->fetchColumn();
+
 // Preload tags for every contact on the page.
 $contactIds = array_map(fn($r) => (int)$r['id'], $contacts);
 $tagsByCid  = contact_tags_for_ids($db, $companyId, $contactIds);
@@ -155,7 +253,7 @@ layout_start($current_user, 'Contacts', 'contacts');
 ?>
 <div class="card">
   <div class="card-head">
-    <h2>Contacts <small class="muted">(<?= count($contacts) ?><?= count($contacts) >= 200 ? '+' : '' ?>)</small></h2>
+    <h2>Contacts <small class="muted">(<?= number_format($totalMatching) ?><?= $totalMatching > count($contacts) ? ' matching · showing 200' : '' ?>)</small></h2>
     <?php if ($canManage): ?>
       <div style="display:flex; gap:6px; align-items:center;">
         <a class="btn btn-sm" href="/assets/templates/contact_import_template.xlsx"
@@ -256,6 +354,92 @@ layout_start($current_user, 'Contacts', 'contacts');
       &nbsp;·&nbsp;
       <a href="/admin/broadcast_new.php?source=tag&tag_id=<?= $tagId ?>">📢 Broadcast to this tag →</a>
     </div>
+  <?php endif; ?>
+
+  <?php if ($canManage && $totalMatching > 0): ?>
+  <!-- 🎯 Split-into-batches — operates on the ALL matching contacts under
+       the current filter (not just the visible 200). Perfect for staged
+       broadcasts on 10k+ lists: split 15,000 → 3 batches of 5,000, then
+       broadcast to batch-1 today, batch-2 tomorrow, batch-3 the day after. -->
+  <details style="margin: 6px 0 12px; padding: 10px 14px;
+       background: linear-gradient(135deg, #faf5ff, #f5f3ff);
+       border: 1px solid #ddd6fe; border-radius: 8px;">
+    <summary style="cursor:pointer; color:#6b21a8; font-weight:600; font-size:14px;">
+      🎯 Split all <?= number_format($totalMatching) ?> matching contact(s) into batches…
+      <span class="muted small" style="font-weight:400; margin-left:6px;">for staged broadcasts</span>
+    </summary>
+
+    <form method="post" style="margin-top: 10px; display:flex; gap:8px; flex-wrap:wrap; align-items:end;"
+          onsubmit="return splitConfirm(this);">
+      <?= csrf_field() ?>
+      <input type="hidden" name="action" value="split_batches">
+      <!-- Mirror the current filter so the POST-side sees the same set -->
+      <input type="hidden" name="q"          value="<?= e($search) ?>">
+      <input type="hidden" name="branch_id"  value="<?= (int)$branchId ?>">
+      <input type="hidden" name="tag_id"     value="<?= (int)$tagId ?>">
+      <input type="hidden" name="date_field" value="<?= e($dateField) ?>">
+      <input type="hidden" name="date_from"  value="<?= e($dateFrom) ?>">
+      <input type="hidden" name="date_to"    value="<?= e($dateTo) ?>">
+
+      <label style="font-size:13px;">
+        <span class="muted small" style="display:block;">Batch size</span>
+        <input type="number" name="batch_size" min="100" max="50000" value="5000" step="500"
+               style="width: 110px; padding: 5px 8px;">
+      </label>
+
+      <label style="font-size:13px; flex:1; min-width:200px;">
+        <span class="muted small" style="display:block;">Tag prefix (each batch gets prefix-1, prefix-2, …)</span>
+        <input type="text" name="batch_prefix" required maxlength="50"
+               value="batch-<?= date('Y-m') ?>"
+               placeholder="e.g. batch-oct-2026"
+               pattern="[a-zA-Z0-9_-]+"
+               title="Letters, digits, underscore, hyphen only"
+               style="width: 100%; padding: 5px 8px;">
+      </label>
+
+      <button type="submit" class="btn btn-sm btn-primary"
+              style="background:#a855f7; border-color:#a855f7;">🎯 Split into batches</button>
+
+      <div class="muted small" style="width:100%; padding-top:6px;">
+        <strong>Preview:</strong>
+        <span id="split-preview">
+          <?= number_format($totalMatching) ?> ÷ 5,000 =
+          <?= ceil($totalMatching / 5000) ?> batch(es) →
+          <code>batch-<?= date('Y-m') ?>-1</code>,
+          <code>batch-<?= date('Y-m') ?>-2</code>, …
+        </span>
+      </div>
+    </form>
+    <script>
+      // Live-update the preview as the operator tweaks size/prefix.
+      (function () {
+        var total  = <?= (int)$totalMatching ?>;
+        var form   = document.currentScript.closest('details').querySelector('form');
+        var sizeEl = form.querySelector('input[name="batch_size"]');
+        var prefEl = form.querySelector('input[name="batch_prefix"]');
+        var out    = document.getElementById('split-preview');
+        function upd() {
+          var size = Math.max(100, Math.min(50000, parseInt(sizeEl.value, 10) || 5000));
+          var count = Math.ceil(total / size);
+          var pref = (prefEl.value || 'batch').replace(/[^a-zA-Z0-9_-]/g, '-').replace(/^-+|-+$/g, '');
+          out.innerHTML = total.toLocaleString() + ' ÷ ' + size.toLocaleString() + ' = '
+            + count + ' batch(es) → <code>' + pref + '-1</code>, <code>' + pref + '-2</code>, …';
+        }
+        sizeEl.addEventListener('input', upd);
+        prefEl.addEventListener('input', upd);
+      })();
+      window.splitConfirm = function (f) {
+        var total = <?= (int)$totalMatching ?>;
+        var size  = Math.max(100, Math.min(50000, parseInt(f.batch_size.value, 10) || 5000));
+        var pref  = (f.batch_prefix.value || 'batch').replace(/[^a-zA-Z0-9_-]/g, '-');
+        var count = Math.ceil(total / size);
+        return confirm('Split ' + total.toLocaleString() + ' contact(s) into ' + count
+          + ' batches of ≤ ' + size.toLocaleString() + ' each?\n\nTags will be created: '
+          + pref + '-1 … ' + pref + '-' + count + '\n\nThis takes ~' + Math.max(1, Math.round(total / 200))
+          + ' seconds. Existing tags are not affected.');
+      };
+    </script>
+  </details>
   <?php endif; ?>
 
   <?php if ($canManage): ?>

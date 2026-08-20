@@ -62,16 +62,37 @@ $mstmt = $db->prepare(
 $mstmt->execute([$conversationId]);
 $messages = $mstmt->fetchAll();
 
-// Internal notes
+// Internal notes — LEFT JOIN so system-generated notes (user_id NULL)
+// still render. F&B order-created notes and flow-emitted 'save_note'
+// entries both use user_id NULL by design.
 $nstmt = $db->prepare(
-    'SELECT n.*, u.name AS user_name
+    'SELECT n.*, COALESCE(u.name, "System") AS user_name
      FROM internal_notes n
-     INNER JOIN users u ON u.id = n.user_id
+     LEFT  JOIN users u ON u.id = n.user_id
      WHERE n.conversation_id = ?
      ORDER BY n.created_at ASC LIMIT 200'
 );
 $nstmt->execute([$conversationId]);
 $notes = $nstmt->fetchAll();
+
+// F&B orders from THIS contact (only if the module is active on this
+// workspace). Shown in a side-panel card so operators can jump from
+// the chat straight to the order detail / kanban.
+$fnbOrders = [];
+$contactIdForOrders = (int)($conv['contact_id'] ?? 0);
+if ($contactIdForOrders > 0 && fnb_module_active($companyId)) {
+    try {
+        $os = $db->prepare(
+            'SELECT id, order_number, status, order_type,
+                    subtotal, delivery_fee, total, created_at
+             FROM fnb_orders
+             WHERE company_id = ? AND contact_id = ?
+             ORDER BY id DESC LIMIT 10'
+        );
+        $os->execute([$companyId, $contactIdForOrders]);
+        $fnbOrders = $os->fetchAll();
+    } catch (Throwable $e) { /* fnb_orders table may not exist on non-F&B workspaces */ }
+}
 
 // Agents list for assignment dropdown (only managers/admin can change)
 $agents = [];
@@ -557,6 +578,48 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
     </div>
     <?php endif; ?>
 
+    <?php if ($fnbOrders): ?>
+      <?php
+        $orderCurrency = platform_setting('pricing_currency', 'RM');
+        $statusColor = [
+          'new'        => ['bg' => '#fef3c7', 'fg' => '#78350f', 'label' => 'New'],
+          'confirmed'  => ['bg' => '#dbeafe', 'fg' => '#1e3a8a', 'label' => 'Confirmed'],
+          'processing' => ['bg' => '#e0e7ff', 'fg' => '#3730a3', 'label' => 'Processing'],
+          'completed'  => ['bg' => '#dcfce7', 'fg' => '#14532d', 'label' => 'Completed'],
+          'cancelled'  => ['bg' => '#fee2e2', 'fg' => '#991b1b', 'label' => 'Cancelled'],
+        ];
+      ?>
+      <div class="side-section">
+        <h3>🍜 F&B orders from this customer <small class="muted">(<?= count($fnbOrders) ?>)</small></h3>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <?php foreach ($fnbOrders as $o):
+            $s = $statusColor[$o['status']] ?? ['bg' => '#f1f5f9', 'fg' => '#334155', 'label' => ucfirst((string)$o['status'])];
+          ?>
+            <a href="/admin/fnb_order_view.php?id=<?= (int)$o['id'] ?>"
+               style="display:block; padding:8px 10px; border:1px solid #e3e8ee; border-radius:6px; text-decoration:none; color:#0f172a; background:#fff;"
+               title="Open on kanban / dashboard">
+              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                <strong style="font-size:13px;">#<?= e((string)$o['order_number']) ?></strong>
+                <span style="background: <?= e($s['bg']) ?>; color: <?= e($s['fg']) ?>; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;">
+                  <?= e($s['label']) ?>
+                </span>
+              </div>
+              <div class="muted small" style="margin-top:2px;">
+                <?= e($orderCurrency) ?> <?= number_format((float)$o['total'], 2) ?>
+                · <?= e((string)$o['order_type']) ?>
+                · <?= e(fmt_dt($o['created_at'], 'M j, H:i')) ?>
+              </div>
+            </a>
+          <?php endforeach; ?>
+        </div>
+        <div style="margin-top:8px;">
+          <a class="btn btn-sm" href="/admin/fnb_orders.php" style="width:100%; text-align:center;">
+            📋 Open F&B kanban →
+          </a>
+        </div>
+      </div>
+    <?php endif; ?>
+
     <div class="side-section">
       <h3>Internal notes</h3>
       <ul class="note-list">
@@ -569,7 +632,18 @@ layout_start($current_user, 'Chat · ' . ($conv['display_name'] ?: $conv['wa_id'
               <strong><?= e($n['user_name']) ?></strong>
               <span class="muted small"><?= e(fmt_dt($n['created_at'])) ?></span>
             </div>
-            <div class="note-body"><?= nl2br(e($n['note_text'])) ?></div>
+            <div class="note-body"><?php
+              // Escape first, then linkify /admin/... paths and http(s):// URLs
+              // so system-generated notes (e.g. F&B order creation) have a
+              // clickable "View →" link right in the note body.
+              $safe = nl2br(e($n['note_text']));
+              $safe = preg_replace_callback(
+                  '#((?:https?://|/admin/|/inbox/)[^\s<]+)#',
+                  fn($m) => '<a href="' . $m[1] . '" style="color:#0072B2;">' . $m[1] . '</a>',
+                  $safe
+              );
+              echo $safe;
+            ?></div>
           </li>
         <?php endforeach; ?>
       </ul>

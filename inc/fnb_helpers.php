@@ -494,6 +494,37 @@ function fnb_create_order_from_flow_state(array $state, int $conversationId, int
 
         log_activity($companyId, null, 'fnb_order_created_via_flow', 'fnb_order', $orderId, $orderNum);
 
+        // Drop an internal note on the conversation with a direct link to
+        // the order view. Turns the "customer confirmed but I can't see
+        // it anywhere" gap into a one-tap jump from the chat panel to
+        // the kanban / order detail. Notes render inline in the operator's
+        // chat, and are also picked up by the "internal_notes" side card.
+        try {
+            $currency = platform_setting('pricing_currency', 'RM');
+            $modeLbl  = $orderType === 'pickup' ? 'pickup' : 'delivery';
+            $noteBits = ['🍜 *Order ' . $orderNum . ' created via chat*'];
+            $noteBits[] = '💰 ' . $currency . ' ' . number_format($total, 2)
+                        . ' · ' . $modeLbl
+                        . ' · ' . count($cart) . ' item(s)';
+            if ($custName !== '') $noteBits[] = '👤 ' . $custName;
+            if ($orderType === 'delivery' && $address !== '') {
+                $noteBits[] = '📍 ' . mb_substr($address, 0, 120);
+            } elseif ($orderType === 'pickup' && $pickup !== '') {
+                $noteBits[] = '⏰ Pickup: ' . $pickup;
+            }
+            $noteBits[] = 'View: /admin/fnb_order_view.php?id=' . $orderId;
+            $noteText = implode("\n", $noteBits);
+            $db->prepare(
+                'INSERT INTO internal_notes
+                    (company_id, conversation_id, user_id, note_text)
+                 VALUES (?, ?, NULL, ?)'
+            )->execute([$companyId, $conversationId, $noteText]);
+        } catch (Throwable $e) {
+            // Non-fatal — the order is already created; the note is a
+            // convenience layer. Log so we know if the schema drifts.
+            error_log('[AiServe fnb order-note] ' . $e->getMessage());
+        }
+
         // Best-effort staff notification email — same recipients pattern
         // as the broadcast quota cron. Non-fatal on failure.
         try {

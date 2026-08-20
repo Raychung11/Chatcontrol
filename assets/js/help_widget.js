@@ -78,13 +78,13 @@
     + '.hw-suggest button{background:#eff6ff;border:1px solid #dbeafe;color:#0072B2;font-size:12px;'
     +   'padding:5px 10px;border-radius:999px;cursor:pointer;font-family:inherit;}'
     + '.hw-suggest button:hover{background:#dbeafe;}'
+    // Always hide on /inbox/* — the 💬 bubble sits bottom-right and
+    // overlaps the chat composer's Send button on every viewport size,
+    // not just mobile. Widget stays available on all other admin pages.
+    + 'body.page-inbox .hw-btn,body.page-inbox .hw-panel{display:none !important;}'
     + '@media (max-width:520px){'
     +   '.hw-panel{width:calc(100vw - 20px);right:10px;bottom:70px;height:calc(100vh - 90px);border-radius:10px;}'
     +   '.hw-btn{right:12px;bottom:12px;padding:10px 14px;font-size:13px;}'
-    +   // Hide on the /inbox chat page in mobile view — the bubble
-    +   // was overlapping the composer + Attach/Record footer buttons.
-    +   // Operators can still open the widget on any other admin page.
-    +   'body.page-inbox .hw-btn,body.page-inbox .hw-panel{display:none !important;}'
     + '}';
   var style = document.createElement('style');
   style.textContent = css;

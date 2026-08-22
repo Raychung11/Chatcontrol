@@ -560,6 +560,16 @@ function flow_engine_execute_node(PDO $db, array &$inst, array $node): int
                     $r = provider_send_text($channel, (string)$conv['wa_id'], $errMsg);
                     flow_engine_log_outgoing_message($db, $conv, $errMsg, $r);
                     error_log('[AiServe flow_engine fnb_create_order] ' . ($result['error'] ?? 'unknown'));
+
+                    // Persist the actual reason onto the flow_instance so
+                    // /admin/fnb_flow_debug.php can surface it without
+                    // asking the operator to open error_log on the VPS.
+                    // Trim to fit VARCHAR(500). Non-fatal if the column
+                    // is missing on very old installs.
+                    try {
+                        $db->prepare('UPDATE flow_instances SET error_message = ? WHERE id = ? LIMIT 1')
+                           ->execute([mb_substr((string)($result['error'] ?? 'unknown'), 0, 480), (int)$inst['id']]);
+                    } catch (Throwable $e) { /* schema drift — ignore */ }
                 }
             }
             return (int)($node['next_node_id'] ?? 0);

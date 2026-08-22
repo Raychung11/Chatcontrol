@@ -35,6 +35,55 @@ if (!fnb_module_active($companyId)) {
 $db       = aiserve_db();
 $currency = platform_setting('pricing_currency', 'RM');
 
+// ---------------- POST: retry a failed create_order --------------------
+// One-click dry-run against an existing instance's saved state, so the
+// operator can see the exact ok=false reason without having to Ask
+// the customer to re-place their order or grep error_log.
+$retryMsg = '';
+$retryErr = '';
+if (is_post()) {
+    csrf_check();
+    if (($_POST['action'] ?? '') === 'retry_create_order') {
+        $instId = (int)($_POST['instance_id'] ?? 0);
+        if ($instId > 0) {
+            $qi = $db->prepare(
+                'SELECT fi.*, cv.company_id AS conv_company_id
+                 FROM flow_instances fi
+                 INNER JOIN conversations cv ON cv.id = fi.conversation_id
+                 WHERE fi.id = ? AND cv.company_id = ? LIMIT 1'
+            );
+            $qi->execute([$instId, $companyId]);
+            $inst = $qi->fetch();
+            if (!$inst) {
+                $retryErr = 'Instance not found or belongs to a different workspace.';
+            } else {
+                $st = json_decode((string)($inst['state'] ?? ''), true) ?: [];
+                $res = fnb_create_order_from_flow_state(
+                    $st,
+                    (int)$inst['conversation_id'],
+                    (int)$inst['conv_company_id']
+                );
+                if ($res['ok']) {
+                    // Order created — link the instance to it via the same
+                    // internal note pipeline (fnb_create_order_from_flow_state
+                    // already inserted the note), and clear the stored error.
+                    $db->prepare('UPDATE flow_instances SET error_message = NULL WHERE id = ? LIMIT 1')
+                       ->execute([$instId]);
+                    $retryMsg = 'Order created: ' . ($res['order_number'] ?? '#' . $res['order_id'])
+                              . ' · ' . $currency . ' ' . number_format((float)($res['total'] ?? 0), 2);
+                } else {
+                    // Persist the real reason so the row's diagnosis
+                    // updates on the next render.
+                    $reason = mb_substr((string)($res['error'] ?? 'unknown'), 0, 480);
+                    $db->prepare('UPDATE flow_instances SET error_message = ? WHERE id = ? LIMIT 1')
+                       ->execute([$reason, $instId]);
+                    $retryErr = 'Still failing: ' . $reason;
+                }
+            }
+        }
+    }
+}
+
 // ---------------- Load flows that contain fnb_create_order ----------------
 // Only flows carrying the create-order node type are interesting for
 // debugging chat orders. Other flows won't create fnb_orders rows.
@@ -120,16 +169,25 @@ foreach ($rows as $r) {
         $stats['failed']++;
     } elseif (in_array($status, ['completed', 'cancelled'], true)) {
         // Instance ended without an order — find the most common causes.
-        if (!$cart) {
+        // Prefer the persisted error_message when we have one (the
+        // fnb_create_order case in flow_engine writes it there), so the
+        // operator sees the actual DB reason instead of a generic hint.
+        $persistedErr = trim((string)($r['error_message'] ?? ''));
+        if ($persistedErr !== '') {
+            $d = ['level' => 'bad',
+                  'label' => '✗ create_order failed',
+                  'hint'  => 'Actual error from fnb_create_order_from_flow_state: ' . $persistedErr];
+            $stats['empty_cart']++;
+        } elseif (!$cart) {
             $d = ['level' => 'bad', 'label' => '✗ never reached create_order',
                   'hint' => 'The instance ended without ever running fnb_create_order (or cart was empty when it did). Check that your wait_reply nodes are wired to the next step — a wait_reply with "Next node = end after this step" silently drops the flow.'];
             $stats['unreached']++;
         } else {
-            // Reached create_order but the order didn't land. Most common
-            // cause is fnb_create_order_from_flow_state returning ok=false
-            // (empty cart edge case, conversation lookup failed, DB error).
+            // Reached create_order but the order didn't land — no persisted
+            // error means this instance predates the error-message capture.
+            // Retest the flow to get a fresh row with the actual reason.
             $d = ['level' => 'bad', 'label' => '✗ create_order failed',
-                  'hint' => 'Cart was populated but no fnb_orders row was created. Check error_log for "[AiServe flow_engine fnb_create_order]" — the create call returned ok=false.'];
+                  'hint' => 'Cart was populated but no fnb_orders row was created. This row is from before the debug patch — re-run the chat order once to capture the actual reason on the next attempt. Meanwhile: check error_log for "[AiServe flow_engine fnb_create_order]".'];
             $stats['empty_cart']++;
         }
     } else {
@@ -170,6 +228,15 @@ layout_start($current_user, 'F&B chat-order debug', 'fnb_flow_debug');
     <a class="btn btn-sm" href="/admin/flows.php">Flows</a>
   </div>
 </div>
+
+<?php if ($retryMsg !== ''): ?>
+  <div class="alert alert-success" style="margin-bottom:10px;">✓ <?= e($retryMsg) ?></div>
+<?php endif; ?>
+<?php if ($retryErr !== ''): ?>
+  <div class="alert alert-error" style="margin-bottom:10px;">
+    <strong>Retry result:</strong> <?= e($retryErr) ?>
+  </div>
+<?php endif; ?>
 
 <!-- KPI strip -->
 <div class="fd-hero">
@@ -237,6 +304,7 @@ layout_start($current_user, 'F&B chat-order debug', 'fnb_flow_debug');
           <th>Cart / vars</th>
           <th>Order</th>
           <th>Updated</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -304,6 +372,17 @@ layout_start($current_user, 'F&B chat-order debug', 'fnb_flow_debug');
               <?php endif; ?>
             </td>
             <td class="muted small"><?= e(fmt_dt($r['updated_at'])) ?></td>
+            <td style="text-align:right; white-space:nowrap;">
+              <?php if ($d['level'] === 'bad' && !empty($d['cart'])): ?>
+                <form method="post" style="display:inline;"
+                      onsubmit="return confirm('Re-run fnb_create_order against this instance\'s saved state. If it succeeds, a real order row will be created + the customer gets NO extra WhatsApp message (silent retry). If it fails, the actual error will be shown here.');">
+                  <?= csrf_field() ?>
+                  <input type="hidden" name="action" value="retry_create_order">
+                  <input type="hidden" name="instance_id" value="<?= (int)$r['id'] ?>">
+                  <button type="submit" class="btn btn-sm" title="Retry create_order — silent, shows the real DB error inline">↻ Retry</button>
+                </form>
+              <?php endif; ?>
+            </td>
           </tr>
         <?php endforeach; ?>
       </tbody>

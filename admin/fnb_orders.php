@@ -192,6 +192,14 @@ layout_start($current_user, 'F&B · Orders', 'fnb_orders');
     </a>
   </div>
 
+  <!-- Chat-order missing? Direct link to the diagnostic page — cheaper
+       than pinging support with "the order I placed on chat isn't showing." -->
+  <div class="muted small" style="margin: -4px 0 12px 0;">
+    Expecting a chat order that hasn't shown up?
+    <a href="/admin/fnb_flow_debug.php">🔍 F&amp;B chat-order debug</a>
+    lists every recent flow instance and why each did or didn't create an order.
+  </div>
+
   <!-- Filter -->
   <form method="get" class="fo-filter">
     <label>Search

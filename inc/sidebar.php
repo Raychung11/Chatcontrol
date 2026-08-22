@@ -81,7 +81,7 @@ $sb_groups = [
     'reports'   => ['reports', 'topics', 'ai_usage'],
     'workspace' => ['channels', 'webchat', 'users', 'departments', 'branches', 'routing'],
     'settings'  => ['settings', 'ai_settings', 'plan', 'my_invoices'],
-    'fnb'       => ['fnb_orders', 'fnb_menu', 'fnb_analytics'],
+    'fnb'       => ['fnb_orders', 'fnb_menu', 'fnb_analytics', 'fnb_flow_debug'],
     'platform'  => ['workspaces', 'channels_debug', 'ai_billing', 'invoices',
                     'mail_settings', 'mail_test', 'business_info', 'broadcast_pricing',
                     'broadcast_credits',
@@ -190,6 +190,7 @@ $fnbActive = fnb_module_active((int)($current_user['company_id'] ?? 0));
           <a href="/admin/fnb_orders.php"    class="<?= $active === 'fnb_orders'    ? 'active' : '' ?>">📋 Orders</a>
           <a href="/admin/fnb_menu.php"      class="<?= $active === 'fnb_menu'      ? 'active' : '' ?>">🍜 Menu</a>
           <a href="/admin/fnb_analytics.php" class="<?= $active === 'fnb_analytics' ? 'active' : '' ?>">📊 Analytics</a>
+          <a href="/admin/fnb_flow_debug.php" class="<?= $active === 'fnb_flow_debug' ? 'active' : '' ?>">🔍 Chat-order debug</a>
         </details>
       <?php endif; ?>
     <?php endif; ?>

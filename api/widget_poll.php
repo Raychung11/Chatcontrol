@@ -48,7 +48,8 @@ if ($conversationId <= 0) {
 }
 
 $ms = $db->prepare(
-    'SELECT id, direction, message_text, created_at, sender_type
+    'SELECT id, direction, message_text, created_at, sender_type,
+            message_type, media_local_path, media_mime_type, media_filename
      FROM messages
      WHERE conversation_id = ? AND id > ? AND direction = "outgoing"
      ORDER BY id ASC LIMIT 50'
@@ -56,12 +57,30 @@ $ms = $db->prepare(
 $ms->execute([$conversationId, $since]);
 $msgs = [];
 foreach ($ms->fetchAll() as $m) {
+    // If the operator sent media (image / video / doc / audio) through
+    // the inbox, expose it via /api/widget_media.php — the widget's
+    // customer isn't logged in so the auth-gated /api/media.php can't
+    // serve them. Only surface media_url when the file is actually on
+    // disk; a message with message_type='image' but no local file
+    // (still downloading, or the file got cleaned up) falls back to
+    // text-only rendering.
+    $mtype    = (string)($m['message_type'] ?? 'text');
+    $mediaUrl = null;
+    if ($mtype !== 'text'
+        && !empty($m['media_local_path'])
+        && is_file((string)$m['media_local_path'])) {
+        $mediaUrl = '/api/widget_media.php?token=' . $sessionToken . '&id=' . (int)$m['id'];
+    }
     $msgs[] = [
         'id'         => (int)$m['id'],
         'direction'  => (string)$m['direction'],
         'sender'     => (string)$m['sender_type'],
         'text'       => (string)$m['message_text'],
         'created_at' => (string)$m['created_at'],
+        'type'       => $mtype,
+        'media_url'  => $mediaUrl,
+        'media_mime' => (string)($m['media_mime_type'] ?? ''),
+        'media_name' => (string)($m['media_filename']  ?? ''),
     ];
 }
 

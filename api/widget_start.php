@@ -63,18 +63,35 @@ if ($sessionToken !== '' && preg_match('/^[a-f0-9]{48}$/', $sessionToken)) {
         $lastId = 0;
         if (!empty($sess['conversation_id'])) {
             $ms = $db->prepare(
-                'SELECT id, direction, message_text, created_at
+                'SELECT id, direction, message_text, created_at,
+                        message_type, media_local_path, media_mime_type, media_filename
                  FROM messages WHERE conversation_id = ?
                  ORDER BY id DESC LIMIT 50'
             );
             $ms->execute([(int)$sess['conversation_id']]);
             $rows = array_reverse($ms->fetchAll());
             foreach ($rows as $m) {
+                // Same media-URL rule as widget_poll.php — expose the
+                // session-scoped /api/widget_media.php URL only when the
+                // file actually exists on disk. Applies to BOTH directions
+                // so a returning customer sees their own photo they sent
+                // earlier plus any photos the operator sent back.
+                $mtype    = (string)($m['message_type'] ?? 'text');
+                $mediaUrl = null;
+                if ($mtype !== 'text'
+                    && !empty($m['media_local_path'])
+                    && is_file((string)$m['media_local_path'])) {
+                    $mediaUrl = '/api/widget_media.php?token=' . $sessionToken . '&id=' . (int)$m['id'];
+                }
                 $history[] = [
                     'id'         => (int)$m['id'],
                     'direction'  => (string)$m['direction'],
                     'text'       => (string)$m['message_text'],
                     'created_at' => (string)$m['created_at'],
+                    'type'       => $mtype,
+                    'media_url'  => $mediaUrl,
+                    'media_mime' => (string)($m['media_mime_type'] ?? ''),
+                    'media_name' => (string)($m['media_filename']  ?? ''),
                 ];
                 $lastId = max($lastId, (int)$m['id']);
             }

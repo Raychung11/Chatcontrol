@@ -136,6 +136,43 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
   -webkit-tap-highlight-color: rgba(0,0,0,.1); touch-action: manipulation;
 }
 .wc-quick button:active { transform: scale(0.94); background: #f0fdf4; }
+
+/* Photo attach button — sits before the textarea. Tap opens the OS
+   image picker (or the camera on mobile via the "capture" attribute).
+   Same visual language as the send button but neutral fill so it
+   doesn't compete for attention. */
+.wc-attach {
+  width: 40px; height: 40px; border-radius: 50%; border: none;
+  background: #e9edf1; color: #4b5563; font-size: 20px;
+  cursor: pointer; flex-shrink: 0;
+  -webkit-tap-highlight-color: rgba(0,0,0,.15);
+  touch-action: manipulation;
+}
+.wc-attach:active { transform: scale(0.94); }
+.wc-attach.busy   { background: #cbd5e1; color: #94a3b8; cursor: wait; }
+.wc-file          { display: none; }
+
+/* Bubbles that carry a photo. Image scales down to fit the bubble
+   width, keeps aspect ratio, and rounds off to match the bubble. The
+   caption sits under the image, same rules as text bubbles. Tap the
+   image to open it full-size in a new tab. */
+.wc-bubble.has-image { padding: 4px; overflow: hidden; }
+.wc-bubble.has-image img {
+  max-width: 100%; height: auto; display: block;
+  border-radius: 8px; cursor: zoom-in;
+}
+.wc-bubble.has-image .wc-cap {
+  padding: 6px 8px 2px; white-space: pre-wrap;
+}
+.wc-bubble.has-image .wc-time { padding: 0 8px 4px; }
+/* A subtle uploading spinner overlay while the customer's just-picked
+   photo is still climbing to the server. */
+.wc-bubble.uploading { position: relative; opacity: 0.75; }
+.wc-bubble.uploading::after {
+  content: '⏳ uploading…'; position: absolute; inset: auto 0 8px 0;
+  text-align: center; color: #fff; font-size: 11px;
+  background: rgba(0,0,0,.45); padding: 3px 0;
+}
 </style>
 </head>
 <body>
@@ -164,6 +201,10 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
 </div>
 
 <div class="wc-composer">
+  <button id="wc-attach" class="wc-attach" type="button" title="Send a photo" aria-label="Attach photo">📎</button>
+  <!-- accept only images; on mobile Safari/Chrome tapping this offers
+       both the OS gallery and the camera. -->
+  <input type="file" id="wc-file" class="wc-file" accept="image/*" capture="environment">
   <textarea id="wc-input" placeholder="Type a message…" rows="1"></textarea>
   <button id="wc-btn" type="button">➤</button>
 </div>
@@ -180,11 +221,13 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
   let lastMsgId    = 0;
   let polling      = false;
 
-  const stream = document.getElementById('wc-stream');
-  const input  = document.getElementById('wc-input');
-  const btn    = document.getElementById('wc-btn');
-  const status = document.getElementById('wc-status');
-  const loader = document.getElementById('wc-loading');
+  const stream    = document.getElementById('wc-stream');
+  const input     = document.getElementById('wc-input');
+  const btn       = document.getElementById('wc-btn');
+  const attachBtn = document.getElementById('wc-attach');
+  const fileInput = document.getElementById('wc-file');
+  const status    = document.getElementById('wc-status');
+  const loader    = document.getElementById('wc-loading');
 
   // Visible error banner inside the chat stream so the customer / tester
   // can see what actually broke without opening dev tools.
@@ -217,10 +260,35 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
 
   function scrollBottom() { stream.scrollTop = stream.scrollHeight; }
 
-  function renderBubble(text, direction, createdAt, prepend) {
+  // renderBubble now understands photo messages via the optional
+  // opts.mediaUrl. When present, the bubble embeds the image and puts
+  // any text underneath as a caption. Kept back-compatible so every
+  // existing caller — history render, polling loop, own-sent text —
+  // continues to work by passing just (text, direction, createdAt).
+  function renderBubble(text, direction, createdAt, prepend, opts) {
+    opts = opts || {};
     const bub = document.createElement('div');
     bub.className = 'wc-bubble ' + (direction === 'incoming' ? 'out' : 'in');
-    bub.textContent = text;
+
+    if (opts.mediaUrl) {
+      bub.classList.add('has-image');
+      if (opts.uploading) bub.classList.add('uploading');
+      const img = document.createElement('img');
+      img.src = opts.mediaUrl;
+      img.alt = 'photo';
+      img.loading = 'lazy';
+      img.addEventListener('click', () => window.open(opts.mediaUrl, '_blank', 'noopener'));
+      bub.appendChild(img);
+      if (text) {
+        const cap = document.createElement('div');
+        cap.className = 'wc-cap';
+        cap.textContent = text;
+        bub.appendChild(cap);
+      }
+    } else {
+      bub.textContent = text;
+    }
+
     if (createdAt) {
       const t = document.createElement('div');
       t.className = 'wc-time';
@@ -230,18 +298,16 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
     if (prepend) stream.insertBefore(bub, stream.firstChild);
     else         stream.appendChild(bub);
 
-    // For bot / agent messages, auto-detect numbered options like:
-    //   1. Chicken Rice
-    //   2. Nasi Lemak
-    // Render each as a tap-to-reply pill so customers can order without
-    // typing. Only shows for the most recent bot message.
-    if (direction !== 'incoming' && !prepend) {
-      // Strip any prior quick-reply rows so only the newest bot message
-      // shows options (avoids stale pills stacking up).
+    // For bot / agent text messages, auto-detect numbered options and
+    // render tap-to-reply pills. Skip for photo bubbles — a menu photo
+    // shouldn't sprout numbered buttons.
+    if (direction !== 'incoming' && !prepend && !opts.mediaUrl) {
       stream.querySelectorAll('.wc-quick').forEach(el => el.remove());
-      const opts = detectQuickReplies(text);
-      if (opts.length) renderQuickReplies(opts);
+      const optsQR = detectQuickReplies(text);
+      if (optsQR.length) renderQuickReplies(optsQR);
     }
+
+    return bub;   // caller can flip .uploading off once the real URL lands
   }
 
   function detectQuickReplies(text) {
@@ -346,7 +412,12 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
 
       // Render prior conversation history (if returning), else greeting.
       if (data.history && data.history.length) {
-        data.history.forEach(m => renderBubble(m.text, m.direction, m.created_at, false));
+        data.history.forEach(m => {
+          const opts = m.media_url
+                     ? { mediaUrl: m.media_url, mediaMime: m.media_mime, mediaName: m.media_name }
+                     : undefined;
+          renderBubble(m.text, m.direction, m.created_at, false, opts);
+        });
         scrollBottom();
       } else if (GREETING) {
         renderBubble(GREETING, 'outgoing', new Date().toISOString().replace('T', ' ').slice(0, 19), false);
@@ -369,6 +440,81 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
     await sendMessage(text);
   }
 
+  // Photo upload path — mirrors sendMessage() but multipart. Renders a
+  // local-preview bubble instantly (so the customer sees "sent" before
+  // the round-trip), then swaps in the server-issued media_url on
+  // success. Any current text in the composer travels along as caption.
+  async function sendPhoto(file) {
+    if (!file) return;
+    if (!/^image\//.test(file.type || '')) {
+      showError('Not a photo', 'Only image files can be sent through the chat.');
+      return;
+    }
+    // Client-side size guard mirrors the server's 8 MB cap — cheaper
+    // than uploading first only to be rejected.
+    if (file.size > 8 * 1024 * 1024) {
+      showError('Photo too large', 'Max 8 MB. Please compress and try again.');
+      return;
+    }
+    if (!sessionToken) {
+      status.textContent = 'Connecting…';
+      await widgetStart();
+      if (!sessionToken) { status.textContent = 'Still offline — try again'; return; }
+      status.textContent = 'Online';
+    }
+
+    const caption = input.value.trim();
+    input.value = '';
+
+    // Local preview so the bubble appears the instant they tap send.
+    const previewUrl = URL.createObjectURL(file);
+    const now = new Date();
+    const bub = renderBubble(caption, 'incoming',
+                             now.toISOString().replace('T', ' ').slice(0, 19),
+                             false,
+                             { mediaUrl: previewUrl, uploading: true });
+    stream.querySelectorAll('.wc-quick').forEach(el => el.remove());
+    scrollBottom();
+
+    attachBtn.classList.add('busy');
+    const fd = new FormData();
+    fd.append('session_token', sessionToken);
+    fd.append('photo',   file);
+    if (caption) fd.append('caption', caption);
+
+    try {
+      const res = await fetch('/api/widget_send_media.php', { method: 'POST', body: fd });
+      let data;
+      try { data = await res.json(); }
+      catch (parseErr) {
+        const raw = await res.text().catch(() => '(no body)');
+        throw new Error('Server error (HTTP ' + res.status + '): ' + raw.substring(0, 300));
+      }
+      if (!data.ok) throw new Error(data.error || ('upload failed (HTTP ' + res.status + ')'));
+      // Swap the ObjectURL preview for the real server URL so the
+      // photo survives a page reload (and the browser can drop the
+      // blob).
+      if (bub) {
+        const img = bub.querySelector('img');
+        if (img && data.media_url) img.src = data.media_url;
+        bub.classList.remove('uploading');
+      }
+      URL.revokeObjectURL(previewUrl);
+      if (data.message_id) lastMsgId = Math.max(lastMsgId, data.message_id);
+      pollOnce();
+    } catch (err) {
+      // Leave the local preview in place but flip its state — the
+      // customer can retry from the OS picker.
+      if (bub) {
+        bub.classList.remove('uploading');
+        bub.classList.add('wc-error');
+      }
+      showError('Photo failed to send', err && err.message ? err.message : String(err));
+    } finally {
+      attachBtn.classList.remove('busy');
+    }
+  }
+
   // Bind BOTH click (desktop) and touchend (iOS Safari) inside the IIFE.
   // Previously the button used inline onclick="wcSend()" but wcSend lives
   // inside this IIFE, not window — so desktop clicks silently threw
@@ -377,6 +523,26 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
   btn.addEventListener('touchend', function (e) { e.preventDefault(); wcSend(); }, { passive: false });
   input.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); wcSend(); }
+  });
+
+  // Attach button → open hidden file picker → sendPhoto on selection.
+  // We reset .value at the start so picking the SAME file twice still
+  // fires the change event (browsers otherwise dedupe).
+  attachBtn.addEventListener('click', function (e) {
+    e.preventDefault();
+    if (attachBtn.classList.contains('busy')) return;
+    fileInput.value = '';
+    fileInput.click();
+  });
+  attachBtn.addEventListener('touchend', function (e) {
+    e.preventDefault();
+    if (attachBtn.classList.contains('busy')) return;
+    fileInput.value = '';
+    fileInput.click();
+  }, { passive: false });
+  fileInput.addEventListener('change', function () {
+    const f = fileInput.files && fileInput.files[0];
+    if (f) sendPhoto(f);
   });
 
   async function pollOnce() {
@@ -389,7 +555,13 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
       const data = await res.json();
       if (data.ok && Array.isArray(data.messages)) {
         for (const m of data.messages) {
-          renderBubble(m.text, m.direction, m.created_at, false);
+          // Pass media info if the operator sent an image/video/doc.
+          // widget_poll.php only sets media_url when the file is on
+          // disk; text messages come through as before.
+          const opts = m.media_url
+                     ? { mediaUrl: m.media_url, mediaMime: m.media_mime, mediaName: m.media_name }
+                     : undefined;
+          renderBubble(m.text, m.direction, m.created_at, false, opts);
           if (m.id > lastMsgId) lastMsgId = m.id;
         }
         if (data.messages.length) scrollBottom();

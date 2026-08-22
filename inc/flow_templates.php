@@ -132,6 +132,24 @@ function flow_templates_registry(): array
             'requires_fnb' => false,
             'builder'      => 'flow_template_refund_request',
         ],
+        [
+            'key'          => 'fnb_dine_in',
+            'name'         => 'F&B in-store (dine-in) ordering',
+            'category'     => 'F&B',
+            'icon'         => '🍽',
+            'description'  => 'Print QR stickers for tables. Customer scans → welcomes with table number → sends menu → AI cart → collect name → confirm → creates a dine_in order tagged with the table. Best paired with the widget (?t=Table%205).',
+            'requires_fnb' => true,
+            'builder'      => 'flow_template_fnb_dine_in',
+        ],
+        [
+            'key'          => 'fnb_order_status',
+            'name'         => 'F&B order status — "where\'s my order?"',
+            'category'     => 'F&B',
+            'icon'         => '🔎',
+            'description'  => 'When a customer messages "status", "ready?", "mana dah", "how long more", or an order number, look up their most recent order and reply with the current stage + ETA. Great as a keyword trigger.',
+            'requires_fnb' => true,
+            'builder'      => 'flow_template_fnb_order_status',
+        ],
     ];
 }
 
@@ -1003,3 +1021,128 @@ function flow_template_furniture_showroom(PDO $db, int $companyId, int $userId, 
         throw $e;
     }
 }
+
+/**
+ * F&B in-store (dine-in) ordering.
+ *
+ * Designed for the widget with a per-table QR (?t=Table%205). The
+ * flow_engine pre-fills state.vars.table_number from the QR context
+ * on first message, so the welcome message can reference
+ * {{table_number}} without asking. WhatsApp customers hit the same
+ * flow but table_number falls back to empty and the customer types it.
+ *
+ * The fnb_create_order node here carries default_order_type='dine_in'
+ * (read by flow_engine before it calls fnb_create_order_from_flow_state),
+ * so the order lands with the correct type and the table number is
+ * copied into delivery_notes for the kitchen ticket.
+ */
+function flow_template_fnb_dine_in(PDO $db, int $companyId, int $userId, bool $goLive): int
+{
+    $db->beginTransaction();
+    try {
+        [$fid, $node, $wire] = flow_template_bootstrap(
+            $db, $companyId, $userId,
+            'F&B in-store (dine-in) ordering',
+            $goLive,
+            'order'
+        );
+
+        $nHello = $node('send_message', 'Welcome + acknowledge table', ['text' =>
+            "Hi 👋 Welcome!\n\n"
+          . "🍽 Table: *{{table_number}}*\n\n"
+          . "_(If the table above is empty or wrong, reply with your correct table number. Otherwise just say \"menu\" to see what we're serving.)_"
+        ]);
+        $nWaitAck  = $node('wait_reply', 'Wait for table confirm or correction',
+            ['var_name' => 'table_number']);
+        $nSendMenu = $node('fnb_send_menu', 'Send menu');
+        $nWaitOrd  = $node('wait_reply', 'Wait for order details',
+            ['var_name' => 'raw_order']);
+        $nCart     = $node('fnb_cart_add', 'AI: parse into cart');
+        $nWaitDone = $node('wait_reply', 'Wait for done or more items',
+            ['var_name' => 'more_items']);
+        $nDoneBr   = $node('branch', 'Done or add more?');
+        $nAskName  = $node('send_message', 'Ask for name on the order',
+            ['text' => "Got it. What name should we put on the order? (So the server knows who to bring it to.)"]);
+        $nWaitName = $node('wait_reply', 'Wait for name',
+            ['var_name' => 'customer_name']);
+        $nCreate   = $node('fnb_create_order', 'Create the dine-in order',
+            // default_order_type is read by flow_engine's fnb_create_order
+            // case — if state.vars.order_type is empty, this fills it in.
+            ['default_order_type' => 'dine_in']);
+        $nEnd      = $node('end', 'End');
+
+        $wire([
+            $nHello    => $nWaitAck,   $nWaitAck  => $nSendMenu,
+            $nSendMenu => $nWaitOrd,   $nWaitOrd  => $nCart,
+            $nCart     => $nWaitDone,  $nWaitDone => $nDoneBr,
+            $nAskName  => $nWaitName,  $nWaitName => $nCreate,
+            $nCreate   => $nEnd,
+        ]);
+
+        // Branch 'done' → collect name; anything else → re-parse as more items.
+        $eIns = $db->prepare(
+            'INSERT INTO flow_edges (flow_id, from_node_id, to_node_id, condition_type, condition_value, sort_order)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $eIns->execute([$fid, $nDoneBr, $nAskName, 'keyword', 'done',    1]);
+        $eIns->execute([$fid, $nDoneBr, $nAskName, 'keyword', 'confirm', 2]);
+        $eIns->execute([$fid, $nDoneBr, $nAskName, 'keyword', 'yes',     3]);
+        $eIns->execute([$fid, $nDoneBr, $nAskName, 'keyword', 'ok',      4]);
+        $eIns->execute([$fid, $nDoneBr, $nCart,    'default', null,      5]);
+
+        flow_template_finalize($db, $fid, $nHello);
+        $db->commit();
+        return $fid;
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+
+/**
+ * F&B order status — "where's my order?"
+ *
+ * Single-node flow triggered by keywords. When a customer messages
+ * "status", "ready?", "mana dah", "how long more", the fnb_order_status
+ * node looks up their most recent order and replies with the current
+ * stage. Ships as keyword-triggered so it can coexist with an ordering
+ * flow that owns new_conversation.
+ */
+function flow_template_fnb_order_status(PDO $db, int $companyId, int $userId, bool $goLive): int
+{
+    $db->beginTransaction();
+    try {
+        // Always ships as keyword-triggered so this doesn't clobber
+        // the ordering flow's new_conversation slot. goLive just flips
+        // status active vs draft.
+        $status = $goLive ? 'active' : 'draft';
+        $kw     = 'status, ready, mana, mana dah, dah siap, sudah siap, how long, order status, siap belum, my order, cek order, track order';
+
+        $db->prepare(
+            'INSERT INTO flows (company_id, name, trigger_type, trigger_keywords, status, created_by_user_id)
+             VALUES (?, ?, "keyword", ?, ?, ?)'
+        )->execute([$companyId, 'F&B order status lookup', $kw, $status, $userId]);
+        $fid = (int)$db->lastInsertId();
+
+        $nins = $db->prepare(
+            'INSERT INTO flow_nodes (flow_id, node_type, label, config) VALUES (?, ?, ?, ?)'
+        );
+        $node = function (string $type, string $label, array $config = []) use ($nins, $fid, $db): int {
+            $nins->execute([$fid, $type, $label, json_encode($config, JSON_UNESCAPED_UNICODE)]);
+            return (int)$db->lastInsertId();
+        };
+        $upd = $db->prepare('UPDATE flow_nodes SET next_node_id = ? WHERE id = ?');
+
+        $nStatus = $node('fnb_order_status', '🔎 Lookup most recent order');
+        $nEnd    = $node('end', 'End');
+        $upd->execute([$nEnd, $nStatus]);
+
+        flow_template_finalize($db, $fid, $nStatus);
+        $db->commit();
+        return $fid;
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
+}
+

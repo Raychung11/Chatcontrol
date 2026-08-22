@@ -415,6 +415,7 @@ function fnb_create_order_from_flow_state(array $state, int $conversationId, int
     $orderType = match (true) {
         in_array($rawOrderType, ['1', 'd', 'delivery', 'deliver'], true) => 'delivery',
         in_array($rawOrderType, ['2', 'p', 'pickup', 'self-pickup', 'take away', 'takeaway', 'self pickup'], true) => 'pickup',
+        in_array($rawOrderType, ['3', 'i', 'dine_in', 'dine-in', 'dine in', 'in_store', 'in-store', 'in store', 'table', 'eat here', 'here'], true) => 'dine_in',
         default => 'delivery',
     };
 
@@ -443,6 +444,15 @@ function fnb_create_order_from_flow_state(array $state, int $conversationId, int
     $address   = trim((string)($vars['delivery_address'] ?? ''));
     $notes     = trim((string)($vars['delivery_notes']   ?? ''));
     $pickup    = trim((string)($vars['pickup_time']      ?? ''));
+    $table     = trim((string)($vars['table_number']     ?? ''));
+
+    // Dine-in orders carry the table number as the first line of
+    // delivery_notes so the kitchen ticket shows "Table 5" at the
+    // top. This keeps the schema unchanged — dine_in is a repurpose
+    // of the existing notes column rather than a new field.
+    if ($orderType === 'dine_in' && $table !== '') {
+        $notes = 'Table: ' . $table . ($notes !== '' ? ' · ' . $notes : '');
+    }
 
     $subtotal = 0.0;
     foreach ($cart as $ln) $subtotal += (float)($ln['line_total'] ?? 0);

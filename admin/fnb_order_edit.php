@@ -46,7 +46,7 @@ if (is_post()) {
     $cart         = json_decode($cartJson, true);
 
     if (!is_array($cart) || !$cart) $err = 'Add at least one item to the order.';
-    elseif (!in_array($orderType, ['delivery','pickup'], true)) $err = 'Pick delivery or pickup.';
+    elseif (!in_array($orderType, ['delivery','pickup','dine_in'], true)) $err = 'Pick delivery, pickup, or dine-in.';
     elseif ($customerName === '') $err = 'Customer name is required.';
     elseif ($orderType === 'delivery' && $address === '') $err = 'Delivery address is required.';
 
@@ -335,6 +335,7 @@ layout_start($current_user, 'New order', 'fnb_orders');
           <select name="order_type" id="oe-type" onchange="updateType()">
             <option value="delivery">Delivery</option>
             <option value="pickup">Self-pickup</option>
+            <option value="dine_in">🍽 Dine-in (in-store)</option>
           </select>
         </label>
         <label>Customer name
@@ -354,6 +355,12 @@ layout_start($current_user, 'New order', 'fnb_orders');
         <div id="oe-pickup" style="display:none;">
           <label>Pickup time
             <input type="datetime-local" name="pickup_time">
+          </label>
+        </div>
+        <div id="oe-dinein" style="display:none;">
+          <label>Table number / area
+            <input type="text" name="delivery_notes" maxlength="500" placeholder="e.g. Table 5, Booth 3, Bar seat 2">
+            <small class="muted">Shows on the kitchen ticket so servers know where to bring it.</small>
           </label>
         </div>
         <?php if ($branches): ?>
@@ -409,6 +416,8 @@ function updateType() {
   const t = document.getElementById('oe-type').value;
   document.getElementById('oe-delivery').style.display = t === 'delivery' ? '' : 'none';
   document.getElementById('oe-pickup').style.display   = t === 'pickup'   ? '' : 'none';
+  const de = document.getElementById('oe-dinein');
+  if (de) de.style.display = t === 'dine_in' ? '' : 'none';
 }
 
 function openConfig(productId) {

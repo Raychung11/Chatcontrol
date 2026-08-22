@@ -124,6 +124,32 @@ function flow_engine_start(PDO $db, int $flowId, int $conversationId, string $in
     if (!$flow || $flow['status'] !== 'active') return null;
     if (!$flow['entry_node_id']) return null;
 
+    // Pre-fill state.vars from any web_chat_sessions context on this
+    // conversation. The widget passes ?t=Table%205 in the URL; that
+    // string lands in web_chat_sessions.context. For dine-in flows we
+    // want the table number as {{table_number}} without asking the
+    // customer to type it again. Same idea can host booking slot,
+    // referral source, etc. — anything the QR carried in ?t=.
+    $initVars = [];
+    try {
+        $s = $db->prepare(
+            'SELECT s.context
+             FROM web_chat_sessions s
+             WHERE s.conversation_id = ? AND s.context IS NOT NULL AND s.context <> ""
+             ORDER BY s.id DESC LIMIT 1'
+        );
+        $s->execute([$conversationId]);
+        $ctx = trim((string)($s->fetchColumn() ?: ''));
+        if ($ctx !== '') {
+            // The context is a single freeform string (URL-decoded). We
+            // stash it under three synonyms so the operator can reference
+            // it as any of them in their template's send_message text.
+            $initVars['table_number'] = $ctx;
+            $initVars['qr_context']   = $ctx;
+            $initVars['scan_source']  = $ctx;
+        }
+    } catch (Throwable $e) { /* pre-widget install — carry on */ }
+
     // Idempotent: unique key (flow_id, conversation_id) means a second
     // attempt collides. Silently no-op.
     try {
@@ -134,7 +160,7 @@ function flow_engine_start(PDO $db, int $flowId, int $conversationId, string $in
         );
         $ins->execute([
             $flowId, $conversationId, (int)$flow['entry_node_id'],
-            json_encode(['vars' => [], 'last_reply' => $initialMessage], JSON_UNESCAPED_UNICODE),
+            json_encode(['vars' => $initVars, 'last_reply' => $initialMessage], JSON_UNESCAPED_UNICODE),
         ]);
     } catch (PDOException $e) {
         if ((int)$e->errorInfo[1] === 1062) return null;
@@ -559,6 +585,16 @@ function flow_engine_execute_node(PDO $db, array &$inst, array $node): int
                 $orderReason = 'Conversation lookup returned null on fnb_create_order.';
                 error_log('[AiServe flow_engine fnb_create_order] ' . $orderReason . ' conv_id=' . (int)$inst['conversation_id']);
             } else {
+                // Node-level default: a dine-in flow's fnb_create_order
+                // node sets config.default_order_type='dine_in' so the
+                // order lands with the right type without asking the
+                // customer to pick delivery / pickup / dine-in.
+                // Customer's own choice (state.vars.order_type) wins if
+                // set — this default only fills in the blank.
+                $forceType = trim((string)($cfg['default_order_type'] ?? ''));
+                if ($forceType !== '' && trim((string)($state['vars']['order_type'] ?? '')) === '') {
+                    $state['vars']['order_type'] = $forceType;
+                }
                 $result = fnb_create_order_from_flow_state($state, (int)$conv['id'], (int)$conv['company_id']);
                 if ($result['ok']) {
                     // Try the confirmation message. If the channel is
@@ -603,6 +639,86 @@ function flow_engine_execute_node(PDO $db, array &$inst, array $node): int
                     $db->prepare('UPDATE flow_instances SET error_message = ? WHERE id = ? LIMIT 1')
                        ->execute([mb_substr($orderReason, 0, 480), (int)$inst['id']]);
                 } catch (Throwable $e) { /* noop */ }
+            }
+            return (int)($node['next_node_id'] ?? 0);
+
+        case 'fnb_order_status':
+            // Customer typed "status" / "ready?" / "mana dah" — look
+            // up their most recent open F&B order and reply with a
+            // human-friendly status line. Falls back to a generic
+            // "no order found" reply so the customer isn't left
+            // hanging.
+            require_once __DIR__ . '/fnb_helpers.php';
+            $conv    = flow_engine_conversation($db, (int)$inst['conversation_id']);
+            $channel = $conv ? channel_by_id((int)($conv['channel_id'] ?? 0)) : null;
+            if ($conv && $channel) {
+                $companyId = (int)$conv['company_id'];
+                $contactId = (int)($conv['contact_id'] ?? 0);
+                // Prefer the current conversation's own order (a widget
+                // customer usually has one), else fall back to the most
+                // recent order for this contact across any conversation
+                // (WhatsApp customer coming back the next day).
+                $o = null;
+                if ($contactId > 0) {
+                    $s = $db->prepare(
+                        'SELECT id, order_number, status, order_type,
+                                total, delivery_notes, delivery_address, pickup_time, created_at
+                         FROM fnb_orders
+                         WHERE company_id = ? AND contact_id = ?
+                         ORDER BY id DESC LIMIT 1'
+                    );
+                    $s->execute([$companyId, $contactId]);
+                    $o = $s->fetch();
+                }
+                if (!$o) {
+                    $reply = "I couldn't find a recent order under your number. If you ordered via someone else's phone, please share the order number (e.g. FB-000123) and we'll look it up.";
+                } else {
+                    $currency = platform_setting('pricing_currency', 'RM');
+                    $ago = time() - strtotime((string)$o['created_at']);
+                    $agoLbl = $ago < 60          ? 'just now'
+                            : ($ago < 3600       ? floor($ago / 60)   . ' min ago'
+                            : ($ago < 86400      ? floor($ago / 3600) . ' hour(s) ago'
+                                                 : floor($ago / 86400) . ' day(s) ago'));
+                    // Status-specific customer-facing copy — plus what
+                    // to expect next. Delivery / pickup / dine-in each
+                    // get a slightly different "ready" line.
+                    $mode = (string)$o['order_type'];
+                    $modeVerb = $mode === 'delivery' ? "on the way to you"
+                              : ($mode === 'pickup'  ? "ready for pickup"
+                              : "ready — please collect at the counter");
+                    $lines = [];
+                    $lines[] = '📦 *Order ' . $o['order_number'] . '*';
+                    $lines[] = 'Placed ' . $agoLbl . ' · Total: ' . $currency . ' ' . number_format((float)$o['total'], 2);
+                    switch ((string)$o['status']) {
+                        case 'new':
+                            $lines[] = '⏳ *We got your order.* Kitchen will confirm it in a moment.';
+                            break;
+                        case 'confirmed':
+                            $lines[] = '✅ *Confirmed by the kitchen.* Preparation is starting.';
+                            break;
+                        case 'processing':
+                            $lines[] = '👨‍🍳 *Being prepared right now.* Almost there.';
+                            break;
+                        case 'completed':
+                            $lines[] = '🎉 *Your order is ' . $modeVerb . '.*';
+                            break;
+                        case 'cancelled':
+                            $lines[] = '❌ This order was cancelled. Reach out if you\'d like to reorder.';
+                            break;
+                        default:
+                            $lines[] = 'Current status: ' . $o['status'];
+                    }
+                    if ($mode === 'delivery' && !empty($o['delivery_address'])) {
+                        $lines[] = '📍 ' . mb_substr((string)$o['delivery_address'], 0, 120);
+                    } elseif ($mode === 'dine_in' && !empty($o['delivery_notes'])) {
+                        $lines[] = '🍽 ' . mb_substr((string)$o['delivery_notes'], 0, 120);
+                    } elseif ($mode === 'pickup' && !empty($o['pickup_time'])) {
+                        $lines[] = '⏰ Pickup time: ' . $o['pickup_time'];
+                    }
+                    $reply = implode("\n", $lines);
+                }
+                $r = provider_send_text($channel, (string)$conv['wa_id'], $reply);
+                flow_engine_log_outgoing_message($db, $conv, $reply, $r);
             }
             return (int)($node['next_node_id'] ?? 0);
 

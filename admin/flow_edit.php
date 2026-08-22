@@ -65,7 +65,7 @@ if (is_post()) {
         $label  = trim((string)($_POST['label'] ?? '')) ?: null;
         $nextId = (int)($_POST['next_node_id'] ?? 0);
         if (!in_array($type, ['send_message','wait_reply','branch','assign_dept','assign_branch','assign_nearest_branch','save_note','end',
-                               'fnb_send_menu','fnb_cart_add','fnb_cart_show','fnb_create_order'], true)) {
+                               'fnb_send_menu','fnb_cart_add','fnb_cart_show','fnb_create_order','fnb_order_status'], true)) {
             $type = 'send_message';
         }
         $cfg = flow_edit_pack_config($type, $_POST);
@@ -282,6 +282,7 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
                       'fnb_cart_add'     => 'AI: parse reply into cart',
                       'fnb_cart_show'    => 'Send current cart',
                       'fnb_create_order' => 'Create the order',
+                      'fnb_order_status' => '🔎 Reply with order status',
                     ] as $k => $v): ?>
                       <option value="<?= $k ?>" <?= $n['node_type'] === $k ? 'selected' : '' ?>><?= e($v) ?></option>
                     <?php endforeach; ?>
@@ -466,15 +467,41 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
             <?php break; ?>
 
           <?php case 'fnb_create_order': ?>
-            <div class="muted small">
+            <label>Default order type <small class="muted">(when the customer didn't pick)</small>
+              <select name="default_order_type">
+                <?php $dft = (string)($cfg['default_order_type'] ?? ''); ?>
+                <option value=""         <?= $dft === ''         ? 'selected' : '' ?>>— use customer's answer, fall back to delivery —</option>
+                <option value="delivery" <?= $dft === 'delivery' ? 'selected' : '' ?>>Delivery</option>
+                <option value="pickup"   <?= $dft === 'pickup'   ? 'selected' : '' ?>>Self-pickup</option>
+                <option value="dine_in"  <?= $dft === 'dine_in'  ? 'selected' : '' ?>>🍽 Dine-in / in-store</option>
+              </select>
+              <small class="muted">
+                For a dine-in flow (customer scanned a table QR), set this to <em>Dine-in</em>
+                so the order lands with the correct type even when your flow skips the delivery/pickup question.
+              </small>
+            </label>
+            <div class="muted small" style="margin-top:6px;">
               Materializes the cart + captured vars into an F&amp;B order
               row (visible on the <a href="/admin/fnb_orders.php">kanban dashboard</a>),
               stamps the order number, links this conversation as the source,
               and sends a "🎉 Order confirmed" reply with the number.<br>
               Expects these vars to have been captured earlier:
-              <code>order_type</code> (delivery/pickup),
+              <code>order_type</code> (delivery / pickup / dine_in),
               <code>customer_name</code>, <code>delivery_address</code>
-              (if delivery), <code>pickup_time</code> (if pickup).
+              (if delivery), <code>pickup_time</code> (if pickup),
+              <code>table_number</code> (if dine-in — the widget's ?t= URL
+              param pre-fills this).
+            </div>
+            <?php break; ?>
+
+          <?php case 'fnb_order_status': ?>
+            <div class="muted small">
+              Looks up this customer's most recent F&amp;B order and replies
+              with a friendly status line + ETA — "⏳ We got your order",
+              "👨‍🍳 Being prepared right now", "🎉 Your order is ready…",
+              etc. Falls back to a "no recent order found" message if
+              nothing matches. Best used as the entry node of a
+              keyword-triggered flow ("status", "ready?", "mana dah").
             </div>
             <?php break; ?>
         <?php endswitch; ?>
@@ -600,6 +627,7 @@ function flow_edit_node_label(array $n): string
         'fnb_cart_add'     => 'F&B · AI add to cart',
         'fnb_cart_show'    => 'F&B · Show cart',
         'fnb_create_order' => 'F&B · Create order',
+        'fnb_order_status' => 'F&B · Order status',
     ];
     return $map[$n['node_type']] ?? (string)$n['node_type'];
 }
@@ -626,6 +654,10 @@ function flow_edit_pack_config(string $type, array $post): string
             ], JSON_UNESCAPED_UNICODE);
         case 'save_note':
             return json_encode(['template' => (string)($post['template'] ?? '')], JSON_UNESCAPED_UNICODE);
+        case 'fnb_create_order':
+            $t = (string)($post['default_order_type'] ?? '');
+            if (!in_array($t, ['delivery', 'pickup', 'dine_in'], true)) $t = '';
+            return json_encode(['default_order_type' => $t], JSON_UNESCAPED_UNICODE);
         case 'branch':
         case 'end':
         default:

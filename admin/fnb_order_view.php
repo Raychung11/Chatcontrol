@@ -86,12 +86,15 @@ if ($printMode) {
       <div>
         <strong><?= e($order['customer_name']) ?></strong><br>
         <?php if (!empty($order['customer_phone'])): ?>Phone: <?= e($order['customer_phone']) ?><br><?php endif; ?>
-        Type: <?= e(ucfirst($order['order_type'])) ?><br>
+        Type: <?= $order['order_type'] === 'dine_in' ? '🍽 Dine-in' : e(ucfirst(str_replace('_', ' ', (string)$order['order_type']))) ?><br>
         <?php if ($order['order_type'] === 'delivery' && !empty($order['delivery_address'])): ?>
           Address: <?= nl2br(e($order['delivery_address'])) ?><br>
         <?php endif; ?>
         <?php if ($order['order_type'] === 'pickup' && !empty($order['pickup_time'])): ?>
           Pickup: <?= e(fmt_dt($order['pickup_time'])) ?><br>
+        <?php endif; ?>
+        <?php if ($order['order_type'] === 'dine_in' && !empty($order['delivery_notes'])): ?>
+          🍽 <strong><?= e($order['delivery_notes']) ?></strong><br>
         <?php endif; ?>
         <?php if (!empty($order['delivery_notes'])): ?>Notes: <?= e($order['delivery_notes']) ?><br><?php endif; ?>
       </div>
@@ -269,7 +272,7 @@ layout_start($current_user, 'Order ' . $order['order_number'], 'fnb_orders');
       <?php if (!empty($order['customer_phone'])): ?>
         <div class="kv"><span class="k">Phone</span><strong>+<?= e(ltrim($order['customer_phone'], '+')) ?></strong></div>
       <?php endif; ?>
-      <div class="kv"><span class="k">Type</span><strong><?= e(ucfirst($order['order_type'])) ?></strong></div>
+      <div class="kv"><span class="k">Type</span><strong><?= $order['order_type'] === 'dine_in' ? '🍽 Dine-in' : e(ucfirst(str_replace('_', ' ', (string)$order['order_type']))) ?></strong></div>
       <?php if ($order['order_type'] === 'delivery' && !empty($order['delivery_address'])): ?>
         <div class="kv"><span class="k">Address</span><strong><?= nl2br(e($order['delivery_address'])) ?></strong></div>
       <?php endif; ?>

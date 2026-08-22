@@ -674,6 +674,91 @@ function flow_engine_persist_state(PDO $db, int $instanceId, array $state, int $
 
 function flow_engine_complete_instance(PDO $db, int $instanceId): void
 {
+    // Safety net for F&B ordering flows where the operator wired up
+    // fnb_cart_add and fnb_cart_show but forgot to route the last
+    // wait_reply into the fnb_create_order node — the F&B webchat
+    // "starter" template and any hand-built variant hits this trap
+    // often, and it silently loses the order (cart collected, flow
+    // completed, no fnb_orders row).
+    //
+    // Before we mark the instance completed, check the state: if it
+    // has a populated cart and no fnb_orders row was ever created for
+    // this conversation, run fnb_create_order_from_flow_state now.
+    // Any operator-intended fnb_create_order node along the chain
+    // would have already fired and produced the row, so we won't
+    // double-book. Everything is idempotent per (conversation_id,
+    // completed instance) — one safety-net create at most.
+    try {
+        $inst = $db->prepare(
+            'SELECT fi.id, fi.conversation_id, fi.state, cv.company_id
+             FROM flow_instances fi
+             INNER JOIN conversations cv ON cv.id = fi.conversation_id
+             WHERE fi.id = ? LIMIT 1'
+        );
+        $inst->execute([$instanceId]);
+        $row = $inst->fetch();
+        if ($row) {
+            $state = json_decode((string)($row['state'] ?? ''), true) ?: [];
+            $cart  = (array)($state['cart'] ?? []);
+            $companyId = (int)$row['company_id'];
+            $conversationId = (int)$row['conversation_id'];
+
+            if ($cart) {
+                // Any order stitched to this conversation short-circuits.
+                $ord = $db->prepare(
+                    'SELECT id FROM fnb_orders WHERE company_id = ? AND conversation_id = ? LIMIT 1'
+                );
+                $ord->execute([$companyId, $conversationId]);
+                if (!$ord->fetchColumn()) {
+                    require_once __DIR__ . '/fnb_helpers.php';
+                    $res = fnb_create_order_from_flow_state($state, $conversationId, $companyId);
+                    if ($res['ok']) {
+                        // Try to send the customer the confirmation
+                        // message — same shape as the fnb_create_order
+                        // node's own confirmation. Best-effort; skip if
+                        // no live channel.
+                        try {
+                            $conv = flow_engine_conversation($db, $conversationId);
+                            $channel = $conv ? channel_by_id((int)($conv['channel_id'] ?? 0)) : null;
+                            if ($conv && $channel) {
+                                $currency = platform_setting('pricing_currency', 'RM');
+                                $msg = "🎉 Order confirmed!\n\n"
+                                     . "Your order number: *{$res['order_number']}*\n"
+                                     . "Total: $currency " . number_format((float)$res['total'], 2) . "\n\n"
+                                     . "Our team will process it and confirm shortly. Thank you!";
+                                $r = provider_send_text($channel, (string)$conv['wa_id'], $msg);
+                                flow_engine_log_outgoing_message($db, $conv, $msg, $r);
+                            }
+                        } catch (Throwable $e) {
+                            error_log('[AiServe flow_engine safety-net confirm] ' . $e->getMessage());
+                        }
+                        // Clear any stale error_message from prior attempts.
+                        try {
+                            $db->prepare('UPDATE flow_instances SET error_message = NULL WHERE id = ? LIMIT 1')
+                               ->execute([$instanceId]);
+                        } catch (Throwable $e) { /* noop */ }
+                        error_log('[AiServe flow_engine safety-net] created order '
+                                  . ($res['order_number'] ?? '#' . $res['order_id'])
+                                  . ' for instance ' . $instanceId
+                                  . ' — the flow ended without hitting fnb_create_order,'
+                                  . ' so we auto-fired to keep the order from being lost.');
+                    } else {
+                        // Persist the reason so the debug page can surface it.
+                        try {
+                            $db->prepare('UPDATE flow_instances SET error_message = ? WHERE id = ? LIMIT 1')
+                               ->execute([mb_substr('safety-net: ' . (string)($res['error'] ?? 'unknown'), 0, 480), $instanceId]);
+                        } catch (Throwable $e) { /* noop */ }
+                        error_log('[AiServe flow_engine safety-net] instance ' . $instanceId
+                                  . ' had a cart but create failed: ' . (string)($res['error'] ?? 'unknown'));
+                    }
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        // Safety net must never break the normal complete path.
+        error_log('[AiServe flow_engine safety-net wrapper] ' . $e->getMessage());
+    }
+
     $db->prepare(
         'UPDATE flow_instances
          SET status = "completed", completed_at = NOW()

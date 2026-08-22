@@ -306,13 +306,29 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
             </label>
             <?php break; ?>
 
-          <?php case 'wait_reply': ?>
+          <?php case 'wait_reply':
+            $waitVarName = trim((string)($cfg['var_name'] ?? ''));
+            $waitVarEcho = $waitVarName !== '' ? $waitVarName : 'customer_name';
+          ?>
             <label>Save the reply into variable
               <input type="text" name="var_name" maxlength="60"
-                     value="<?= e((string)($cfg['var_name'] ?? '')) ?>"
-                     placeholder="customer_name">
-              <small class="muted">letters, digits, underscore. Reference it later as <code>{{customer_name}}</code>.</small>
+                     value="<?= e($waitVarName) ?>"
+                     placeholder="customer_name"
+                     data-wait-var-input>
+              <small class="muted">letters, digits, underscore. Reference it later as
+                <code data-wait-var-echo>{{<?= e($waitVarEcho) ?>}}</code>.</small>
             </label>
+            <script>
+              (function () {
+                var inp = document.querySelector('[data-wait-var-input]');
+                var echo = document.querySelector('[data-wait-var-echo]');
+                if (!inp || !echo) return;
+                inp.addEventListener('input', function () {
+                  var v = (inp.value || '').replace(/[^A-Za-z0-9_]/g, '');
+                  echo.textContent = '{{' + (v || 'customer_name') + '}}';
+                });
+              })();
+            </script>
             <?php break; ?>
 
           <?php case 'assign_dept': ?>
@@ -464,17 +480,48 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
         <?php endswitch; ?>
 
         <?php if ($n['node_type'] !== 'branch' && $n['node_type'] !== 'end'): ?>
+          <?php
+            // Nodes that collect data or produce state expect a downstream
+            // consumer. Warn if the operator is about to save an "end after
+            // this step" on one of them — that's how F&B ordering flows
+            // silently died right after the address prompt.
+            $expectsDownstream = in_array($n['node_type'], [
+                'wait_reply','assign_dept','assign_branch','assign_nearest_branch',
+                'fnb_cart_add','fnb_send_menu',
+            ], true);
+            $currentNextId = (int)($n['next_node_id'] ?? 0);
+          ?>
           <label>Next node
-            <select name="next_node_id">
+            <select name="next_node_id" data-next-node-select>
               <option value="0">— end after this step —</option>
               <?php foreach ($nodes as $n2):
                 if ((int)$n2['id'] === (int)$n['id']) continue; ?>
-                <option value="<?= (int)$n2['id'] ?>" <?= (int)($n['next_node_id'] ?? 0) === (int)$n2['id'] ? 'selected' : '' ?>>
+                <option value="<?= (int)$n2['id'] ?>" <?= $currentNextId === (int)$n2['id'] ? 'selected' : '' ?>>
                   #<?= (int)$n2['id'] ?> <?= e(flow_edit_node_label($n2)) ?>
                 </option>
               <?php endforeach; ?>
             </select>
           </label>
+          <?php if ($expectsDownstream): ?>
+            <div data-next-node-warn
+                 style="margin:-8px 0 10px 0; padding:8px 10px; border-radius:6px;
+                        background:#fef3c7; border:1px solid #fcd34d; color:#78350f;
+                        font-size:13px; <?= $currentNextId === 0 ? '' : 'display:none;' ?>">
+              ⚠ This <strong><?= e($n['node_type']) ?></strong> node captures/produces state that
+              downstream nodes usually need. Ending the flow here means nothing consumes it —
+              likely wire this to the next step instead.
+            </div>
+            <script>
+              (function () {
+                var sel  = document.querySelector('[data-next-node-select]');
+                var warn = document.querySelector('[data-next-node-warn]');
+                if (!sel || !warn) return;
+                sel.addEventListener('change', function () {
+                  warn.style.display = (parseInt(sel.value, 10) === 0) ? '' : 'none';
+                });
+              })();
+            </script>
+          <?php endif; ?>
         <?php endif; ?>
 
         <div style="display:flex; gap:6px;">

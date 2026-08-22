@@ -23,15 +23,15 @@ $hasPin = !empty($u['pin_hash']);
 // Nothing to unlock — pass through.
 if (!$hasPin && !$hasBio) {
     pin_mark_verified();
-    redirect($_GET['next'] ?? '/dashboard.php');
+    redirect(post_login_landing($_GET['next'] ?? null));
 }
 if (pin_is_verified()) {
-    redirect($_GET['next'] ?? '/dashboard.php');
+    redirect(post_login_landing($_GET['next'] ?? null));
 }
 
-$next = $_GET['next'] ?? '/dashboard.php';
-if (!is_string($next) || !str_starts_with($next, '/') || str_starts_with($next, '//')) {
-    $next = '/dashboard.php';
+$next = $_GET['next'] ?? null;
+if (is_string($next) && (!str_starts_with($next, '/') || str_starts_with($next, '//'))) {
+    $next = null;
 }
 
 $errMsg    = '';
@@ -42,7 +42,7 @@ if (is_post() && $lockedFor === 0) {
     $pin = trim((string)($_POST['pin'] ?? ''));
     $r   = pin_verify_and_unlock((int)$u['id'], $pin);
     if ($r['ok']) {
-        redirect($next);
+        redirect(post_login_landing($next));
     }
     $errMsg    = (string)$r['message'];
     $lockedFor = (int)$r['locked_s'];
@@ -148,7 +148,10 @@ if (is_post() && $lockedFor === 0) {
             btn.textContent = 'Waiting for biometric…';
             var r = await waAuthenticate();
             if (r.ok) {
-                window.location.href = <?= json_encode($next) ?>;
+                // Same mobile-vs-desktop routing as the password path so
+                // biometric unlock on a phone drops straight into the
+                // inbox rather than the manager dashboard.
+                window.location.href = <?= json_encode(post_login_landing($next)) ?>;
             } else {
                 err.textContent = r.error || 'Biometric unlock failed';
                 btn.disabled = false;

@@ -4,16 +4,19 @@ require_once __DIR__ . '/inc/cookie_notice.php';
 
 aiserve_start_session();
 
-// Already logged in -> bounce to dashboard
+// Already logged in -> bounce to their landing page (mobile → inbox,
+// desktop → dashboard). post_login_landing() encapsulates the rule.
 if (current_user()) {
-    redirect('/dashboard.php');
+    redirect(post_login_landing());
 }
 
 $error = '';
 $email = '';
-$next  = $_GET['next'] ?? '/dashboard.php';
-if (!is_string($next) || !str_starts_with($next, '/') || str_starts_with($next, '//')) {
-    $next = '/dashboard.php';
+// Honor an explicit ?next=… (someone who tried to open a specific
+// admin page while logged out); fall through to mobile-aware default.
+$next = $_GET['next'] ?? null;
+if (is_string($next) && (!str_starts_with($next, '/') || str_starts_with($next, '//'))) {
+    $next = null;
 }
 
 if (is_post()) {
@@ -42,7 +45,7 @@ if (is_post()) {
             if (!empty($_POST['remember_me'])) {
                 remember_me_issue((int)$user['id']);
             }
-            redirect($next);
+            redirect(post_login_landing($next));
         }
 
         login_record_attempt($email, $ip, false);

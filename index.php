@@ -2,9 +2,12 @@
 require_once __DIR__ . '/inc/auth.php';
 require_once __DIR__ . '/inc/cookie_notice.php';
 
-// Logged-in users skip the landing page.
+// Logged-in users skip the landing page. Mobile UAs go straight to
+// the inbox (that's the thing they came for on a phone); desktop
+// keeps its dashboard-first flow. post_login_landing() encapsulates
+// the rule so every auth path stays consistent.
 if (current_user()) {
-    redirect('/dashboard.php');
+    redirect(post_login_landing());
 }
 
 $year = date('Y');

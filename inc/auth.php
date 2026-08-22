@@ -306,6 +306,42 @@ function login_record_attempt(string $email, string $ip, bool $success): void
     }
 }
 
+/**
+ * Where should a just-authenticated user land?
+ *
+ * Rules (in order):
+ *   1. If $next is provided and looks like a safe internal path
+ *      (starts with "/" but not "//"), honor it — that's the
+ *      "redirected here to sign in first" case, e.g. clicking a
+ *      link to /admin/broadcasts.php while logged out.
+ *   2. On mobile UAs (phone or tablet), default to /inbox/ so
+ *      operators drop straight into their conversations. The
+ *      dashboard's mostly a desktop / manager surface — on a phone
+ *      the inbox is the thing they came for.
+ *   3. Everyone else defaults to /dashboard.php.
+ *
+ * This is used by login.php, pin.php, biometric unlock, and the
+ * /index.php "already signed in?" bounce, so the rule is defined
+ * once and stays consistent across every auth entry point.
+ */
+function post_login_landing(?string $next = null): string
+{
+    // Honor a valid explicit next-URL, but only if it's not the
+    // stale "/dashboard.php" placeholder that /login.php seeds by
+    // default (that placeholder should NOT beat mobile routing).
+    if (is_string($next) && $next !== '' && $next !== '/dashboard.php'
+        && str_starts_with($next, '/') && !str_starts_with($next, '//')) {
+        return $next;
+    }
+    $ua = strtolower((string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
+    // Same regex family used elsewhere in the codebase for mobile
+    // detection (e.g. remember-me auto-check in login.php).
+    if (preg_match('/(android|iphone|ipad|ipod|mobile|windows phone)/', $ua)) {
+        return '/inbox/';
+    }
+    return '/dashboard.php';
+}
+
 function login_user(array $user): void
 {
     aiserve_start_session();

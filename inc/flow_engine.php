@@ -545,32 +545,64 @@ function flow_engine_execute_node(PDO $db, array &$inst, array $node): int
             require_once __DIR__ . '/fnb_helpers.php';
             $conv    = flow_engine_conversation($db, (int)$inst['conversation_id']);
             $channel = $conv ? channel_by_id((int)($conv['channel_id'] ?? 0)) : null;
-            if ($conv && $channel) {
+
+            // The order-creation step doesn't need a live channel — the
+            // customer's state (cart + vars) is all we need to INSERT the
+            // fnb_orders row. Previously the whole block was gated on
+            // ($conv && $channel), which meant a widget conversation whose
+            // channel row was archived or whose channel_id was 0 silently
+            // dropped the order (no error, no log, no confirmation SMS).
+            // Now we decouple: the order goes in first, the confirmation
+            // message is best-effort on top.
+            $orderReason = null;
+            if (!$conv) {
+                $orderReason = 'Conversation lookup returned null on fnb_create_order.';
+                error_log('[AiServe flow_engine fnb_create_order] ' . $orderReason . ' conv_id=' . (int)$inst['conversation_id']);
+            } else {
                 $result = fnb_create_order_from_flow_state($state, (int)$conv['id'], (int)$conv['company_id']);
                 if ($result['ok']) {
-                    $currency = platform_setting('pricing_currency', 'RM');
-                    $msg = "🎉 Order confirmed!\n\n"
-                         . "Your order number: *{$result['order_number']}*\n"
-                         . "Total: $currency " . number_format($result['total'], 2) . "\n\n"
-                         . "Our team will process it and confirm shortly. Thank you!";
-                    $r = provider_send_text($channel, (string)$conv['wa_id'], $msg);
-                    flow_engine_log_outgoing_message($db, $conv, $msg, $r);
-                } else {
-                    $errMsg = "Sorry, something went wrong saving your order. An agent will follow up shortly.";
-                    $r = provider_send_text($channel, (string)$conv['wa_id'], $errMsg);
-                    flow_engine_log_outgoing_message($db, $conv, $errMsg, $r);
-                    error_log('[AiServe flow_engine fnb_create_order] ' . ($result['error'] ?? 'unknown'));
-
-                    // Persist the actual reason onto the flow_instance so
-                    // /admin/fnb_flow_debug.php can surface it without
-                    // asking the operator to open error_log on the VPS.
-                    // Trim to fit VARCHAR(500). Non-fatal if the column
-                    // is missing on very old installs.
+                    // Try the confirmation message. If the channel is
+                    // missing (soft-deleted / mis-linked), just log —
+                    // the order is already saved and the internal note
+                    // added inside fnb_create_order_from_flow_state
+                    // still gives the operator a link from the chat.
+                    if ($channel) {
+                        $currency = platform_setting('pricing_currency', 'RM');
+                        $msg = "🎉 Order confirmed!\n\n"
+                             . "Your order number: *{$result['order_number']}*\n"
+                             . "Total: $currency " . number_format($result['total'], 2) . "\n\n"
+                             . "Our team will process it and confirm shortly. Thank you!";
+                        $r = provider_send_text($channel, (string)$conv['wa_id'], $msg);
+                        flow_engine_log_outgoing_message($db, $conv, $msg, $r);
+                    } else {
+                        error_log('[AiServe flow_engine fnb_create_order] order '
+                                  . $result['order_number']
+                                  . ' saved but channel missing (channel_id=' . (int)($conv['channel_id'] ?? 0)
+                                  . ') so confirmation was not sent to conv=' . (int)$conv['id']);
+                    }
+                    // Clear any stale error_message from a previous attempt.
                     try {
-                        $db->prepare('UPDATE flow_instances SET error_message = ? WHERE id = ? LIMIT 1')
-                           ->execute([mb_substr((string)($result['error'] ?? 'unknown'), 0, 480), (int)$inst['id']]);
-                    } catch (Throwable $e) { /* schema drift — ignore */ }
+                        $db->prepare('UPDATE flow_instances SET error_message = NULL WHERE id = ? LIMIT 1')
+                           ->execute([(int)$inst['id']]);
+                    } catch (Throwable $e) { /* noop */ }
+                } else {
+                    $orderReason = (string)($result['error'] ?? 'unknown');
+                    if ($channel) {
+                        $errMsg = "Sorry, something went wrong saving your order. An agent will follow up shortly.";
+                        $r = provider_send_text($channel, (string)$conv['wa_id'], $errMsg);
+                        flow_engine_log_outgoing_message($db, $conv, $errMsg, $r);
+                    }
+                    error_log('[AiServe flow_engine fnb_create_order] ' . $orderReason);
                 }
+            }
+
+            // Persist the failure reason onto the flow_instance so the
+            // debug page can surface it inline. Non-fatal on schema drift.
+            if ($orderReason !== null) {
+                try {
+                    $db->prepare('UPDATE flow_instances SET error_message = ? WHERE id = ? LIMIT 1')
+                       ->execute([mb_substr($orderReason, 0, 480), (int)$inst['id']]);
+                } catch (Throwable $e) { /* noop */ }
             }
             return (int)($node['next_node_id'] ?? 0);
 

@@ -447,7 +447,10 @@ function plan_seat_limit(string $plan): int
  * Returns:
  *   plan             : 'free' | 'paid' | 'payg'
  *   billing_cycle    : 'monthly' | 'yearly'  (only meaningful for paid)
- *   limit            : int - monthly recipient allowance (PAYG = PHP_INT_MAX)
+ *   plan_limit       : int - the base plan allowance BEFORE bonus credits
+ *   credits          : int - active manual credit balance (sum of live rows)
+ *   limit            : int - effective monthly allowance = plan_limit + credits
+ *                            (PAYG = PHP_INT_MAX)
  *   used             : int - recipients sent so far this month
  *   remaining        : int - max(limit - used, 0)  (PAYG = PHP_INT_MAX)
  *   price            : float - the paid plan's monthly price
@@ -460,6 +463,13 @@ function plan_seat_limit(string $plan): int
  * PAYG note: workspaces on the payg plan are treated as unlimited (no
  * quota block, no auto-suspend). `payg_accrued` = used × payg_rate, for
  * display. Actual invoicing happens out-of-band.
+ *
+ * Credits note: platform admin can grant top-up recipients through
+ * /admin/broadcast_credits.php (a signed ledger in broadcast_credits,
+ * see migration phase 54). Each row that is non-revoked and non-expired
+ * adds its amount to the effective monthly limit. Credits stack cleanly
+ * across plans — a free workspace with 500 bonus credits sees 1,500,
+ * a paid workspace with 2,000 bonus credits sees 12,000.
  */
 function broadcast_quota_for_workspace(int $companyId): array
 {
@@ -483,9 +493,24 @@ function broadcast_quota_for_workspace(int $companyId): array
     } catch (Throwable $e) { /* column missing = fall through to 'free' */ }
 
     $unlimited = ($plan === 'payg');
-    $limit     = $unlimited
-        ? PHP_INT_MAX
-        : ($plan === 'paid' ? $paidLimit : $freeLimit);
+    $planLimit = $plan === 'paid' ? $paidLimit : $freeLimit;
+
+    // Sum of active manual credit rows (positive add, negative debit /
+    // correction) that are not revoked and not expired. Silently zero
+    // if the table doesn't exist yet (pre-phase54 install).
+    $credits = 0;
+    try {
+        $s = aiserve_db()->prepare(
+            'SELECT COALESCE(SUM(amount), 0) FROM broadcast_credits
+             WHERE company_id = ?
+               AND revoked_at IS NULL
+               AND (expires_at IS NULL OR expires_at > NOW())'
+        );
+        $s->execute([$companyId]);
+        $credits = (int)$s->fetchColumn();
+    } catch (Throwable $e) { /* table missing pre-phase54 */ }
+
+    $limit = $unlimited ? PHP_INT_MAX : max($planLimit + $credits, 0);
 
     $used = 0;
     try {
@@ -505,6 +530,8 @@ function broadcast_quota_for_workspace(int $companyId): array
     return [
         'plan'            => $plan,
         'billing_cycle'   => $cycle,
+        'plan_limit'      => $planLimit,
+        'credits'         => $credits,
         'limit'           => $limit,
         'used'            => $used,
         'remaining'       => $unlimited ? PHP_INT_MAX : max($limit - $used, 0),

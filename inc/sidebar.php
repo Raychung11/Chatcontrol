@@ -84,6 +84,7 @@ $sb_groups = [
     'fnb'       => ['fnb_orders', 'fnb_menu', 'fnb_analytics'],
     'platform'  => ['workspaces', 'channels_debug', 'ai_billing', 'invoices',
                     'mail_settings', 'mail_test', 'business_info', 'broadcast_pricing',
+                    'broadcast_credits',
                     'pricing', 'legal', 'branding',
                     'evolution_connect', 'webhook_log', 'connection_debug'],
 ];
@@ -205,6 +206,7 @@ $fnbActive = fnb_module_active((int)($current_user['company_id'] ?? 0));
         <a href="/admin/mail_test.php"         class="<?= $active === 'mail_test'         ? 'active' : '' ?>">🧪 Mail test</a>
         <a href="/admin/business_info.php"     class="<?= $active === 'business_info'     ? 'active' : '' ?>">🏢 Business info</a>
         <a href="/admin/broadcast_pricing.php" class="<?= $active === 'broadcast_pricing' ? 'active' : '' ?>">📣 Broadcast pricing</a>
+        <a href="/admin/broadcast_credits.php" class="<?= $active === 'broadcast_credits' ? 'active' : '' ?>">🎁 Broadcast credits</a>
         <a href="/admin/pricing.php"           class="<?= $active === 'pricing'           ? 'active' : '' ?>">Seat pricing</a>
         <a href="/admin/legal.php"             class="<?= $active === 'legal'             ? 'active' : '' ?>">Legal text (T&amp;C)</a>
         <a href="/admin/branding.php"          class="<?= $active === 'branding'          ? 'active' : '' ?>">Branding &amp; icon</a>

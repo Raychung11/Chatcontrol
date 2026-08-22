@@ -495,8 +495,22 @@ layout_start($current_user, 'Workspaces', 'workspaces');
                             <?= number_format($x['bcast_used']) ?> sent
                         <?php else: ?>
                             <?= number_format($x['bcast_used']) ?> / <?= number_format($x['bcast_limit']) ?>
+                            <?php $bcastCredits = (int)($x['bcast']['credits'] ?? 0); ?>
+                            <?php if ($bcastCredits !== 0): ?>
+                              <span title="Manual bonus credits from /admin/broadcast_credits.php"
+                                    style="display:inline-block; padding:1px 6px; border-radius:999px;
+                                           font-size:10px; font-weight:600;
+                                           background: <?= $bcastCredits > 0 ? '#dcfce7' : '#fee2e2' ?>;
+                                           color: <?= $bcastCredits > 0 ? '#14532d' : '#991b1b' ?>;
+                                           margin-left:4px;">
+                                🎁 <?= $bcastCredits > 0 ? '+' : '' ?><?= number_format($bcastCredits) ?>
+                              </span>
+                            <?php endif; ?>
                             <div class="ws-bar"><div class="ws-bar-fill <?= $barCls ?>" style="width: <?= number_format($bcastPct, 1) ?>%;"></div></div>
                         <?php endif; ?>
+                        <a href="/admin/broadcast_credits.php?company_id=<?= (int)$r['id'] ?>"
+                           title="Grant / revoke bonus broadcast credits"
+                           style="text-decoration:none; margin-left:2px;">🎁+</a>
                     </div>
                 </td>
                 <td>

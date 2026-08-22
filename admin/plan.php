@@ -161,6 +161,20 @@ layout_start($current_user, 'Plan & billing', 'plan');
             ? '∞ (PAYG)'
             : number_format($quota['limit']) ?>
         recipients
+        <?php $planCredits = (int)($quota['credits'] ?? 0);
+              if (!$quota['unlimited'] && $planCredits !== 0): ?>
+          <br>
+          <span title="Bonus credits granted by platform admin"
+                style="display:inline-block; margin-top:2px; padding:1px 6px; border-radius:999px;
+                       font-size:11px; font-weight:600;
+                       background: <?= $planCredits > 0 ? '#dcfce7' : '#fee2e2' ?>;
+                       color: <?= $planCredits > 0 ? '#14532d' : '#991b1b' ?>;">
+            🎁 <?= number_format((int)($quota['plan_limit'] ?? 0)) ?>
+              <?= $planCredits > 0 ? '+' : '−' ?>
+              <?= number_format(abs($planCredits)) ?>
+              bonus
+          </span>
+        <?php endif; ?>
       </div>
       <?php if (!$quota['unlimited'] && $quota['limit'] > 0): ?>
         <div class="plan-bar">

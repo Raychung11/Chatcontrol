@@ -116,41 +116,120 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
 ?>
 
 <style>
+/* ==========================================================
+   Web-chat channel manager — mobile-first redesign.
+   Every grid collapses to 1fr under 700 px; copy buttons hit
+   a 32 px minimum tap target; long URLs wrap instead of
+   overflowing off-screen; per-widget actions stack under
+   the widget name so the row never goes past viewport width.
+   ========================================================== */
 .wc-card { background: #fff; border: 1px solid #e3e8ee; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-.wc-card h2 { margin: 0 0 12px; font-size: 15px; display: flex; justify-content: space-between; align-items: center; }
+.wc-card h2 { margin: 0 0 12px; font-size: 15px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
+
 .wc-item { border: 1px solid #e3e8ee; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
-.wc-item-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
-.wc-item-head .n { font-weight: 600; font-size: 15px; }
+.wc-item-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 12px; flex-wrap: wrap; gap: 10px;
+}
+.wc-item-head .n { font-weight: 600; font-size: 15px; word-break: break-word; }
+.wc-item-meta { color: #64748b; font-size: 12px; margin-top: 4px; }
+.wc-item-meta > span { display: inline-block; margin-right: 6px; }
+.wc-actions {
+  display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap;
+}
+.wc-actions .btn { min-height: 36px; }
+
 .wc-share {
   display: grid; gap: 16px;
   grid-template-columns: 200px 1fr;
   align-items: start;
 }
-@media (max-width: 700px) { .wc-share { grid-template-columns: 1fr; } }
 .wc-qr { background: #fff; padding: 8px; border: 1px solid #e3e8ee; border-radius: 8px; text-align: center; }
-.wc-qr img { width: 180px; height: 180px; display: block; margin: 0 auto; }
+.wc-qr img {
+  width: 180px; height: 180px; display: block; margin: 0 auto;
+  max-width: 100%; height: auto;
+}
+.wc-qr .muted { font-size: 11.5px; margin-top: 6px; }
+
+/* URL / embed code chip. On desktop it stays one line + scrolls.
+   On mobile it wraps so the customer-facing URL is fully visible
+   without needing to horizontal-scroll a code block. The copy
+   button lives inline BELOW the text on narrow, and top-right
+   on desktop — same button, different layout via flex. */
 .wc-code {
   background: #f6f9fb; border: 1px solid #e3e8ee; border-radius: 6px;
-  padding: 8px 12px; font-family: monospace; font-size: 12.5px;
-  overflow-x: auto; white-space: nowrap; margin-bottom: 6px;
-  position: relative;
+  padding: 10px 12px; font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12.5px; line-height: 1.5;
+  overflow-wrap: anywhere; word-break: break-all;
+  margin-bottom: 8px;
+  display: flex; align-items: flex-start; gap: 8px;
 }
+.wc-code .txt { flex: 1; min-width: 0; }
 .wc-code button {
-  position: absolute; top: 4px; right: 4px;
-  border: 1px solid #d0d7de; background: #fff; padding: 2px 8px;
-  border-radius: 4px; cursor: pointer; font-size: 11px;
+  border: 1px solid #d0d7de; background: #fff;
+  padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  font-size: 12px; min-height: 32px; min-width: 64px; flex-shrink: 0;
+  -webkit-tap-highlight-color: rgba(0,0,0,.1);
+  touch-action: manipulation;
 }
-.wc-form label { display: block; font-size: 12px; color: #64748b; margin-bottom: 8px; }
-.wc-form label input, .wc-form label textarea {
-  display: block; width: 100%; padding: 6px 8px; margin-top: 4px;
-  border: 1px solid #e3e8ee; border-radius: 6px; font-size: 14px;
+.wc-code button:hover  { border-color: #25D366; }
+.wc-code button:active { transform: scale(0.96); }
+
+.wc-code-label {
+  font-size: 11px; color: #64748b; text-transform: uppercase;
+  letter-spacing: .04em; margin-bottom: 4px;
+}
+
+.wc-form label {
+  display: block; font-size: 12px; color: #64748b; margin-bottom: 10px;
+}
+.wc-form label input, .wc-form label textarea, .wc-form label select {
+  display: block; width: 100%; padding: 10px 12px; margin-top: 4px;
+  border: 1px solid #d0d7de; border-radius: 8px; font-size: 15px;
+  background: #fff;
+}
+.wc-form label input:focus,
+.wc-form label textarea:focus,
+.wc-form label select:focus {
+  outline: 2px solid #25D366; outline-offset: -1px; border-color: transparent;
+}
+.wc-form-grid { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+.wc-form-grid-3 { display: grid; gap: 12px; grid-template-columns: 1fr 1fr 1fr; }
+.wc-form .btn { min-height: 42px; }
+
+/* Small toolbar (Health check + top actions). Stacks on mobile
+   so the tap targets stay full-width. */
+.wc-toolbar {
+  display: flex; justify-content: flex-end; gap: 6px;
+  margin-bottom: 12px; flex-wrap: wrap;
+}
+.wc-toolbar .btn { min-height: 36px; }
+
+/* --- Mobile breakpoint ---
+   Collapse every multi-column grid to a single column and
+   turn the item-head into a stacked block so widget name +
+   meta sits on top and Disable/Delete actions get their own
+   full-width row underneath. */
+@media (max-width: 700px) {
+  .wc-share            { grid-template-columns: 1fr; }
+  .wc-form-grid,
+  .wc-form-grid-3      { grid-template-columns: 1fr; }
+  .wc-item             { padding: 14px; }
+  .wc-item-head        { flex-direction: column; align-items: stretch; }
+  .wc-actions          { justify-content: flex-start; }
+  .wc-actions .btn     { flex: 1; }
+  .wc-code             { flex-direction: column; }
+  .wc-code button      { align-self: flex-end; }
+  .wc-qr img           { width: 220px; height: 220px; }
+  .wc-toolbar          { justify-content: stretch; }
+  .wc-toolbar .btn     { flex: 1; text-align: center; }
 }
 </style>
 
 <?php if ($msg): ?><div class="alert alert-success"><?= e($msg) ?></div><?php endif; ?>
 <?php if ($err): ?><div class="alert alert-error"><?= e($err) ?></div><?php endif; ?>
 
-<div style="text-align: right; margin-bottom: 12px;">
+<div class="wc-toolbar">
   <a class="btn btn-sm" href="/admin/webchat_debug.php" title="Run a full health check on the widget stack">🩺 Health check</a>
 </div>
 
@@ -204,7 +283,7 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
   <form method="post" class="wc-form">
     <?= csrf_field() ?>
     <input type="hidden" name="action" value="create">
-    <div style="display:grid; gap:8px; grid-template-columns: 1fr 1fr;">
+    <div class="wc-form-grid">
       <label>Internal name
         <input type="text" name="name" maxlength="100" required
                placeholder="e.g. Restaurant dine-in widget">
@@ -214,7 +293,7 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
                placeholder="e.g. Vicky's Nasi Lemak">
       </label>
     </div>
-    <div style="display:grid; gap:8px; grid-template-columns: 1fr 1fr;">
+    <div class="wc-form-grid">
       <label>Welcome message <small class="muted">(first thing the customer sees)</small>
         <textarea name="greeting" rows="2" maxlength="500"
                   placeholder="Hi 👋 Welcome! Type 'menu' to see what we're serving today."></textarea>
@@ -250,20 +329,23 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
 ?>
   <div class="wc-item">
     <div class="wc-item-head">
-      <div>
-        <span class="n"><?= e($c['name']) ?></span>
-        <?= status_badge($c['status']) ?>
-        <?php if (!empty($c['branch_name'])): ?>
-          <span class="muted small" style="margin-left:6px; padding:2px 8px; border-radius:999px; background:#eef2ff; color:#3730a3;">
-            🏢 <?= e((string)$c['branch_name']) ?>
-          </span>
-        <?php endif; ?>
-        <span class="muted small" style="margin-left:8px;">
-          · <?= (int)$c['session_count'] ?> session(s)
-          · <?= (int)$c['conv_count'] ?> conversation(s)
-        </span>
+      <div style="min-width:0; flex:1;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span class="n"><?= e($c['name']) ?></span>
+          <?= status_badge($c['status']) ?>
+          <?php if (!empty($c['branch_name'])): ?>
+            <span class="muted small" style="padding:2px 8px; border-radius:999px; background:#eef2ff; color:#3730a3;">
+              🏢 <?= e((string)$c['branch_name']) ?>
+            </span>
+          <?php endif; ?>
+        </div>
+        <div class="wc-item-meta">
+          <span><?= (int)$c['session_count'] ?> session(s)</span>·
+          <span><?= (int)$c['conv_count'] ?> conversation(s)</span>
+        </div>
       </div>
-      <div style="display:flex; gap:6px;">
+      <div class="wc-actions">
+        <a class="btn btn-sm" href="<?= e($url) ?>" target="_blank" title="Open widget in a new tab">🔗 Open</a>
         <form method="post" style="display:inline">
           <?= csrf_field() ?>
           <input type="hidden" name="action" value="toggle">
@@ -282,24 +364,24 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
     <div class="wc-share">
       <div class="wc-qr">
         <img src="<?= e($qrUrl) ?>" alt="QR code for <?= e($c['name']) ?>">
-        <div class="muted small" style="margin-top:6px;">Print + stick on a table / counter</div>
+        <div class="muted small">Print + stick on a table / counter</div>
       </div>
       <div>
-        <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:.04em; margin-bottom:4px;">Direct URL</div>
+        <div class="wc-code-label">Direct URL</div>
         <div class="wc-code" id="wc-url-<?= (int)$c['id'] ?>">
-          <?= e($url) ?>
+          <span class="txt"><?= e($url) ?></span>
           <button type="button" onclick="wcCopy('wc-url-<?= (int)$c['id'] ?>')">Copy</button>
         </div>
 
-        <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:.04em; margin-bottom:4px;">Table QR (append &amp;t=…)</div>
+        <div class="wc-code-label">Table QR (append &amp;t=…)</div>
         <div class="wc-code" id="wc-tbl-<?= (int)$c['id'] ?>">
-          <?= e($url) ?>&amp;t=Table%205
+          <span class="txt"><?= e($url) ?>&amp;t=Table%205</span>
           <button type="button" onclick="wcCopy('wc-tbl-<?= (int)$c['id'] ?>')">Copy</button>
         </div>
 
-        <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:.04em; margin-bottom:4px;">Embed on your website</div>
+        <div class="wc-code-label">Embed on your website</div>
         <div class="wc-code" id="wc-emb-<?= (int)$c['id'] ?>">
-          <?= e($embed) ?>
+          <span class="txt"><?= e($embed) ?></span>
           <button type="button" onclick="wcCopy('wc-emb-<?= (int)$c['id'] ?>')">Copy</button>
         </div>
 
@@ -307,7 +389,7 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
           <?= csrf_field() ?>
           <input type="hidden" name="action" value="update">
           <input type="hidden" name="channel_id" value="<?= (int)$c['id'] ?>">
-          <div style="display:grid; gap:8px; grid-template-columns: 1fr 1fr 1fr;">
+          <div class="wc-form-grid-3">
             <label>Widget title
               <input type="text" name="title" maxlength="120" value="<?= e((string)($c['web_chat_title'] ?? '')) ?>">
             </label>
@@ -326,8 +408,7 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
               </select>
             </label>
           </div>
-          <button class="btn btn-sm" type="submit">Save changes</button>
-          <a class="btn btn-sm" href="<?= e($url) ?>" target="_blank">🔗 Open widget</a>
+          <button class="btn btn-sm btn-primary" type="submit">Save changes</button>
         </form>
       </div>
     </div>
@@ -335,15 +416,38 @@ layout_start($current_user, 'Web chat widgets', 'webchat');
 <?php endforeach; endif; ?>
 
 <script>
+// Copy the URL / embed snippet to the clipboard. Reads from the
+// .txt span so the button label never leaks into the copied text.
+// Falls back to a select-and-execCommand path for older browsers
+// (some iOS Safari versions still refuse navigator.clipboard from
+// a non-secure context — the widget admin is always HTTPS, but
+// keeping the fallback avoids silent failure on edge devices).
 function wcCopy(id) {
   const el = document.getElementById(id);
-  // Get the text without the button label
+  if (!el) return;
   const btn = el.querySelector('button');
-  const btnText = btn ? btn.textContent : '';
-  const raw = el.textContent.replace(btnText, '').trim();
-  navigator.clipboard.writeText(raw).then(() => {
-    if (btn) { btn.textContent = 'Copied ✓'; setTimeout(() => btn.textContent = btnText, 1500); }
-  });
+  const txt = el.querySelector('.txt');
+  const raw = (txt ? txt.textContent : el.textContent).trim();
+  const flashOK = () => {
+    if (!btn) return;
+    const orig = btn.textContent;
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(raw).then(flashOK).catch(legacyCopy);
+  } else {
+    legacyCopy();
+  }
+  function legacyCopy() {
+    const ta = document.createElement('textarea');
+    ta.value = raw;
+    ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); flashOK(); } catch (e) {}
+    document.body.removeChild(ta);
+  }
 }
 </script>
 

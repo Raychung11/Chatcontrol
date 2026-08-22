@@ -127,19 +127,47 @@ if ($flowIds) {
 }
 
 // ---------------- Cross-reference fnb_orders ----------------
-$convIds = array_values(array_unique(array_map(fn($r) => (int)$r['conversation_id'], $rows)));
-$ordersByConv = [];
+// Match orders to instances by BOTH conversation_id (primary) AND
+// contact_id (fallback). Widget sessions can produce a fresh
+// conversation on the same contact between the failed attempt and
+// the successful retry, so keying by conversation_id alone misses
+// the correlation and the failed row keeps looking failed forever.
+$convIds    = array_values(array_unique(array_map(fn($r) => (int)$r['conversation_id'], $rows)));
+$contactIds = [];
+$contactByConv = [];
 if ($convIds) {
     $ph = implode(',', array_fill(0, count($convIds), '?'));
+    $ct = $db->prepare(
+        "SELECT id, contact_id FROM conversations WHERE id IN ($ph)"
+    );
+    $ct->execute($convIds);
+    foreach ($ct->fetchAll() as $cv) {
+        $contactByConv[(int)$cv['id']] = (int)$cv['contact_id'];
+        $contactIds[(int)$cv['contact_id']] = true;
+    }
+}
+$contactIds = array_keys($contactIds);
+
+$ordersByConv    = [];
+$ordersByContact = [];
+if ($convIds || $contactIds) {
+    // Query orders keyed by either conversation_id (primary) or by
+    // contact_id (fallback for the drift case above).
+    $convPh    = $convIds    ? implode(',', array_fill(0, count($convIds),    '?')) : '0';
+    $contactPh = $contactIds ? implode(',', array_fill(0, count($contactIds), '?')) : '0';
     $stmt = $db->prepare(
-        "SELECT id, conversation_id, order_number, status, total, created_at
+        "SELECT id, conversation_id, contact_id, order_number, status, total, created_at
          FROM fnb_orders
-         WHERE company_id = ? AND conversation_id IN ($ph)
+         WHERE company_id = ?
+           AND (conversation_id IN ($convPh) OR contact_id IN ($contactPh))
          ORDER BY id DESC"
     );
-    $stmt->execute(array_merge([$companyId], $convIds));
+    $stmt->execute(array_merge([$companyId], $convIds, $contactIds));
     foreach ($stmt->fetchAll() as $o) {
-        $ordersByConv[(int)$o['conversation_id']][] = $o;
+        $cvid = (int)($o['conversation_id'] ?? 0);
+        $cid  = (int)($o['contact_id']      ?? 0);
+        if ($cvid > 0) $ordersByConv[$cvid][] = $o;
+        if ($cid  > 0) $ordersByContact[$cid][] = $o;
     }
 }
 
@@ -151,12 +179,29 @@ foreach ($rows as $r) {
     $state = json_decode((string)($r['state'] ?? '{}'), true) ?: [];
     $cart  = (array)($state['cart'] ?? []);
     $vars  = (array)($state['vars'] ?? []);
-    $hasOrder = isset($ordersByConv[(int)$r['conversation_id']]);
+    $convId    = (int)$r['conversation_id'];
+    $contactId = $contactByConv[$convId] ?? 0;
+
+    $ordersHere = $ordersByConv[$convId] ?? [];
+    $matchedBy  = $ordersHere ? 'conv' : '';
+    // Fallback: if no order on this conversation, check whether the
+    // same contact got an order (a widget retry can create a fresh
+    // conversation on the same contact — the order is real, just
+    // stitched under a different conv_id).
+    if (!$ordersHere && $contactId > 0 && !empty($ordersByContact[$contactId])) {
+        $ordersHere = $ordersByContact[$contactId];
+        $matchedBy  = 'contact';
+    }
+    $hasOrder = !empty($ordersHere);
     $status   = (string)$r['status'];
     $nodeType = (string)($r['current_node_type'] ?? '');
 
     if ($hasOrder) {
-        $d = ['level' => 'ok', 'label' => '✓ order created', 'hint' => ''];
+        $d = ['level' => 'ok',
+              'label' => '✓ order created',
+              'hint'  => $matchedBy === 'contact'
+                          ? 'Order was created for this customer on a different conversation_id (retry or fresh widget session on the same contact). Real order — just stitched under a sibling conversation row.'
+                          : ''];
         $stats['ok']++;
     } elseif ($status === 'waiting') {
         $d = ['level' => 'wait', 'label' => '⏸ waiting for reply', 'hint' => 'Customer hasn\'t typed the next answer yet — this is normal mid-flow.'];
@@ -183,11 +228,15 @@ foreach ($rows as $r) {
                   'hint' => 'The instance ended without ever running fnb_create_order (or cart was empty when it did). Check that your wait_reply nodes are wired to the next step — a wait_reply with "Next node = end after this step" silently drops the flow.'];
             $stats['unreached']++;
         } else {
-            // Reached create_order but the order didn't land — no persisted
-            // error means this instance predates the error-message capture.
-            // Retest the flow to get a fresh row with the actual reason.
-            $d = ['level' => 'bad', 'label' => '✗ create_order failed',
-                  'hint' => 'Cart was populated but no fnb_orders row was created. This row is from before the debug patch — re-run the chat order once to capture the actual reason on the next attempt. Meanwhile: check error_log for "[AiServe flow_engine fnb_create_order]".'];
+            // Reached create_order or downstream, cart was populated, but
+            // no fnb_orders row is stitched to this conv OR its contact.
+            // Most instances that fail on the create step now persist a
+            // reason via inc/flow_engine.php's fnb_create_order case — an
+            // empty error_message here means this instance either never
+            // reached the create step (chain-wiring problem) or predates
+            // the error-capture patch (harmless — click Retry).
+            $d = ['level' => 'bad', 'label' => '✗ no order stitched',
+                  'hint' => 'Cart was populated but no fnb_orders row for this conversation OR contact. Click ↻ Retry to run fnb_create_order against the saved state right now — the outcome shows inline (success creates the order; failure shows the actual DB error).'];
             $stats['empty_cart']++;
         }
     } else {
@@ -357,8 +406,20 @@ layout_start($current_user, 'F&B chat-order debug', 'fnb_flow_debug');
               <?php endif; ?>
             </td>
             <td>
-              <?php if ($orders): ?>
-                <?php foreach ($orders as $o): ?>
+              <?php
+                // Show any order matched to this row — first by conv,
+                // then by contact (the widget-retry drift case).
+                $cvid    = (int)$r['conversation_id'];
+                $cid     = $contactByConv[$cvid] ?? 0;
+                $ordList = $ordersByConv[$cvid] ?? [];
+                $ordVia  = $ordList ? 'this conversation' : '';
+                if (!$ordList && $cid > 0 && !empty($ordersByContact[$cid])) {
+                    $ordList = $ordersByContact[$cid];
+                    $ordVia  = 'this customer (different conv_id)';
+                }
+              ?>
+              <?php if ($ordList): ?>
+                <?php foreach ($ordList as $o): ?>
                   <a href="/admin/fnb_order_view.php?id=<?= (int)$o['id'] ?>">
                     <strong><?= e($o['order_number'] ?: '#' . $o['id']) ?></strong>
                   </a>
@@ -367,8 +428,9 @@ layout_start($current_user, 'F&B chat-order debug', 'fnb_flow_debug');
                     · <?= e((string)$o['status']) ?>
                   </div>
                 <?php endforeach; ?>
+                <div class="muted small" style="margin-top:4px; font-size:11px;">matched via <?= e($ordVia) ?></div>
               <?php else: ?>
-                <span class="muted small">no fnb_orders row for this conversation</span>
+                <span class="muted small">no fnb_orders row for this conversation or contact</span>
               <?php endif; ?>
             </td>
             <td class="muted small"><?= e(fmt_dt($r['updated_at'])) ?></td>

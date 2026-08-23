@@ -24,7 +24,9 @@ $companyId    = (int)$current_user['company_id'];
 $db = aiserve_db();
 
 $channels = $db->prepare(
-    "SELECT id, name, provider, display_phone, status, webhook_token, is_default
+    "SELECT id, name, provider, display_phone, status, webhook_token, is_default,
+            probe_state, probe_state_since, probe_last_at, probe_queue_size,
+            alert_last_sent_at
      FROM channels
      WHERE company_id = ?
      ORDER BY is_default DESC, id ASC"
@@ -107,16 +109,17 @@ if ($staleNow):
       <tr>
         <th>Channel</th>
         <th>Provider</th>
+        <th>Session state</th>
         <th>Last inbound</th>
         <th>Last outbound</th>
         <th style="text-align:right;">24h in</th>
-        <th style="text-align:right;">7d in</th>
+        <th style="text-align:right;">Queue</th>
         <th style="text-align:right;">Actions</th>
       </tr>
     </thead>
     <tbody>
       <?php if (!$channels): ?>
-        <tr><td colspan="7" class="muted" style="text-align:center; padding:24px;">
+        <tr><td colspan="8" class="muted" style="text-align:center; padding:24px;">
           No channels yet. <a href="/admin/channels.php">Set one up →</a>
         </td></tr>
       <?php endif; ?>
@@ -152,6 +155,38 @@ if ($staleNow):
           <td>
             <span class="ch-provider"><?= e((string)$c['provider']) ?></span>
           </td>
+          <td>
+            <?php
+              // Live probe state — filled by cron/evolution_health_ping.php
+              // for evolution channels; other providers show '—' since
+              // we don't have a comparable ping endpoint for them.
+              $probeState = (string)($c['probe_state'] ?? 'unknown');
+              $probeLast  = (string)($c['probe_last_at'] ?? '');
+              $probeSince = (string)($c['probe_state_since'] ?? '');
+              $probeLabel = match ($probeState) {
+                  'connected'    => ['🟢 Connected',     '#14532d', '#dcfce7'],
+                  'connecting'   => ['🟡 Reconnecting',  '#78350f', '#fef3c7'],
+                  'disconnected' => ['🔴 Disconnected',  '#991b1b', '#fee2e2'],
+                  default        => ['⚫ Unknown',       '#334155', '#f1f5f9'],
+              };
+            ?>
+            <?php if ($c['provider'] === 'evolution' && $probeLast): ?>
+              <span style="display:inline-block; padding:2px 10px; border-radius:999px; font-size:11px; font-weight:600;
+                           background:<?= e($probeLabel[2]) ?>; color:<?= e($probeLabel[1]) ?>;">
+                <?= e($probeLabel[0]) ?>
+              </span>
+              <div class="muted small" style="margin-top:2px;">
+                <?php if ($probeSince): ?>since <?= e(relative_time($probeSince)) ?> ago<?php endif; ?>
+                <br>probed <?= e(relative_time($probeLast)) ?> ago
+              </div>
+            <?php elseif ($c['provider'] === 'evolution'): ?>
+              <span class="muted small">not probed yet</span>
+              <div class="muted small">install cron: <code>*/5 * * * *</code> php cron/evolution_health_ping.php</div>
+            <?php else: ?>
+              <span class="muted small">—</span>
+              <div class="muted small">(no ping endpoint for <?= e((string)$c['provider']) ?>)</div>
+            <?php endif; ?>
+          </td>
           <td class="muted small">
             <?= $s['last_in']  ? e(fmt_dt($s['last_in']))  : '—' ?>
             <?php if ($lastInTs): ?>
@@ -162,9 +197,21 @@ if ($staleNow):
             <?= $s['last_out'] ? e(fmt_dt($s['last_out'])) : '—' ?>
           </td>
           <td class="ch-count" style="text-align:right;"><?= (int)$s['in_24h'] ?></td>
-          <td class="ch-count" style="text-align:right;"><?= (int)$s['in_7d']  ?></td>
+          <td class="ch-count" style="text-align:right;">
+            <?php $q = (int)($c['probe_queue_size'] ?? 0);
+                  $qColor = $q === 0 ? '#64748b' : ($q < 10 ? '#78350f' : '#991b1b'); ?>
+            <span style="color: <?= e($qColor) ?>; font-weight: <?= $q > 0 ? '700' : '400' ?>;">
+              <?= $q ?>
+            </span>
+            <?php if ($q > 0): ?>
+              <div class="muted small">unsent 1h</div>
+            <?php endif; ?>
+          </td>
           <td style="text-align:right;">
             <a class="btn btn-sm" href="/admin/channel_edit.php?id=<?= (int)$c['id'] ?>">Edit</a>
+            <?php if ($c['provider'] === 'evolution'): ?>
+              <a class="btn btn-sm" href="/admin/evolution_connect.php">Pair</a>
+            <?php endif; ?>
           </td>
         </tr>
         <?php
@@ -182,7 +229,7 @@ if ($staleNow):
             $webhookUrl = $base . $endpoint . '?ch=' . $c['webhook_token'];
         ?>
         <tr>
-          <td colspan="7" style="background:#fef2f2;">
+          <td colspan="8" style="background:#fef2f2;">
             <div style="margin-bottom:6px; color:#7f1d1d; font-size:13px;">
               🔧 Re-paste this URL into <strong><?= e((string)$c['provider']) ?></strong>'s webhook config if it was cleared:
             </div>

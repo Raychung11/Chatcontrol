@@ -28,6 +28,7 @@
  */
 
 require_once __DIR__ . '/inc/layout.php';
+require_once __DIR__ . '/inc/channels.php';   // channels_stale_banner_html()
 
 $current_user = require_login();
 $companyId    = (int)$current_user['company_id'];

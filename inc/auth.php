@@ -18,6 +18,13 @@ function current_user(): ?array
         $rememberedId = remember_me_try();
         if ($rememberedId) {
             $_SESSION['user_id'] = $rememberedId;
+            // Stamp last_login_at — otherwise 'Portal users' shows a
+            // remember-me-signed-in user as never having logged in,
+            // and boss dashboards mis-count active users. Fires only
+            // once per new browser session (this branch is entered
+            // exclusively when the PHP session is empty), so it's not
+            // hitting the DB on every page hit.
+            login_stamp_last_login($rememberedId);
         } else {
             return null;
         }
@@ -360,14 +367,30 @@ function login_user(array $user): void
         )->execute([(int)$user['id']]);
     } catch (Throwable $e) { /* ok */ }
 
+    // Stamp last_login_at + log activity. The stamp helper is shared
+    // with the remember-me auto-login path in current_user() so both
+    // fresh password logins and 30-day-cookie auto-logins update the
+    // 'Last login' column on the users admin page.
+    login_stamp_last_login((int)$user['id']);
+
+    log_activity((int)$user['company_id'], (int)$user['id'], 'login', 'user', (int)$user['id'], 'User logged in');
+}
+
+/**
+ * Stamp users.last_login_at = NOW() for the given user id. Callable from
+ * every auth entry point (password login, remember-me auto-login) so
+ * the value stays accurate regardless of which path proved identity.
+ * Silently no-ops on schema drift so it can't break sign-in.
+ */
+function login_stamp_last_login(int $userId): void
+{
+    if ($userId <= 0) return;
     try {
-        $stmt = aiserve_db()->prepare('UPDATE users SET last_login_at = NOW() WHERE id = ?');
-        $stmt->execute([(int)$user['id']]);
+        $stmt = aiserve_db()->prepare('UPDATE users SET last_login_at = NOW() WHERE id = ? LIMIT 1');
+        $stmt->execute([$userId]);
     } catch (Throwable $e) {
         error_log('[AiServe] update last_login failed: ' . $e->getMessage());
     }
-
-    log_activity((int)$user['company_id'], (int)$user['id'], 'login', 'user', (int)$user['id'], 'User logged in');
 }
 
 function logout_user(): void

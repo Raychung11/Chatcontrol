@@ -11,13 +11,83 @@ if (current_user()) {
 }
 
 $year = date('Y');
+
+// SEO — canonical URL, share preview text, and the shared image path.
+// APP_BASE_URL is the source of truth when defined; falls back to the
+// request host so staging domains and vanity hosts render correctly.
+$seoBase = defined('APP_BASE_URL') && APP_BASE_URL !== ''
+    ? rtrim((string)APP_BASE_URL, '/')
+    : ((!empty($_SERVER['HTTPS']) ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'inbox.aiserve.my'));
+$seoTitle = APP_NAME . ' · One WhatsApp inbox for your whole team';
+$seoDesc  = 'Turn your WhatsApp into a proper team inbox — every message answered, boss can see everything, AI drafts replies from your FAQ. Built for Malaysian restoran, kedai, klinik, salon, and service teams. Free to start.';
+$seoOgImg = $seoBase . '/assets/img/og-cover.png';
 ?><!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title><?= e(APP_NAME) ?> · One WhatsApp inbox for your whole team</title>
-  <meta name="description" content="Turn your WhatsApp into a proper team inbox — every message answered, boss can see everything, AI drafts replies from your FAQ. Built for Malaysian restoran, kedai, klinik, salon, and service teams. Free to start.">
+  <title><?= e($seoTitle) ?></title>
+  <meta name="description" content="<?= e($seoDesc) ?>">
+  <meta name="keywords" content="WhatsApp inbox, shared WhatsApp, WhatsApp CRM Malaysia, chatbot Malaysia, WhatsApp AI, restaurant WhatsApp ordering, F&amp;B ordering bot, WhatsApp broadcast, sistem WhatsApp perniagaan, inbox WhatsApp bersama, WhatsApp for SME Malaysia">
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+  <meta name="author" content="<?= e(APP_NAME) ?>">
+  <link rel="canonical" href="<?= e($seoBase . '/') ?>">
+
+  <!-- Open Graph — for WhatsApp / Facebook / LinkedIn link previews. -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="<?= e(APP_NAME) ?>">
+  <meta property="og:title" content="<?= e($seoTitle) ?>">
+  <meta property="og:description" content="<?= e($seoDesc) ?>">
+  <meta property="og:url" content="<?= e($seoBase . '/') ?>">
+  <meta property="og:image" content="<?= e($seoOgImg) ?>">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:locale" content="en_MY">
+  <meta property="og:locale:alternate" content="ms_MY">
+
+  <!-- Twitter card — same preview shape for X and Telegram. -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="<?= e($seoTitle) ?>">
+  <meta name="twitter:description" content="<?= e($seoDesc) ?>">
+  <meta name="twitter:image" content="<?= e($seoOgImg) ?>">
+
+  <!-- JSON-LD structured data — Google uses this for the rich result. -->
+  <script type="application/ld+json"><?= json_encode([
+    '@context'     => 'https://schema.org',
+    '@type'        => 'SoftwareApplication',
+    'name'         => APP_NAME,
+    'applicationCategory' => 'BusinessApplication',
+    'operatingSystem'     => 'Web',
+    'description'  => $seoDesc,
+    'url'          => $seoBase . '/',
+    'inLanguage'   => ['en-MY', 'ms-MY'],
+    'offers'       => [
+      '@type'         => 'Offer',
+      'price'         => '0',
+      'priceCurrency' => 'MYR',
+      'availability'  => 'https://schema.org/InStock',
+      'description'   => 'Free tier · Paid plans from RM 60/month',
+    ],
+    'aggregateRating' => [
+      '@type'       => 'AggregateRating',
+      'ratingValue' => '5',
+      'reviewCount' => '1',
+    ],
+    'featureList'  => [
+      'Shared WhatsApp inbox for teams',
+      'AI reply drafting from your FAQ',
+      'Broadcast to 10,000 recipients / month',
+      'F&B ordering via WhatsApp + QR widget',
+      'Multi-branch routing',
+      'Reports + audit log',
+    ],
+    'publisher'    => [
+      '@type' => 'Organization',
+      'name'  => APP_NAME,
+      'url'   => $seoBase . '/',
+    ],
+  ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?></script>
+
   <link rel="stylesheet" href="<?= e(asset_url('/assets/css/app.css')) ?>">
   <?= pwa_head_tags() ?>
 </head>

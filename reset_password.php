@@ -86,6 +86,7 @@ if ($user && is_post() && $tokenErr === '') {
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
     <title>Reset password · <?= e(APP_NAME) ?></title>
     <link rel="stylesheet" href="<?= e(asset_url('/assets/css/app.css')) ?>">
 </head>

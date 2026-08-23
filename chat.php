@@ -47,6 +47,7 @@ $logoUrl = !empty($company['logo'])
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <title><?= e($title) ?></title>
 <!-- Per-channel PWA: install as this workspace's own app on the home screen. -->
 <link rel="manifest" href="/widget_manifest.php?c=<?= e($channelToken) ?>">

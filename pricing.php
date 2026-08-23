@@ -22,13 +22,49 @@ $savePct = ($p['per_seat'] > 0 && $p['bundle_price'] < ($p['per_seat'] * $p['bun
 $exampleSeats  = $p['bundle_seats'] + 5;
 $exampleTotal  = $p['bundle_price'] + (5 * $p['extra_seat_price']);
 $exampleTotalF = fmt_price($exampleTotal, $cur);
+
+$seoBase = defined('APP_BASE_URL') && APP_BASE_URL !== ''
+    ? rtrim((string)APP_BASE_URL, '/')
+    : ((!empty($_SERVER['HTTPS']) ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'inbox.aiserve.my'));
+$seoTitle = 'Pricing · ' . APP_NAME . ' — WhatsApp inbox for Malaysian SMEs';
+$seoDesc  = 'Simple pricing for Malaysian teams: per-seat plans, team bundle with a big discount, plus a free tier. Broadcast + F&B ordering + AI drafts all included. No lock-in, cancel any month.';
+$seoOgImg = $seoBase . '/assets/img/og-cover.png';
 ?><!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pricing · <?= e(APP_NAME) ?></title>
-  <meta name="description" content="Simple pricing: RM 12 per seat, or RM 60 for a 10-seat team (50% off). Every plan includes AI reply suggestions and the knowledge base.">
+  <title><?= e($seoTitle) ?></title>
+  <meta name="description" content="<?= e($seoDesc) ?>">
+  <meta name="keywords" content="WhatsApp inbox pricing Malaysia, shared WhatsApp cost, sistem WhatsApp harga, WhatsApp broadcast pricing, WhatsApp CRM cost">
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+  <link rel="canonical" href="<?= e($seoBase . '/pricing.php') ?>">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="<?= e(APP_NAME) ?>">
+  <meta property="og:title" content="<?= e($seoTitle) ?>">
+  <meta property="og:description" content="<?= e($seoDesc) ?>">
+  <meta property="og:url" content="<?= e($seoBase . '/pricing.php') ?>">
+  <meta property="og:image" content="<?= e($seoOgImg) ?>">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:locale" content="en_MY">
+  <meta property="og:locale:alternate" content="ms_MY">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="<?= e($seoTitle) ?>">
+  <meta name="twitter:description" content="<?= e($seoDesc) ?>">
+  <meta name="twitter:image" content="<?= e($seoOgImg) ?>">
+
+  <script type="application/ld+json"><?= json_encode([
+    '@context' => 'https://schema.org',
+    '@type'    => 'BreadcrumbList',
+    'itemListElement' => [
+      ['@type' => 'ListItem', 'position' => 1, 'name' => 'Home',    'item' => $seoBase . '/'],
+      ['@type' => 'ListItem', 'position' => 2, 'name' => 'Pricing', 'item' => $seoBase . '/pricing.php'],
+    ],
+  ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?></script>
+
   <link rel="stylesheet" href="<?= e(asset_url('/assets/css/app.css')) ?>">
   <?= pwa_head_tags() ?>
 </head>

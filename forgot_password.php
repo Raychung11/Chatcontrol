@@ -118,6 +118,7 @@ HTML;
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
     <title>Forgot password · <?= e(APP_NAME) ?></title>
     <link rel="stylesheet" href="<?= e(asset_url('/assets/css/app.css')) ?>">
 </head>

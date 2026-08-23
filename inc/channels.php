@@ -100,3 +100,97 @@ function channel_generate_webhook_token(): string
 {
     return substr(bin2hex(random_bytes(24)), 0, 48);
 }
+
+/**
+ * Detect channels that appear to have stopped receiving inbound
+ * messages. Called from the inbox / dashboard to render a warning
+ * banner the operator sees the moment they open the app — the
+ * common "5 hours of chat went missing" moment.
+ *
+ * A channel is flagged when ALL of these are true:
+ *   - It's active (channels.status = 'active')
+ *   - It's a real inbound provider (not web_chat, which is
+ *     entry-point rather than a listener that can go silent)
+ *   - It has received at least one inbound message historically
+ *     (so a brand-new never-used channel doesn't false-alarm)
+ *   - The last inbound was more than $staleHours ago
+ *
+ * Returns [ { channel_id, name, provider, minutes_since,
+ *             last_inbound_at, total_recent } ] sorted by
+ * minutes_since DESC (worst offender first).
+ *
+ * Cheap: two prepared queries per channel is overkill on a page
+ * with 20+ channels, so we do it in ONE SQL round-trip with an
+ * INNER JOIN + LEFT JOIN.
+ */
+function channels_stale_ingestion(int $companyId, int $staleHours = 6): array
+{
+    if ($companyId <= 0) return [];
+    try {
+        $stmt = aiserve_db()->prepare(
+            "SELECT c.id AS channel_id, c.name, c.provider,
+                    MAX(m.created_at) AS last_inbound_at,
+                    SUM(m.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)) AS recent_count
+             FROM channels c
+             INNER JOIN messages m
+                ON m.channel_id = c.id
+               AND m.direction  = 'incoming'
+             WHERE c.company_id = ?
+               AND c.status     = 'active'
+               AND c.provider IN ('cloud_api', 'evolution', 'aiserve_chatbot',
+                                  'facebook_page', 'instagram_business')
+             GROUP BY c.id, c.name, c.provider
+             HAVING recent_count > 0
+                AND last_inbound_at < DATE_SUB(NOW(), INTERVAL ? HOUR)
+             ORDER BY last_inbound_at ASC"
+        );
+        $stmt->execute([$companyId, $staleHours]);
+        $rows = $stmt->fetchAll();
+    } catch (Throwable $e) {
+        error_log('[AiServe channels_stale_ingestion] ' . $e->getMessage());
+        return [];
+    }
+    $now = time();
+    foreach ($rows as &$r) {
+        $lastTs = db_datetime_to_ts((string)$r['last_inbound_at']) ?? 0;
+        $r['minutes_since']    = max(0, (int)round(($now - $lastTs) / 60));
+        $r['total_recent']     = (int)$r['recent_count'];
+    }
+    return $rows;
+}
+
+/**
+ * Render the stale-channel warning banner as a string of HTML. Empty
+ * string when there's nothing to warn about. Kept as a helper so
+ * every page (inbox, dashboard, F&B orders) can drop it in with one
+ * call and stay consistent. Uses only inline styles so it works
+ * without page-specific CSS.
+ */
+function channels_stale_banner_html(int $companyId, int $staleHours = 6): string
+{
+    $stale = channels_stale_ingestion($companyId, $staleHours);
+    if (!$stale) return '';
+
+    $lines = [];
+    foreach ($stale as $s) {
+        $hrs = (int)floor($s['minutes_since'] / 60);
+        $mins = (int)$s['minutes_since'] % 60;
+        $ago = $hrs > 0 ? ($hrs . 'h ' . $mins . 'm') : ($mins . 'm');
+        $lines[] = '<strong>' . htmlspecialchars((string)$s['name'], ENT_QUOTES, 'UTF-8')
+                 . '</strong> <span style="opacity:.75;">(' . htmlspecialchars((string)$s['provider'], ENT_QUOTES, 'UTF-8') . ')</span>'
+                 . ' — last inbound <strong>' . $ago . '</strong> ago';
+    }
+    $body = implode('<br>', $lines);
+
+    return '<div class="alert-stale-channels" style="margin: 0 0 12px 0; padding: 12px 14px;'
+         . ' background: #fef2f2; border: 1px solid #fca5a5; border-radius: 10px;'
+         . ' color: #7f1d1d; font-size: 13.5px; line-height: 1.5;">'
+         . '<div style="display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap;">'
+         . '<span style="font-size:22px; line-height:1;">⚠️</span>'
+         . '<div style="flex:1; min-width:0;">'
+         . '<strong style="color:#991b1b;">Channel silence detected — messages may be stuck at the gateway.</strong><br>'
+         . $body . '<br>'
+         . '<span style="color:#7c2d12;">Check the provider dashboard: WhatsApp Cloud API webhook status, Evolution QR reconnect, or aiserve_chatbot delivery queue. '
+         . '<a href="/admin/channels_health.php" style="color:#991b1b;">Run health checks →</a></span>'
+         . '</div></div></div>';
+}

@@ -191,6 +191,13 @@ $palette = ['#16A34A', '#2563EB', '#9333EA', '#F59E0B', '#EA580C', '#0891B2', '#
 
 layout_start($current_user, 'Dashboard', 'dashboard');
 ?>
+<?php
+// Ingestion-health banner — same helper the inbox uses. Surfaces the
+// "channel silently stopped receiving messages" case at the top of
+// the boss's dashboard so gateway outages get spotted BEFORE the
+// operations team notices the drop in conversations.
+echo channels_stale_banner_html($companyId, 6);
+?>
 
 <style>
 :root {

@@ -79,7 +79,7 @@ if (in_array($role, ['super_admin', 'manager'], true) && !empty($current_user['c
 $sb_groups = [
     'messaging' => ['templates', 'auto_replies', 'broadcasts', 'flows', 'knowledge', 'kb_coverage', 'tags'],
     'reports'   => ['reports', 'topics', 'ai_usage'],
-    'workspace' => ['channels', 'webchat', 'users', 'departments', 'branches', 'routing'],
+    'workspace' => ['channels', 'channels_health', 'webchat', 'users', 'departments', 'branches', 'routing'],
     'settings'  => ['settings', 'ai_settings', 'plan', 'my_invoices'],
     'fnb'       => ['fnb_orders', 'fnb_menu', 'fnb_analytics', 'fnb_flow_debug'],
     'platform'  => ['workspaces', 'channels_debug', 'ai_billing', 'invoices',
@@ -166,7 +166,8 @@ $fnbActive = fnb_module_active((int)($current_user['company_id'] ?? 0));
       <!-- ============ 🏢 Workspace setup ============ -->
       <details class="nav-group" data-group="workspace"<?= $sb_openGroup('workspace') ?>>
         <summary>🏢 Workspace</summary>
-        <a href="/admin/channels.php"    class="<?= $active === 'channels'    ? 'active' : '' ?>">Channels</a>
+        <a href="/admin/channels.php"        class="<?= $active === 'channels'        ? 'active' : '' ?>">Channels</a>
+        <a href="/admin/channels_health.php" class="<?= $active === 'channels_health' ? 'active' : '' ?>">🩺 Channel health</a>
         <a href="/admin/webchat.php"     class="<?= $active === 'webchat'     ? 'active' : '' ?>">💬 Web chat widget</a>
         <a href="/admin/users.php"       class="<?= $active === 'users'       ? 'active' : '' ?>">Users</a>
         <a href="/admin/departments.php" class="<?= $active === 'departments' ? 'active' : '' ?>">Departments</a>

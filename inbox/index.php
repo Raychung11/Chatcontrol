@@ -42,6 +42,14 @@ if (in_array($current_user['role'] ?? 'agent', ['super_admin', 'manager'], true)
 
 layout_start($current_user, 'Inbox', 'inbox');
 ?>
+<?php
+// Ingestion-health banner: if any active real-provider channel has
+// stopped receiving inbound messages for >6h AND normally does, the
+// operator sees a red banner before they even start scanning the
+// conversation list. The moment "we haven't gotten a lead in half a
+// day" turns from a customer complaint into a self-diagnosable event.
+echo channels_stale_banner_html($companyId, 6);
+?>
 <div class="inbox-shell"
      data-poll-scope="inbox"
      data-filter="<?= e($filter) ?>"

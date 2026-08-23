@@ -220,29 +220,80 @@ function log_activity(int $companyId, ?int $userId, string $actionType, ?string 
 }
 
 // -------------------- Datetime --------------------
+
+/**
+ * Correction in seconds between what PHP's strtotime() thinks a DB
+ * timestamp string means and what MySQL actually meant when it wrote
+ * that value. Zero on a correctly-configured VPS (MySQL session
+ * time_zone matches PHP's APP_TIMEZONE) — non-zero on a Hostinger-
+ * style install where MySQL is stuck in UTC despite our SET time_zone,
+ * so every 'X min ago' label was 7-8 hours off.
+ *
+ * Computed once per request by sampling MySQL's NOW() alongside its
+ * UNIX_TIMESTAMP(NOW()) — the difference between PHP's parse and the
+ * server's actual epoch is exactly the correction we need. Cached so
+ * we hit the DB at most once even on a page that renders 1,000
+ * conversation rows.
+ */
+function db_time_correction(): int
+{
+    static $offset = null;
+    if ($offset !== null) return $offset;
+    try {
+        $row = aiserve_db()->query(
+            'SELECT DATE_FORMAT(NOW(), "%Y-%m-%d %H:%i:%s") AS s,
+                    UNIX_TIMESTAMP(NOW()) AS ts'
+        )->fetch();
+        if ($row) {
+            $phpParse = strtotime((string)$row['s']);
+            $mysqlTs  = (int)$row['ts'];
+            if ($phpParse !== false && $mysqlTs > 0) {
+                // How many seconds off PHP's interpretation is from
+                // reality. Positive means PHP over-reads (i.e. treats
+                // a UTC string as local — the common case). We
+                // subtract this from every parse to correct.
+                $offset = $phpParse - $mysqlTs;
+                return $offset;
+            }
+        }
+    } catch (Throwable $e) { /* leave uncorrected */ }
+    $offset = 0;
+    return $offset;
+}
+
+/**
+ * Parse a DB datetime string into a UNIX timestamp, corrected for any
+ * MySQL session timezone drift. Prefer this over raw strtotime() when
+ * the input came out of the database.
+ */
+function db_datetime_to_ts(?string $datetime): ?int
+{
+    if (!$datetime) return null;
+    $ts = strtotime($datetime);
+    if ($ts === false) return null;
+    return $ts - db_time_correction();
+}
+
 function fmt_dt(?string $datetime, string $fmt = 'Y-m-d H:i'): string
 {
-    if (!$datetime) {
-        return '';
-    }
+    if (!$datetime) return '';
+    $ts = db_datetime_to_ts($datetime);
+    if ($ts === null) return (string)$datetime;
     try {
-        $d = new DateTime($datetime, new DateTimeZone(APP_TIMEZONE));
+        $d = (new DateTime('@' . $ts))->setTimezone(new DateTimeZone(APP_TIMEZONE));
         return $d->format($fmt);
     } catch (Throwable $e) {
-        return $datetime;
+        return (string)$datetime;
     }
 }
 
 function relative_time(?string $datetime): string
 {
-    if (!$datetime) {
-        return '';
-    }
-    $ts = strtotime($datetime);
-    if ($ts === false) {
-        return '';
-    }
+    if (!$datetime) return '';
+    $ts = db_datetime_to_ts($datetime);
+    if ($ts === null) return '';
     $diff = time() - $ts;
+    if ($diff < 0)         return 'now';
     if ($diff < 60)        return $diff . 's';
     if ($diff < 3600)      return floor($diff / 60) . 'm';
     if ($diff < 86400)     return floor($diff / 3600) . 'h';

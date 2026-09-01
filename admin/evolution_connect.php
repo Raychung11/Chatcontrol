@@ -1,58 +1,83 @@
 <?php
+/**
+ * /admin/evolution_connect.php — self-serve WhatsApp pairing.
+ *
+ * Workspace super_admin (or manager) picks one of their existing
+ * Evolution channel rows, scans a QR from the paired phone, and the
+ * portal wires up the webhook back to itself. No platform-admin
+ * involvement needed.
+ *
+ * Backends:
+ *   POST action=test       — probes /instance/connectionState to
+ *                            verify base URL + API key are correct
+ *   POST action=create     — POST /instance/create to spin up a new
+ *                            Baileys session inside Evolution, then
+ *                            POST /webhook/set to register OUR
+ *                            /webhook/evolution.php as the target
+ *   POST action=qr         — fetch the pair-code + QR PNG from
+ *                            /instance/connect/<name>
+ *   POST action=state      — poll /instance/connectionState; caches
+ *                            the result on the channel row so the
+ *                            channels_health page reflects it too
+ *   POST action=logout     — DELETE /instance/logout/<name> to end
+ *                            the current WhatsApp session (e.g. before
+ *                            re-pairing a different phone)
+ *   POST action=webhook    — re-register the webhook (idempotent)
+ *
+ * Every action is scoped to a channel_id that the current workspace
+ * owns — no cross-workspace peek possible.
+ */
 require_once __DIR__ . '/../inc/layout.php';
+require_once __DIR__ . '/../inc/channels.php';
 require_once __DIR__ . '/../inc/evolution_api.php';
 
-$current_user = require_role(['super_admin']);
-if (!is_platform_admin()) {
-    http_response_code(403);
-    exit('This page is reserved for platform administrators.');
-}
+$current_user = require_role(['super_admin', 'manager']);
 $companyId    = (int)$current_user['company_id'];
 $db           = aiserve_db();
 
-function evo_company(PDO $db, int $id): array
+/** Load a channel row, scoped to this workspace, or return null. */
+function evo_channel(PDO $db, int $channelId, int $companyId): ?array
 {
-    $s = $db->prepare('SELECT * FROM companies WHERE id = ?');
-    $s->execute([$id]);
-    return $s->fetch() ?: [];
+    if ($channelId <= 0) return null;
+    $s = $db->prepare(
+        "SELECT * FROM channels
+         WHERE id = ? AND company_id = ? AND provider = 'evolution' LIMIT 1"
+    );
+    $s->execute([$channelId, $companyId]);
+    return $s->fetch() ?: null;
 }
 
-// ---- JSON action handler (driven by the wizard JS) ----
+/** Compute the public webhook URL this portal advertises to Evolution. */
+function evo_webhook_url(array $channel): string
+{
+    $base = defined('APP_BASE_URL') && APP_BASE_URL !== ''
+        ? rtrim((string)APP_BASE_URL, '/')
+        : ((!empty($_SERVER['HTTPS']) ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? ''));
+    return $base . '/webhook/evolution.php?ch=' . rawurlencode((string)($channel['webhook_token'] ?? ''));
+}
+
+// ==============================================================
+// JSON action handler — driven by the wizard JS below
+// ==============================================================
 if (is_post() && !empty($_POST['action'])) {
     csrf_check();
     header('Content-Type: application/json; charset=utf-8');
-    $action  = (string)$_POST['action'];
-    $company = evo_company($db, $companyId);
+
+    $action = (string)$_POST['action'];
+    $chId   = (int)($_POST['channel_id'] ?? 0);
+    $ch     = evo_channel($db, $chId, $companyId);
+    if (!$ch) {
+        echo json_encode(['ok' => false, 'error' => 'Channel not found or not owned by this workspace.']);
+        exit;
+    }
 
     switch ($action) {
 
-        case 'save_config':
-            $base     = trim((string)($_POST['evolution_base_url'] ?? ''));
-            $instance = trim((string)($_POST['evolution_instance'] ?? ''));
-            $apiKey   = trim((string)($_POST['evolution_api_key']  ?? ''));
-            if ($apiKey === '') {
-                $apiKey = (string)($company['evolution_api_key'] ?? '');
-            }
-            if ($base === '' || $instance === '' || $apiKey === '') {
-                echo json_encode(['ok' => false, 'error' => 'Base URL, instance, and API key are all required.']);
-                exit;
-            }
-            $base = rtrim($base, '/');
-            $db->prepare(
-                'UPDATE companies
-                 SET provider = "evolution",
-                     evolution_base_url = ?, evolution_instance = ?, evolution_api_key = ?
-                 WHERE id = ?'
-            )->execute([$base, $instance, $apiKey, $companyId]);
-            log_activity($companyId, (int)$current_user['id'], 'evolution_config_saved', 'company', $companyId);
-            echo json_encode(['ok' => true]);
-            exit;
-
         case 'test':
-            // A lightweight reachability check: connectionState returns even
-            // when the instance doesn't exist yet (404), which still proves
-            // the server + API key are valid.
-            $r = evolution_connection_state($company);
+            // Reachability + auth check. 404 from connectionState still
+            // proves the server + key work — it just means the instance
+            // doesn't exist yet, which we'll create next.
+            $r = evolution_connection_state($ch);
             echo json_encode([
                 'ok'    => $r['ok'] || ($r['error'] ?? '') === 'HTTP 404',
                 'state' => $r['state'] ?? 'unknown',
@@ -61,217 +86,286 @@ if (is_post() && !empty($_POST['action'])) {
             exit;
 
         case 'create':
-            $r = evolution_create_instance($company);
-            $webhookUrl = (APP_BASE_URL ?: ((!empty($_SERVER['HTTPS']) ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? '')))
-                        . '/webhook/evolution.php?token=' . urlencode((string)($company['webhook_verify_token'] ?? ''));
-            $wh = evolution_set_webhook($company, $webhookUrl);
-            echo json_encode(['ok' => $r['ok'], 'error' => $r['error'] ?? null,
-                              'webhook_ok' => $wh['ok'] ?? false, 'webhook_url' => $webhookUrl]);
+            // Create the Baileys session inside Evolution, then wire our
+            // webhook so future MESSAGES_UPSERT events reach us.
+            $r  = evolution_create_instance($ch);
+            $wh = evolution_set_webhook($ch, evo_webhook_url($ch));
+            log_activity($companyId, (int)$current_user['id'], 'evolution_instance_created',
+                         'channel', $chId, evolution_instance_name($ch));
+            echo json_encode([
+                'ok'          => $r['ok'],
+                'error'       => $r['error'] ?? null,
+                'webhook_ok'  => $wh['ok'] ?? false,
+                'webhook_url' => evo_webhook_url($ch),
+            ]);
             exit;
 
         case 'qr':
-            echo json_encode(evolution_get_qr($company));
+            // Returns { ok, qrcode_base64, pairing_code, ... } — the JS
+            // renders qrcode_base64 as an <img>.
+            echo json_encode(evolution_get_qr($ch));
+            exit;
+
+        case 'webhook':
+            $wh = evolution_set_webhook($ch, evo_webhook_url($ch));
+            echo json_encode([
+                'ok'          => $wh['ok'] ?? false,
+                'webhook_url' => evo_webhook_url($ch),
+                'error'       => $wh['error'] ?? null,
+            ]);
             exit;
 
         case 'state':
-            $r = evolution_connection_state($company);
+            // Poll every ~3s while pairing. Also cache the result on
+            // the channel row so /admin/channels_health.php reflects
+            // the live probe state between health-ping-cron ticks.
+            $r = evolution_connection_state($ch);
             if ($r['ok']) {
-                $db->prepare('UPDATE companies SET evolution_status = ? WHERE id = ?')
-                   ->execute([$r['state'], $companyId]);
+                $mapToProbe = [
+                    'connected'    => 'connected',
+                    'connecting'   => 'connecting',
+                    'disconnected' => 'disconnected',
+                ];
+                $probe = $mapToProbe[$r['state']] ?? 'unknown';
+                $prev  = (string)($ch['probe_state'] ?? 'unknown');
+                if ($prev !== $probe) {
+                    $db->prepare(
+                        'UPDATE channels
+                         SET probe_state = ?, probe_state_since = NOW(), probe_last_at = NOW()
+                         WHERE id = ? LIMIT 1'
+                    )->execute([$probe, $chId]);
+                } else {
+                    $db->prepare('UPDATE channels SET probe_last_at = NOW() WHERE id = ? LIMIT 1')
+                       ->execute([$chId]);
+                }
             }
             echo json_encode($r);
             exit;
 
         case 'logout':
-            $r = evolution_logout_instance($company);
-            $db->prepare('UPDATE companies SET evolution_status = "disconnected" WHERE id = ?')
-               ->execute([$companyId]);
-            log_activity($companyId, (int)$current_user['id'], 'evolution_logout', 'company', $companyId);
-            echo json_encode(['ok' => true, 'raw' => $r['raw'] ?? null]);
+            $r = evolution_logout_instance($ch);
+            log_activity($companyId, (int)$current_user['id'], 'evolution_instance_logout',
+                         'channel', $chId);
+            echo json_encode($r);
             exit;
     }
-    echo json_encode(['ok' => false, 'error' => 'Unknown action']);
+
+    echo json_encode(['ok' => false, 'error' => 'Unknown action.']);
     exit;
 }
 
-$company    = evo_company($db, $companyId);
-$verifyTok  = (string)($company['webhook_verify_token'] ?? '');
-$webhookUrl = (APP_BASE_URL ?: ((!empty($_SERVER['HTTPS']) ? 'https://' : 'http://') . ($_SERVER['HTTP_HOST'] ?? '')))
-            . '/webhook/evolution.php?token=' . urlencode($verifyTok);
+// ==============================================================
+// HTML wizard
+// ==============================================================
+$channels = $db->prepare(
+    "SELECT id, name, evolution_base_url, evolution_api_key, evolution_instance,
+            probe_state, probe_last_at, display_phone
+     FROM channels
+     WHERE company_id = ? AND provider = 'evolution'
+     ORDER BY id ASC"
+);
+$channels->execute([$companyId]);
+$channels = $channels->fetchAll();
 
-layout_start($current_user, 'Connect WhatsApp (Evolution)', 'evolution_connect');
+$selectedId = (int)($_GET['channel_id'] ?? ($channels[0]['id'] ?? 0));
+$selected   = null;
+foreach ($channels as $c) if ((int)$c['id'] === $selectedId) $selected = $c;
+
+layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect');
 ?>
-<div class="card">
-  <h2>Connect WhatsApp via Evolution</h2>
-  <p class="muted">
-    Evolution is a self-hosted, unofficial WhatsApp gateway. No number migration needed —
-    it pairs like WhatsApp Web. Follow the 4 steps below. Need a server first?
-    See the <a href="/docs/EVOLUTION.md" target="_blank">self-host guide</a>.
+<style>
+.ec-shell { max-width: 900px; }
+.ec-picker { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+.ec-picker select { padding:8px 10px; font-size:14px; border:1px solid #d0d7de; border-radius:6px; min-width:280px; }
+.ec-state-row {
+  display:flex; gap:12px; align-items:center; padding:12px 14px;
+  background:#fff; border:1px solid #e3e8ee; border-radius:10px;
+  margin-bottom:12px; flex-wrap:wrap;
+}
+.ec-dot { width:12px; height:12px; border-radius:50%; display:inline-block; }
+.ec-dot.connected  { background:#16A34A; box-shadow:0 0 0 3px rgba(22,163,74,.18); }
+.ec-dot.connecting { background:#F59E0B; }
+.ec-dot.disconnected { background:#DC2626; box-shadow:0 0 0 3px rgba(220,38,38,.15); }
+.ec-dot.unknown    { background:#94a3b8; }
+.ec-actions { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+.ec-actions button { padding:8px 14px; border-radius:8px; border:1px solid #d0d7de; background:#fff; cursor:pointer; font-size:13.5px; }
+.ec-actions button.primary { background:#25D366; color:#fff; border-color:#25D366; }
+.ec-actions button.danger  { color:#DC2626; border-color:#fca5a5; background:#fff; }
+.ec-actions button:disabled { opacity:.5; cursor:not-allowed; }
+.ec-qr {
+  background:#fff; border:1px solid #e3e8ee; border-radius:12px;
+  padding:20px; text-align:center; margin-bottom:12px;
+}
+.ec-qr img { width:280px; height:280px; display:block; margin:0 auto; }
+.ec-qr .code { margin-top:10px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:18px; letter-spacing:.15em; color:#0f172a; }
+.ec-hint { color:#475569; font-size:13px; line-height:1.5; }
+.ec-log {
+  background:#0f172a; color:#e2e8f0; border-radius:8px; padding:10px 14px;
+  font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
+  margin-top:12px; max-height:180px; overflow-y:auto; white-space:pre-wrap;
+}
+</style>
+
+<div class="ec-shell">
+  <h1>📱 Pair WhatsApp <span class="muted small">(Evolution / Baileys)</span></h1>
+  <p class="ec-hint">
+    Pair a WhatsApp number to one of your Evolution channels. Requires the channel to already have its
+    Base URL, API key, and instance name filled in on <a href="/admin/channels.php">Channels</a>.
   </p>
-  <?php if (empty($verifyTok)): ?>
-    <div class="alert alert-error">
-      Set a <strong>Webhook verify token</strong> on the channel at
-      <a href="/admin/channels.php">Admin → Channels</a> first —
-      it secures the Evolution → portal webhook.
+
+  <?php if (!$channels): ?>
+    <div class="alert alert-info">
+      No Evolution channels yet. Go to <a href="/admin/channels.php">Channels → + New channel</a>,
+      pick <strong>evolution</strong> as the provider, then come back here.
     </div>
+  <?php else: ?>
+    <form method="get" class="ec-picker">
+      <label>Channel:</label>
+      <select name="channel_id" onchange="this.form.submit()">
+        <?php foreach ($channels as $c): ?>
+          <option value="<?= (int)$c['id'] ?>" <?= (int)$c['id'] === $selectedId ? 'selected' : '' ?>>
+            #<?= (int)$c['id'] ?> · <?= e((string)$c['name']) ?>
+            <?php if (!empty($c['display_phone'])): ?>· <?= e((string)$c['display_phone']) ?><?php endif; ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
+    </form>
+
+    <?php if ($selected): ?>
+      <div class="ec-state-row">
+        <span class="ec-dot <?= e((string)($selected['probe_state'] ?? 'unknown')) ?>" id="ec-dot"></span>
+        <strong id="ec-state-label">
+          <?= e(ucfirst((string)($selected['probe_state'] ?? 'unknown'))) ?>
+        </strong>
+        <span class="muted small">·</span>
+        <span class="muted small">Instance: <code><?= e((string)$selected['evolution_instance']) ?></code></span>
+        <span class="muted small">·</span>
+        <span class="muted small">Base: <code><?= e((string)$selected['evolution_base_url']) ?></code></span>
+      </div>
+
+      <div class="ec-actions">
+        <button type="button" id="ec-test">1. Test connection</button>
+        <button type="button" id="ec-create" class="primary">2. Create instance + webhook</button>
+        <button type="button" id="ec-qr" class="primary">3. Show QR to pair</button>
+        <button type="button" id="ec-webhook">Re-register webhook</button>
+        <button type="button" id="ec-logout" class="danger">Log out (end session)</button>
+      </div>
+
+      <div id="ec-qr-panel" class="ec-qr" style="display:none;">
+        <img id="ec-qr-img" src="" alt="Pair WhatsApp QR">
+        <div class="code" id="ec-qr-code"></div>
+        <div class="ec-hint" style="margin-top:8px;">
+          On the phone: <strong>WhatsApp → Menu → Linked devices → Link a device</strong> → scan this QR.
+          <br>QR refreshes every 30 seconds. Once paired, the dot turns 🟢 green above.
+        </div>
+      </div>
+
+      <div class="ec-log" id="ec-log">Ready. Click <strong>1. Test connection</strong> to start.</div>
+
+      <script>
+      (function () {
+        const chId = <?= (int)$selected['id'] ?>;
+        const csrf = <?= json_encode(csrf_token()) ?>;
+
+        const $ = id => document.getElementById(id);
+        const dot   = $('ec-dot'), label = $('ec-state-label'), logEl = $('ec-log');
+        const qrPanel = $('ec-qr-panel'), qrImg = $('ec-qr-img'), qrCode = $('ec-qr-code');
+
+        function log(line, kind) {
+          const ts = new Date().toLocaleTimeString();
+          const color = kind === 'err' ? '#f87171' : kind === 'ok' ? '#4ade80' : '#93c5fd';
+          logEl.innerHTML += `\n<span style="color:${color};">[${ts}] ${line}</span>`;
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+        async function call(action, extra = {}) {
+          const fd = new FormData();
+          fd.append('_csrf', csrf);
+          fd.append('action', action);
+          fd.append('channel_id', chId);
+          for (const [k, v] of Object.entries(extra)) fd.append(k, v);
+          const res  = await fetch(window.location.pathname, { method: 'POST', body: fd });
+          const text = await res.text();
+          try { return JSON.parse(text); } catch (e) { return { ok: false, error: 'Bad JSON: ' + text.slice(0, 200) }; }
+        }
+        function setState(state) {
+          dot.className = 'ec-dot ' + (state || 'unknown');
+          label.textContent = state ? state[0].toUpperCase() + state.slice(1) : 'Unknown';
+          if (state === 'connected') {
+            qrPanel.style.display = 'none';
+            log('🎉 Paired! You can close this page.', 'ok');
+          }
+        }
+
+        $('ec-test').onclick = async () => {
+          log('Testing base URL + API key…');
+          const r = await call('test');
+          if (r.ok) log('✓ Reachable. Current state: ' + (r.state || 'unknown'), 'ok');
+          else      log('✗ ' + (r.error || 'Unreachable'), 'err');
+        };
+
+        $('ec-create').onclick = async () => {
+          log('Creating Evolution instance + registering webhook…');
+          const r = await call('create');
+          if (r.ok || r.error === null) {
+            log('✓ Instance created (or already exists)', 'ok');
+            log('✓ Webhook registered → ' + (r.webhook_url || '?'), 'ok');
+          } else {
+            log('✗ Create failed: ' + r.error, 'err');
+          }
+        };
+
+        $('ec-qr').onclick = async () => {
+          log('Fetching QR…');
+          const r = await call('qr');
+          if (r.qrcode_base64 || (r.base64 && r.base64.startsWith('data:'))) {
+            const img = r.qrcode_base64 || r.base64;
+            qrImg.src = img.startsWith('data:') ? img : ('data:image/png;base64,' + img);
+            if (r.pairing_code || r.code) qrCode.textContent = r.pairing_code || r.code;
+            qrPanel.style.display = 'block';
+            log('✓ QR ready — scan from WhatsApp → Linked devices', 'ok');
+            startPolling();
+          } else if (r.count && r.count > 0) {
+            log('Instance is already paired (state should show connected).', 'ok');
+          } else {
+            log('✗ Could not fetch QR: ' + (r.error || JSON.stringify(r)).slice(0, 200), 'err');
+          }
+        };
+
+        $('ec-webhook').onclick = async () => {
+          log('Re-registering webhook…');
+          const r = await call('webhook');
+          if (r.ok) log('✓ Webhook set → ' + r.webhook_url, 'ok');
+          else      log('✗ ' + (r.error || 'failed'), 'err');
+        };
+
+        $('ec-logout').onclick = async () => {
+          if (!confirm('Log this WhatsApp number out of Evolution? You\'ll need to re-scan a QR to pair again.')) return;
+          log('Logging out…');
+          const r = await call('logout');
+          if (r.ok) { log('✓ Logged out', 'ok'); setState('disconnected'); }
+          else      log('✗ ' + (r.error || 'failed'), 'err');
+        };
+
+        // Live poll — cheap, only runs while the tab is visible.
+        let pollTimer = null;
+        function startPolling() {
+          if (pollTimer) return;
+          pollTimer = setInterval(async () => {
+            if (document.hidden) return;
+            const r = await call('state');
+            if (r.ok) setState(r.state);
+          }, 3000);
+        }
+        // Kick off one immediate probe on load so the dot reflects reality.
+        (async () => {
+          const r = await call('state');
+          if (r.ok) setState(r.state);
+          if (r.state !== 'connected') startPolling();
+        })();
+      })();
+      </script>
+    <?php endif; ?>
   <?php endif; ?>
 </div>
 
-<div class="card wizard-step" id="step-1">
-  <h3>Step 1 — Evolution server details</h3>
-  <form id="cfg-form" class="form-grid">
-    <?= csrf_field() ?>
-    <input type="hidden" name="action" value="save_config">
-    <label>Evolution server base URL
-      <input type="url" name="evolution_base_url" required
-             value="<?= e($company['evolution_base_url'] ?? '') ?>"
-             placeholder="https://evo.your-server.com">
-    </label>
-    <label>Instance name
-      <input type="text" name="evolution_instance" required
-             value="<?= e($company['evolution_instance'] ?? 'aiserve-prod') ?>"
-             placeholder="aiserve-prod">
-    </label>
-    <label>API key <?= !empty($company['evolution_api_key']) ? '(leave blank to keep existing)' : '' ?>
-      <input type="password" name="evolution_api_key" autocomplete="new-password"
-             placeholder="AUTHENTICATION_API_KEY from your Evolution .env">
-      <?php if (!empty($company['evolution_api_key'])): ?>
-        <small class="muted">Currently set: <code><?= e(substr($company['evolution_api_key'], 0, 6)) ?>…</code></small>
-      <?php endif; ?>
-    </label>
-    <div>
-      <button class="btn btn-primary" type="submit">Save &amp; switch provider to Evolution</button>
-      <span id="cfg-status" class="muted small"></span>
-    </div>
-  </form>
-</div>
-
-<div class="card wizard-step" id="step-2">
-  <h3>Step 2 — Test connection</h3>
-  <p class="muted small">Confirms the portal can reach your Evolution server with the API key.</p>
-  <button class="btn" id="btn-test">Test connection</button>
-  <span id="test-status" class="muted small"></span>
-</div>
-
-<div class="card wizard-step" id="step-3">
-  <h3>Step 3 — Create instance &amp; register webhook</h3>
-  <p class="muted small">
-    Creates the instance on Evolution (if needed) and points its webhook at:<br>
-    <code><?= e($webhookUrl) ?></code>
-  </p>
-  <button class="btn" id="btn-create">Create / prepare instance</button>
-  <span id="create-status" class="muted small"></span>
-</div>
-
-<div class="card wizard-step" id="step-4">
-  <h3>Step 4 — Scan QR to pair</h3>
-  <p class="muted small">
-    On the phone with your business number:
-    <strong>WhatsApp → Settings → Linked devices → Link a device</strong> → scan below.
-  </p>
-  <div class="pair-actions">
-    <button class="btn btn-primary" id="btn-qr">Show / refresh QR</button>
-    <button class="btn btn-danger" id="btn-logout">Disconnect</button>
-    <span id="pair-pill" class="badge badge-default">unknown</span>
-  </div>
-  <div id="qr-wrap" class="qr-wrap hidden">
-    <img id="qr-image" alt="WhatsApp pairing QR">
-    <p id="pair-code" class="muted small"></p>
-  </div>
-</div>
-
-<style>
-.wizard-step h3 { margin: 0 0 8px; }
-.pair-actions { display: flex; gap: 10px; align-items: center; margin: 12px 0; }
-.qr-wrap { text-align: center; padding: 20px; background: #fff; border: 1px solid var(--c-border); border-radius: 8px; }
-.qr-wrap img { max-width: 280px; border: 1px solid var(--c-border); border-radius: 6px; }
-.evo-state-connected   { background:#e8f7ee; color:#1f7a3f; }
-.evo-state-connecting  { background:#fff3e0; color:#b25c00; }
-.evo-state-disconnected{ background:#fdecea; color:#b3261e; }
-.ok-text  { color:#1f7a3f; } .err-text { color:#b3261e; }
-</style>
-
-<script>
-(function () {
-  const csrf = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-  function call(payload) {
-    const fd = new FormData();
-    Object.keys(payload).forEach(k => fd.append(k, payload[k]));
-    fd.append('_csrf', csrf);
-    return fetch('/admin/evolution_connect.php', { method: 'POST', body: fd }).then(r => r.json());
-  }
-
-  // Step 1
-  const cfgForm = document.getElementById('cfg-form');
-  cfgForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const s = document.getElementById('cfg-status');
-    s.textContent = 'Saving…'; s.className = 'muted small';
-    const fd = new FormData(cfgForm);
-    const r = await call(Object.fromEntries(fd.entries()));
-    if (r.ok) { s.textContent = 'Saved. Provider set to Evolution.'; s.className = 'small ok-text'; }
-    else { s.textContent = r.error || 'Failed'; s.className = 'small err-text'; }
-  });
-
-  // Step 2
-  document.getElementById('btn-test').addEventListener('click', async () => {
-    const s = document.getElementById('test-status');
-    s.textContent = 'Testing…'; s.className = 'muted small';
-    const r = await call({ action: 'test' });
-    if (r.ok) { s.textContent = '✓ Server reachable (state: ' + (r.state || '?') + ')'; s.className = 'small ok-text'; }
-    else { s.textContent = '✗ ' + (r.error || 'Unreachable'); s.className = 'small err-text'; }
-  });
-
-  // Step 3
-  document.getElementById('btn-create').addEventListener('click', async () => {
-    const s = document.getElementById('create-status');
-    s.textContent = 'Working…'; s.className = 'muted small';
-    const r = await call({ action: 'create' });
-    if (r.ok) {
-      s.textContent = '✓ Instance ready' + (r.webhook_ok ? ' · webhook registered' : ' · webhook NOT set (set it manually in Evolution)');
-      s.className = 'small ' + (r.webhook_ok ? 'ok-text' : 'err-text');
-    } else { s.textContent = '✗ ' + (r.error || 'Failed'); s.className = 'small err-text'; }
-  });
-
-  // Step 4
-  const qrWrap = document.getElementById('qr-wrap');
-  const qrImg  = document.getElementById('qr-image');
-  const pill   = document.getElementById('pair-pill');
-  let timer = null;
-
-  async function refreshState() {
-    const r = await call({ action: 'state' });
-    const st = (r && r.state) || 'unknown';
-    pill.textContent = st;
-    pill.className = 'badge evo-state-' + st;
-    if (st === 'connected') { qrWrap.classList.add('hidden'); stop(); }
-  }
-  async function showQr() {
-    const r = await call({ action: 'qr' });
-    if (r.ok && r.qr) {
-      qrImg.src = 'data:image/png;base64,' + r.qr;
-      qrWrap.classList.remove('hidden');
-      document.getElementById('pair-code').textContent =
-        r.pairing ? ('Or pairing code: ' + r.pairing) : '';
-      start();
-    } else if (r.ok && !r.qr) {
-      qrWrap.classList.add('hidden');
-      refreshState();
-    } else {
-      alert('Could not get QR: ' + (r.error || 'unknown'));
-    }
-  }
-  function start() { stop(); timer = setInterval(refreshState, 3000); }
-  function stop()  { if (timer) { clearInterval(timer); timer = null; } }
-
-  document.getElementById('btn-qr').addEventListener('click', showQr);
-  document.getElementById('btn-logout').addEventListener('click', async () => {
-    if (!confirm('Disconnect this WhatsApp number from Evolution?')) return;
-    await call({ action: 'logout' });
-    refreshState();
-  });
-
-  refreshState();
-})();
-</script>
 <?php layout_end(); ?>

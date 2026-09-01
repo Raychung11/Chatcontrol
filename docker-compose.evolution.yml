@@ -43,7 +43,7 @@ services:
       CACHE_REDIS_PREFIX_KEY: aiserve
 
       # Auth - rotate this key and put it in your portal Settings.
-      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-please-change-me}
+      AUTHENTICATION_API_KEY: ${AUTHENTICATION_API_KEY:-please-change-me}
       AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
 
       # CORS - restrict to your portal domain in production.

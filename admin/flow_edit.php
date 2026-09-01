@@ -64,7 +64,7 @@ if (is_post()) {
         $type   = (string)($_POST['node_type'] ?? 'send_message');
         $label  = trim((string)($_POST['label'] ?? '')) ?: null;
         $nextId = (int)($_POST['next_node_id'] ?? 0);
-        if (!in_array($type, ['send_message','wait_reply','branch','assign_dept','assign_branch','assign_nearest_branch','save_note','end',
+        if (!in_array($type, ['send_message','wait_reply','branch','assign_dept','assign_branch','assign_nearest_branch','assign_next_agent','save_note','end',
                                'fnb_send_menu','fnb_cart_add','fnb_cart_show','fnb_create_order','fnb_order_status'], true)) {
             $type = 'send_message';
         }
@@ -263,6 +263,7 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
                     'assign_dept'           => 'Assign to department',
                     'assign_branch'         => 'Assign to branch',
                     'assign_nearest_branch' => '🗺 Assign to nearest branch (AI)',
+                    'assign_next_agent'     => '👤 Assign to next agent (round-robin)',
                     'save_note'             => 'Save internal note',
                   ],
                   'Terminal' => [
@@ -359,6 +360,39 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
                 Tags the CONTACT with this branch — every future conversation
                 from this customer routes there too, and rotation picks
                 agents whose primary branch matches.
+                <?php if (!$branches): ?>
+                  <br><strong>Heads-up:</strong> no active branches yet — set them up in
+                  <a href="/admin/branches.php">Settings → Branches</a> first.
+                <?php endif; ?>
+              </small>
+            </label>
+            <?php break; ?>
+
+          <?php case 'assign_next_agent': ?>
+            <label>Pool branch <small class="muted">(optional — defaults to the contact's current branch)</small>
+              <select name="branch_id">
+                <option value="0">— use contact's current branch —</option>
+                <?php foreach ($branches as $b): ?>
+                  <option value="<?= (int)$b['id'] ?>" <?= (int)($cfg['branch_id'] ?? 0) === (int)$b['id'] ? 'selected' : '' ?>>
+                    <?= e($b['name']) ?>
+                  </option>
+                <?php endforeach; ?>
+              </select>
+              <small class="muted">
+                Picks the next agent from the branch's rotation pool using
+                the fair, load-aware algorithm (skips away agents, prefers
+                available over busy, fewest open leads first, round-robin
+                cursor for tie-break). Same picker as the automatic
+                post-webhook rotation — just callable at any point in a
+                flow.<br>
+                Leave the dropdown at <em>"use contact's current branch"</em>
+                when the contact was already tagged with a branch earlier
+                (via <em>Assign to branch</em> or <em>Assign to nearest branch</em>).
+                Pick a specific branch here to override — useful for "1. Sales,
+                2. Support" style routing where each choice sends to a
+                different team's rotation.<br>
+                <strong>No-op cases</strong>: contact has no branch, no active
+                users in the branch, or conversation is already assigned.
                 <?php if (!$branches): ?>
                   <br><strong>Heads-up:</strong> no active branches yet — set them up in
                   <a href="/admin/branches.php">Settings → Branches</a> first.
@@ -513,7 +547,7 @@ layout_start($current_user, 'Edit flow · ' . $flow['name'], 'flows');
             // this step" on one of them — that's how F&B ordering flows
             // silently died right after the address prompt.
             $expectsDownstream = in_array($n['node_type'], [
-                'wait_reply','assign_dept','assign_branch','assign_nearest_branch',
+                'wait_reply','assign_dept','assign_branch','assign_nearest_branch','assign_next_agent',
                 'fnb_cart_add','fnb_send_menu',
             ], true);
             $currentNextId = (int)($n['next_node_id'] ?? 0);
@@ -621,6 +655,7 @@ function flow_edit_node_label(array $n): string
         'assign_dept'      => 'Assign to dept',
         'assign_branch'    => 'Assign to branch',
         'assign_nearest_branch' => '🗺 Assign to nearest branch',
+        'assign_next_agent' => '👤 Assign next agent',
         'save_note'        => 'Save note',
         'end'              => 'End',
         'fnb_send_menu'    => 'F&B · Send menu',
@@ -644,6 +679,8 @@ function flow_edit_pack_config(string $type, array $post): string
         case 'assign_dept':
             return json_encode(['department_id' => (int)($post['department_id'] ?? 0)], JSON_UNESCAPED_UNICODE);
         case 'assign_branch':
+            return json_encode(['branch_id' => (int)($post['branch_id'] ?? 0)], JSON_UNESCAPED_UNICODE);
+        case 'assign_next_agent':
             return json_encode(['branch_id' => (int)($post['branch_id'] ?? 0)], JSON_UNESCAPED_UNICODE);
         case 'assign_nearest_branch':
             $lv = trim((string)($post['location_var'] ?? ''));

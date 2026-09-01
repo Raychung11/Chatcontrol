@@ -343,6 +343,50 @@ function flow_engine_execute_node(PDO $db, array &$inst, array $node): int
             }
             return (int)($node['next_node_id'] ?? 0);
 
+        case 'assign_next_agent':
+            // Explicit rotation trigger inside a flow — same picker as
+            // branch_rotation_apply() called from the webhook path, but
+            // invokable at any point in the flow. Useful when you want
+            // to (e.g.) ask "1. Sales, 2. Support" first, route the
+            // contact to that dept's branch, then rotate among that
+            // branch's agents.
+            //
+            // Config:
+            //   branch_id (int, optional) — when > 0, override the
+            //     contact's current branch_id before rotating so the
+            //     pool is that specific branch. When 0 or unset, use
+            //     the contact's existing branch_id (whatever assign_
+            //     branch or assign_nearest_branch set earlier).
+            //
+            // No-op cases (all silent):
+            //   - Conversation not found
+            //   - Contact has no branch_id AND config didn't specify one
+            //   - That branch has no active users mapped
+            //   - Conversation already has assigned_user_id (rotation
+            //     never overwrites — that's the branch_rotation_apply
+            //     contract)
+            require_once __DIR__ . '/branch_rotation.php';
+            $convForRotate = flow_engine_conversation($db, (int)$inst['conversation_id']);
+            if ($convForRotate) {
+                $branchOverride = (int)($cfg['branch_id'] ?? 0);
+                if ($branchOverride > 0 && !empty($convForRotate['contact_id'])) {
+                    // Validate branch belongs to this workspace before
+                    // stamping — guards against a flow pointing at a
+                    // deleted / other-company branch.
+                    $vf = $db->prepare(
+                        'SELECT 1 FROM branches
+                         WHERE id = ? AND company_id = ? AND status = "active" LIMIT 1'
+                    );
+                    $vf->execute([$branchOverride, (int)$convForRotate['company_id']]);
+                    if ($vf->fetchColumn()) {
+                        $db->prepare('UPDATE contacts SET branch_id = ? WHERE id = ?')
+                           ->execute([$branchOverride, (int)$convForRotate['contact_id']]);
+                    }
+                }
+                branch_rotation_apply($db, (int)$inst['conversation_id']);
+            }
+            return (int)($node['next_node_id'] ?? 0);
+
         case 'assign_nearest_branch':
             // AI-mapped location → nearest branch.
             // 1. Read customer's location from either a captured var

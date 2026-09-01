@@ -91,6 +91,7 @@ const FLOW_VISUAL_PALETTE = [
     'fnb_cart_show'    => ['stroke' => '#0ea5e9', 'fill' => '#e0f2fe', 'icon' => '👀'],
     'fnb_create_order' => ['stroke' => '#eab308', 'fill' => '#fef9c3', 'icon' => '✅'],
     'fnb_order_status' => ['stroke' => '#0891b2', 'fill' => '#cffafe', 'icon' => '🔎'],
+    'assign_next_agent' => ['stroke' => '#a855f7', 'fill' => '#f3e8ff', 'icon' => '👤'],
 ];
 
 /**

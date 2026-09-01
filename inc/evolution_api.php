@@ -35,6 +35,48 @@ function evolution_normalize_wa_id(string $waId): string
     return preg_replace('/[^0-9]/', '', $waId) ?: '';
 }
 
+/**
+ * Return the value to put in Evolution's outbound "number" field.
+ *
+ * For a normal phone-number contact this is just the digits — Evolution
+ * routes them via @s.whatsapp.net by default.
+ *
+ * For a WhatsApp-LID contact (Meta's privacy-preserving alias where
+ * the real phone number is hidden), addressing via @s.whatsapp.net
+ * fails with `exists: false` because the LID isn't in WhatsApp's
+ * phone-number registry. The correct addressing is `<digits>@lid`,
+ * which Baileys / Evolution recognizes as a LID target.
+ *
+ * We detect LID contacts by looking up contacts.wa_lid — the column
+ * migration_phase22 added and both ingest paths (evolution.php +
+ * webhook/whatsapp.php) stamp on inbound. If the contact has wa_lid
+ * set for this workspace, we append @lid; otherwise plain digits.
+ *
+ * Silently returns plain digits on any DB error so a broken lookup
+ * can never brick outbound entirely — worst case a LID reply still
+ * fails the same way it did before this fix.
+ */
+function evolution_addressable_number(array $channel, string $waId): string
+{
+    $normalized = evolution_normalize_wa_id($waId);
+    if ($normalized === '') return $normalized;
+    $companyId = (int)($channel['company_id'] ?? 0);
+    if ($companyId <= 0) return $normalized;
+    try {
+        $stmt = aiserve_db()->prepare(
+            'SELECT wa_lid FROM contacts
+             WHERE company_id = ? AND wa_id = ?
+             LIMIT 1'
+        );
+        $stmt->execute([$companyId, $normalized]);
+        $lid = trim((string)($stmt->fetchColumn() ?: ''));
+        if ($lid !== '') {
+            return $normalized . '@lid';
+        }
+    } catch (Throwable $e) { /* schema drift — assume regular number */ }
+    return $normalized;
+}
+
 function evolution_base(array $company): string
 {
     return rtrim((string)$company['evolution_base_url'], '/');
@@ -96,7 +138,7 @@ function evolution_send_text(array $company, string $waId, string $text): array
     if (!evolution_is_configured($company)) {
         return evolution_not_configured_error();
     }
-    $number = evolution_normalize_wa_id($waId);
+    $number = evolution_addressable_number($company, $waId);
     if ($number === '') {
         return ['ok' => false, 'wa_message_id' => null, 'error' => 'Invalid recipient number.', 'http_code' => 400, 'raw' => null];
     }
@@ -132,7 +174,7 @@ function evolution_send_media(array $company, string $waId, string $kind, string
         return ['ok' => false, 'wa_message_id' => null, 'error' => 'Unsupported media kind.', 'http_code' => 400, 'raw' => null];
     }
 
-    $number = evolution_normalize_wa_id($waId);
+    $number = evolution_addressable_number($company, $waId);
     $base64 = base64_encode((string)file_get_contents($localPath));
 
     if ($kind === 'audio') {

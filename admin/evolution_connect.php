@@ -317,10 +317,15 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
         $('ec-qr').onclick = async () => {
           log('Fetching QR…');
           const r = await call('qr');
-          if (r.qrcode_base64 || (r.base64 && r.base64.startsWith('data:'))) {
-            const img = r.qrcode_base64 || r.base64;
-            qrImg.src = img.startsWith('data:') ? img : ('data:image/png;base64,' + img);
-            if (r.pairing_code || r.code) qrCode.textContent = r.pairing_code || r.code;
+          // Different Evolution versions name the base64 field differently.
+          // v2.3.7 returns 'qr', older builds return 'qrcode_base64' or
+          // 'base64'. Accept any of them, then add the data:image/png
+          // prefix if the value doesn't already have it.
+          const b64 = r.qrcode_base64 || r.qr || r.base64 || null;
+          const code = r.pairing_code || r.pairingCode || r.code || null;
+          if (b64) {
+            qrImg.src = b64.startsWith('data:') ? b64 : ('data:image/png;base64,' + b64);
+            qrCode.textContent = code || '';
             qrPanel.style.display = 'block';
             log('✓ QR ready — scan from WhatsApp → Linked devices', 'ok');
             startPolling();

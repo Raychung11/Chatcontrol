@@ -637,6 +637,18 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
         }
     } else {
         $conversationId = (int)$conv['id'];
+        // Retry branch rotation on existing conversations that are still
+        // unassigned — covers the case where the channel's branch_id was
+        // set AFTER the conversation was originally created. Without this,
+        // any conversation created during a "channel had no default branch"
+        // window stays permanently Unassigned even after the operator sets
+        // the branch, because rotation only used to run on the INSERT path.
+        // branch_rotation_apply is a no-op when assigned_user_id is already
+        // set, so re-calling it every inbound is cheap + safe.
+        if (!$fromMe && empty($conv['assigned_user_id'])) {
+            require_once __DIR__ . '/../inc/branch_rotation.php';
+            branch_rotation_apply($db, $conversationId);
+        }
         $newStatus = ($conv['status'] === 'closed') ? 'open' : $conv['status'];
         if ($fromMe) {
             // Outgoing (bot) reply: update last_message_* + first_response_at,

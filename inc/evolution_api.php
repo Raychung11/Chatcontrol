@@ -319,6 +319,43 @@ function evolution_logout_instance(array $company): array
 }
 
 /**
+ * Fetch a message's media bytes as base64 from Evolution.
+ *
+ * Evolution v2.3.x rejects the per-webhook 'webhookBase64: true' setting
+ * (sets it back to false) and its documented container env vars for
+ * base64 don't reliably propagate through Docker either. So when a
+ * webhook arrives for a media message WITHOUT the base64 field embedded,
+ * we call this endpoint to fetch the bytes on demand.
+ *
+ * Endpoint: POST /chat/getBase64FromMediaMessage/<instance>
+ * Body:    { "message": { "key": { "id": <wa_message_id> } },
+ *            "convertToMp4": false }
+ * Reply:   { "base64": "<b64>", "mediaType": "audioMessage", ... }
+ *
+ * Returns the raw base64 string on success, null when unavailable. The
+ * caller is responsible for size-guarding and writing to disk — this
+ * helper is intentionally scope-limited to "get me the bytes."
+ */
+function evolution_fetch_media_base64(array $company, string $waMessageId): ?string
+{
+    if (!evolution_is_configured($company) || $waMessageId === '') return null;
+    $path = '/chat/getBase64FromMediaMessage/' . rawurlencode(evolution_instance_name($company));
+    $r = evolution_request($company, 'POST', $path, [
+        'message'      => ['key' => ['id' => $waMessageId]],
+        'convertToMp4' => false,
+    ]);
+    if (!$r['ok']) return null;
+    $b64 = $r['json']['base64'] ?? null;
+    if (!is_string($b64) || $b64 === '') return null;
+    // Some Evolution builds prepend a 'data:<mime>;base64,' scheme — strip it.
+    if (str_starts_with($b64, 'data:')) {
+        $comma = strpos($b64, ',');
+        if ($comma !== false) $b64 = substr($b64, $comma + 1);
+    }
+    return $b64;
+}
+
+/**
  * Tell Evolution to push events to our webhook.
  */
 function evolution_set_webhook(array $company, string $webhookUrl): array

@@ -704,6 +704,27 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
         // save the pixels.
         $mediaBase64 = null;
     }
+    // Fallback: Evolution v2.3.x rejects the per-webhook 'webhookBase64:
+    // true' flag and doesn't consistently expose it via container env
+    // either. When the webhook payload arrives WITHOUT base64 for a real
+    // media message (audio / image / video / document), pull the bytes
+    // ourselves via /chat/getBase64FromMediaMessage/<instance>. Skipped
+    // for stickers (dropped above) and text. Cheap on-demand — no extra
+    // storage, no cron.
+    if (!$mediaBase64
+        && $waMsgId !== ''
+        && in_array($kind, ['audio', 'image', 'video', 'document'], true)) {
+        try {
+            $b64 = evolution_fetch_media_base64($company, $waMsgId);
+            if ($b64 !== null && $b64 !== '') {
+                $mediaBase64 = $b64;
+            } else {
+                error_log('[AiServe evolution] getBase64 empty for ' . $waMsgId . ' (' . $kind . ')');
+            }
+        } catch (Throwable $e) {
+            error_log('[AiServe evolution] getBase64 threw: ' . $e->getMessage());
+        }
+    }
     if ($mediaBase64) {
         try {
             // Approximate decoded size from base64 length (base64 grows

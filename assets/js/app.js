@@ -849,6 +849,28 @@
           }
         });
       }
+
+      // Media hydration refresh: cron/evolution_media_sync.php fills
+      // in media_local_path a minute or two after a voice note / photo
+      // first arrives. Without this the bubble stays stuck on the
+      // "media not synced" placeholder until a full page reload. The
+      // server hands us re-rendered bubble HTML keyed by message id;
+      // swap the existing node's outerHTML in place so the audio
+      // player appears without disturbing scroll position.
+      if (data.refresh_html && typeof data.refresh_html === 'object') {
+        Object.keys(data.refresh_html).forEach((id) => {
+          const node = stream.querySelector('.msg[data-msg-id="' + id + '"]');
+          if (!node) return;
+          // Skip if the bubble is already hydrated — a real .msg-media
+          // block without the .msg-media-missing modifier means the
+          // audio player / img / video is already mounted, and
+          // repainting it would reset playback mid-play or refetch
+          // a big image for nothing.
+          const mediaBlock = node.querySelector('.msg-media');
+          if (mediaBlock && !mediaBlock.classList.contains('msg-media-missing')) return;
+          node.outerHTML = data.refresh_html[id];
+        });
+      }
     } catch (_) { /* network blip - try again next tick */ }
     finally { chatPolling = false; }
   }

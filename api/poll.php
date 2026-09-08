@@ -108,6 +108,35 @@ if ($scope === 'chat') {
         $statuses[(int)$row['id']] = $row['status'];
     }
 
+    // Media hydration refresh — messages already delivered to the client
+    // (id <= after_id) whose bytes only arrived AFTER first render, via
+    // cron/evolution_media_sync.php stamping media_local_path a minute
+    // or two later. Without this, the browser keeps showing "media not
+    // synced" until a full page refresh. Scope the query to the sweeper
+    // window (15 min) + media rows with a file path now set + only
+    // already-seen ids so we never race the new-messages append path
+    // above. Returns {id: bubble_html} pairs; the client swaps the
+    // existing bubble's outerHTML in place.
+    $refreshHtml = [];
+    if ($afterId > 0) {
+        $rstmt = $db->prepare(
+            'SELECT m.*, u.name AS sender_name
+             FROM messages m
+             LEFT JOIN users u ON u.id = m.sender_user_id
+             WHERE m.conversation_id = ?
+               AND m.id <= ?
+               AND m.deleted_at IS NULL
+               AND m.message_type IN ("audio","image","video","document")
+               AND m.media_local_path IS NOT NULL
+               AND m.created_at > DATE_SUB(NOW(), INTERVAL 15 MINUTE)
+             ORDER BY m.id DESC LIMIT 20'
+        );
+        $rstmt->execute([$conversationId, $afterId]);
+        foreach ($rstmt->fetchAll() as $row) {
+            $refreshHtml[(int)$row['id']] = message_bubble_html($row);
+        }
+    }
+
     $company = load_company_settings((int)$user['company_id']) ?: [];
     // Match inbox/chat.php: read the CHANNEL's provider, not the stale
     // companies.provider column. Otherwise aiserve_chatbot channels
@@ -126,6 +155,7 @@ if ($scope === 'chat') {
         'unread_count'  => (int)$conv['unread_count'],
         'window_open'   => $windowOpen,
         'statuses'      => $statuses,
+        'refresh_html'  => $refreshHtml,
         'new_inbound'   => $newInbound,
         'server_time'   => time(),
     ]);

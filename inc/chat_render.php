@@ -103,13 +103,26 @@ function message_bubble_html(array $m): string
                . 'download="' . e((string)($m['media_filename'] ?? 'file')) . '">'
                . '⬇︎ ' . e($label) . '</a></div>';
     } elseif (($m['message_type'] ?? '') === 'audio' || ($m['message_type'] ?? '') === 'video') {
-        // Media didn't download (bytes not on disk yet, or gateway didn't
-        // forward the audio). Show a helpful placeholder instead of the
-        // useless "[audio]" body text.
+        // Media bytes aren't on disk yet. For Evolution channels this is
+        // almost always the Baileys download race — the webhook fires
+        // the moment WhatsApp signals a new message but the bytes are
+        // still pulling from Meta's CDN in the background. Two-tier
+        // recovery lives above: the webhook path retries inline for
+        // ~5s (inc/evolution_api.php :: evolution_fetch_media_base64)
+        // and cron/evolution_media_sync.php sweeps every minute for
+        // up to 15 min. So the honest message is "hang on, it's
+        // coming" — not "your gateway is broken", which is what the
+        // old copy read like and made agents think something needed
+        // fixing every time a voice note came in.
+        //
+        // The bubble is auto-hydrated in place by api/poll.php's
+        // refresh_html mechanism once the sweeper stamps
+        // media_local_path — no page reload needed.
         $kind = e((string)$m['message_type']);
+        $icon = $m['message_type'] === 'video' ? '🎞' : '🎙';
         $html .= '<div class="msg-media msg-media-missing muted small">'
-               . '🎙 ' . $kind . ' message — media not synced. '
-               . 'Ask your partner gateway to include audio bytes in the webhook payload.'
+               . $icon . ' ' . $kind . ' — downloading… '
+               . 'This bubble will refresh on its own within a minute.'
                . '</div>';
     }
 

@@ -1547,4 +1547,209 @@
       new MutationObserver(() => observeAll(s)).observe(s, { childList: true, subtree: true });
     }
   })();
+
+  // ============================================================
+  // ALERTS BELL — workspace channel-health notification widget
+  // ============================================================
+  // Polls /api/alerts_ping.php on the same POLL_MS cadence as the
+  // inbox/chat pollers so bell count + toasts + browser desktop
+  // notifications all stay in near-realtime with what the detectors
+  // find (Evolution disconnect, silent inbound, stuck media).
+  //
+  // Three delivery legs:
+  //   inapp   — bell count + dropdown list. Always on for a logged-in
+  //             session, no permission needed.
+  //   toast   — a red slide-in banner the first time we ever see an
+  //             alert id while the tab is visible. Auto-dismisses in
+  //             10s. Suppressed on the tab that dismisses so an
+  //             agent who closes a toast doesn't get it back on the
+  //             next poll.
+  //   browser — Web Notification API. Fires ONCE per alert id per
+  //             browser, tracked in localStorage. Requires the agent
+  //             to grant permission (asked on first open of the
+  //             bell). Notification.onclick focuses the tab and
+  //             navigates to the fix URL — perfect for an agent
+  //             running the inbox in a background tab.
+  //
+  // The "seen" set is local to this browser; a fresh browser will
+  // re-toast open alerts once. Backend-side dispatch bookkeeping
+  // (email fanout) is separate and lives in inc/alerts.php.
+  const bellRoot = document.getElementById('alerts-bell');
+  const bellBtn  = document.getElementById('alerts-bell-btn');
+  const bellCnt  = document.getElementById('alerts-bell-count');
+  const toastSlot= document.getElementById('alerts-toast-slot');
+
+  const SEEN_KEY = 'aiserve.alerts.seen.v1';
+  let seenIds = new Set();
+  try {
+    seenIds = new Set(JSON.parse(localStorage.getItem(SEEN_KEY) || '[]'));
+  } catch (_) { /* private mode / cleared storage — start fresh */ }
+  const markSeen = (id) => {
+    seenIds.add(id);
+    try { localStorage.setItem(SEEN_KEY, JSON.stringify([...seenIds])); } catch (_) {}
+  };
+
+  let alertsPanel = null;
+  let alertsPolling = false;
+  let latestAlerts = [];
+
+  function ensurePanel() {
+    if (alertsPanel) return alertsPanel;
+    alertsPanel = document.createElement('div');
+    alertsPanel.className = 'alerts-panel';
+    alertsPanel.hidden = true;
+    bellRoot.appendChild(alertsPanel);
+    // Click outside → close.
+    document.addEventListener('click', (e) => {
+      if (!alertsPanel || alertsPanel.hidden) return;
+      if (bellRoot.contains(e.target)) return;
+      closePanel();
+    });
+    return alertsPanel;
+  }
+  function openPanel() {
+    ensurePanel();
+    renderPanel();
+    alertsPanel.hidden = false;
+    bellBtn.setAttribute('aria-expanded', 'true');
+    // First open is a great moment to ask for desktop notification
+    // permission — the agent is looking straight at the bell so the
+    // context is clear.
+    requestBrowserNotifPermission();
+  }
+  function closePanel() {
+    if (!alertsPanel) return;
+    alertsPanel.hidden = true;
+    bellBtn.setAttribute('aria-expanded', 'false');
+  }
+  function renderPanel() {
+    if (!alertsPanel) return;
+    if (!latestAlerts.length) {
+      alertsPanel.innerHTML =
+        '<div class="alerts-panel-empty">No open alerts. Channels look healthy.</div>';
+      return;
+    }
+    alertsPanel.innerHTML = latestAlerts.map((a) => {
+      const sev = (a.severity || 'warn').replace(/[^a-z]/g, '');
+      return '<div class="alerts-item alerts-sev-' + sev + '" data-alert-id="' + a.id + '">'
+           + '<button type="button" class="alerts-item-dismiss" '
+           +   'aria-label="Dismiss">&times;</button>'
+           + '<div class="alerts-item-title">' + escapeHtml(a.title) + '</div>'
+           + (a.body ? '<div class="alerts-item-body">' + escapeHtml(a.body) + '</div>' : '')
+           + (a.href ? '<a class="alerts-item-fix" href="' + escapeHtml(a.href)
+                     + '">Open →</a>' : '')
+           + '</div>';
+    }).join('');
+    alertsPanel.querySelectorAll('.alerts-item-dismiss').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const wrap = btn.closest('.alerts-item');
+        const id   = wrap && wrap.getAttribute('data-alert-id');
+        if (!id) return;
+        wrap.remove();
+        try {
+          const fd = new FormData();
+          fd.append('_csrf', csrfToken);
+          fd.append('dismiss', id);
+          await fetch('/api/alerts_ping.php?dismiss=' + encodeURIComponent(id),
+            { method: 'POST', headers: { 'X-CSRF-Token': csrfToken }, body: fd });
+        } catch (_) {}
+      });
+    });
+  }
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, (c) => ({
+      '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+    }[c]));
+  }
+
+  function showToast(alert) {
+    if (!toastSlot) return;
+    const el = document.createElement('div');
+    el.className = 'alerts-toast alerts-sev-' + (alert.severity || 'warn').replace(/[^a-z]/g, '');
+    el.innerHTML =
+        '<button type="button" class="alerts-toast-close" aria-label="Dismiss">&times;</button>'
+      + '<div class="alerts-toast-title">' + escapeHtml(alert.title) + '</div>'
+      + (alert.href ? '<a class="alerts-toast-fix" href="' + escapeHtml(alert.href)
+                    + '">Open →</a>' : '');
+    toastSlot.appendChild(el);
+    el.querySelector('.alerts-toast-close').addEventListener('click', () => el.remove());
+    setTimeout(() => el.remove(), 10000);
+    beep();
+  }
+
+  function requestBrowserNotifPermission() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'default') {
+      // Fire and forget — modern browsers require this from a user
+      // gesture; the bell click qualifies.
+      try { Notification.requestPermission(); } catch (_) {}
+    }
+  }
+  function showBrowserNotif(alert) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    try {
+      const n = new Notification(alert.title, {
+        body: alert.body || '',
+        icon: '/assets/img/icon-192.png',
+        tag:  'aiserve-alert-' + alert.id, // replace prior notif for same alert
+      });
+      n.onclick = () => {
+        window.focus();
+        if (alert.href) window.location.href = alert.href;
+        n.close();
+      };
+      // Server-side bookkeeping so email fanout knows this leg fired.
+      const fd = new FormData();
+      fd.append('_csrf', csrfToken);
+      fd.append('ack', alert.id);
+      fd.append('leg', 'browser');
+      fetch('/api/alerts_ping.php?ack=' + alert.id + '&leg=browser',
+        { method: 'POST', headers: { 'X-CSRF-Token': csrfToken }, body: fd }).catch(() => {});
+    } catch (_) {}
+  }
+
+  async function pollAlertsOnce() {
+    if (!bellRoot || alertsPolling) return;
+    alertsPolling = true;
+    try {
+      const res = await fetch('/api/alerts_ping.php',
+        { headers: { 'X-CSRF-Token': csrfToken } });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) return;
+      latestAlerts = data.alerts || [];
+      const n = latestAlerts.length;
+      bellRoot.hidden = false;
+      bellCnt.textContent = n > 99 ? '99+' : String(n);
+      bellRoot.classList.toggle('has-alerts', n > 0);
+
+      // First-sighting side-effects: toast (only if tab visible)
+      // and browser notification (always).
+      latestAlerts.forEach((a) => {
+        if (seenIds.has(a.id)) return;
+        markSeen(a.id);
+        if (!hidden()) showToast(a);
+        showBrowserNotif(a);
+      });
+
+      // Repaint an open panel to reflect fresh data.
+      if (alertsPanel && !alertsPanel.hidden) renderPanel();
+    } catch (_) { /* network blip — try again next tick */ }
+    finally { alertsPolling = false; }
+  }
+
+  if (bellBtn) {
+    bellBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (alertsPanel && !alertsPanel.hidden) closePanel();
+      else openPanel();
+    });
+    // Kick off the poll loop. Reuses POLL_MS so cadence matches the
+    // rest of the app.
+    pollAlertsOnce();
+    setInterval(pollAlertsOnce, POLL_MS);
+    document.addEventListener('visibilitychange', () => {
+      if (!hidden()) pollAlertsOnce();
+    });
+  }
 })();

@@ -23,6 +23,7 @@ require_once __DIR__ . '/../inc/helpers.php';
 require_once __DIR__ . '/../inc/channels.php';
 require_once __DIR__ . '/../inc/evolution_api.php';
 require_once __DIR__ . '/../inc/email.php';
+require_once __DIR__ . '/../inc/alerts.php';
 
 $db = aiserve_db();
 
@@ -103,83 +104,46 @@ foreach ($channels as $ch) {
         strtoupper($newState), $cid, $wsN, $name, $queue
     ));
 
-    // Alert on OK -> not-OK transition. Throttled to at most one
-    // email per 30 min per channel so a customer with a chronically
-    // disconnected number doesn't bury their inbox.
-    if ($prevState === 'connected' && $newState !== 'connected') {
-        $lastAlert = $ch['alert_last_sent_at'] ? strtotime((string)$ch['alert_last_sent_at']) : 0;
-        if (!$lastAlert || (time() - $lastAlert) > 1800) {
-            evolution_send_disconnect_alert($db, $ch, $newState);
-            $db->prepare('UPDATE channels SET alert_last_sent_at = NOW() WHERE id = ? LIMIT 1')
-               ->execute([$cid]);
-        }
+    // Alert on OK -> not-OK transition. Open (or refresh) a bell alert
+    // and route the email fanout through inc/alerts.php so the same
+    // event drives the in-app bell + browser desktop notification +
+    // email — one source of truth. Throttling on email is handled by
+    // alert_dispatch_email() marking dispatched_via=email on the
+    // alerts row: the first call sends, subsequent calls no-op.
+    $subjectRef = 'disconnected:' . $cid;
+    if ($newState === 'connected') {
+        // Reconnected — close any prior open alert so the bell clears.
+        alert_close((int)$ch['company_id'], 'evolution_disconnected', $subjectRef);
+    } elseif ($prevState === 'connected' || $prevState === 'unknown') {
+        // Just went bad (or we just booted and it was already bad).
+        $alertId = alert_open(
+            (int)$ch['company_id'],
+            'evolution_disconnected',
+            $subjectRef,
+            'WhatsApp channel ' . $name . ' is ' . $newState,
+            "Session state on Evolution flipped to '" . $newState . "'. "
+            . "Most likely the linked-devices list on the paired phone "
+            . "was cleared, the phone has been offline for 14+ days, or "
+            . "Evolution's Postgres/Redis restarted. Re-pair from "
+            . "/admin/evolution_connect.php to restore inbound.",
+            '/admin/evolution_connect.php',
+            'error',
+            $cid
+        );
+        // Fire email once per incident (helper is idempotent via
+        // dispatched_via). The old alert_last_sent_at column is
+        // effectively superseded; kept in the UPDATE below so the
+        // channel health page's legacy "last alert" chip still shows.
+        alert_dispatch_email($alertId);
+        $db->prepare('UPDATE channels SET alert_last_sent_at = NOW() WHERE id = ? LIMIT 1')
+           ->execute([$cid]);
     }
 }
 
 exit(0);
 
-/**
- * Fire off a disconnect alert email to the workspace's alert_email
- * plus every super_admin on the workspace (belt-and-braces so a
- * misconfigured alert_email doesn't silently swallow the ping).
- */
-function evolution_send_disconnect_alert(PDO $db, array $channel, string $newState): void
-{
-    $companyId = (int)$channel['company_id'];
-    $wsName    = (string)($channel['company_name'] ?? 'Your workspace');
-    $chName    = (string)$channel['name'];
-    $stateLbl  = $newState === 'connecting' ? 'reconnecting' : 'disconnected';
-
-    // Recipient set: alert_email + every active super_admin's email.
-    $to = [];
-    $ae = trim((string)($channel['alert_email'] ?? ''));
-    if ($ae !== '' && filter_var($ae, FILTER_VALIDATE_EMAIL)) $to[] = $ae;
-
-    try {
-        $s = $db->prepare(
-            "SELECT email FROM users
-             WHERE company_id = ? AND role = 'super_admin' AND status = 'active'
-               AND email IS NOT NULL AND email <> ''"
-        );
-        $s->execute([$companyId]);
-        foreach ($s->fetchAll(PDO::FETCH_COLUMN) as $e) {
-            if (filter_var((string)$e, FILTER_VALIDATE_EMAIL)) $to[] = (string)$e;
-        }
-    } catch (Throwable $e) { /* noop */ }
-    $to = array_values(array_unique($to));
-    if (!$to) return;
-
-    $base = defined('APP_BASE_URL') && APP_BASE_URL !== ''
-        ? rtrim((string)APP_BASE_URL, '/')
-        : 'https://inbox.aiserve.my';
-    $repairUrl = $base . '/admin/evolution_connect.php';
-    $healthUrl = $base . '/admin/channels_health.php';
-
-    $subject = '🚨 WhatsApp ' . $stateLbl . ' — ' . $wsName . ' (' . $chName . ')';
-    $body = "Your WhatsApp Evolution channel has stopped responding.\n\n"
-          . "Workspace: " . $wsName . "\n"
-          . "Channel:   " . $chName . "\n"
-          . "State:     " . $newState . "\n"
-          . "Detected:  " . date('Y-m-d H:i:s') . "\n\n"
-          . "MOST LIKELY CAUSE:\n"
-          . "  The WhatsApp Web session on the paired phone was cleared\n"
-          . "  (linked-devices list changed, phone offline for 14+ days,\n"
-          . "  or Evolution's Postgres/Redis restarted).\n\n"
-          . "TO FIX (2 minutes):\n"
-          . "  1. Open " . $repairUrl . "\n"
-          . "  2. Click 'Pair WhatsApp' → scan the QR from the same phone\n"
-          . "  3. Wait for the state to flip back to 'connected'\n\n"
-          . "Live status: " . $healthUrl . "\n\n"
-          . "— AiServe Inbox\n"
-          . "(Alerts are throttled to once per 30 minutes per channel.)";
-
-    foreach ($to as $addr) {
-        try {
-            send_email($addr, $subject, $body, 'AiServe Inbox alerts');
-        } catch (Throwable $e) {
-            error_log('[AiServe evolution_health_ping] mail failed to ' . $addr . ': ' . $e->getMessage());
-        }
-    }
-    log_activity($companyId, null, 'channel_disconnect_alert_sent',
-                 'channel', (int)$channel['id'], implode(',', $to));
-}
+// evolution_send_disconnect_alert() removed. Email fanout for a
+// disconnected channel now flows through inc/alerts.php ::
+// alert_dispatch_email() so the same event drives the in-app bell +
+// browser desktop notification + email as one incident. See the
+// alert_open()/alert_close() calls in the main loop above.

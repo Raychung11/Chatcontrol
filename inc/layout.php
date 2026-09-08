@@ -49,8 +49,25 @@ function layout_start(array $current_user, string $page_title = '', string $acti
     <header class="app-header">
       <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Open menu">☰</button>
       <h1 class="app-title"><?= e($page_title) ?></h1>
-      <div class="app-header-actions" id="app-header-actions"></div>
+      <div class="app-header-actions" id="app-header-actions">
+        <!-- Alerts bell — driven by assets/js/app.js polling
+             /api/alerts_ping.php every POLL_MS. Count badge appears
+             when open alerts > 0, dropdown lists titles + click-to-
+             fix links. Panel is created lazily on first click so the
+             DOM stays cheap for agents who never open it. -->
+        <div class="alerts-bell" id="alerts-bell" hidden>
+          <button type="button" class="alerts-bell-btn" id="alerts-bell-btn"
+                  aria-label="Channel alerts" aria-expanded="false">
+            <span aria-hidden="true">🔔</span>
+            <span class="alerts-bell-count" id="alerts-bell-count">0</span>
+          </button>
+        </div>
+      </div>
     </header>
+    <!-- Toast slot: JS injects red slide-in toasts here when a new
+         alert lands and the tab is visible (silent otherwise; the
+         browser desktop notification handles background delivery). -->
+    <div class="alerts-toast-slot" id="alerts-toast-slot" aria-live="polite"></div>
     <div class="app-content">
 <?php
 }

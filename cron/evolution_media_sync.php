@@ -31,6 +31,7 @@
 require_once __DIR__ . '/../config/db_config.php';
 require_once __DIR__ . '/../inc/helpers.php';
 require_once __DIR__ . '/../inc/evolution_api.php';
+require_once __DIR__ . '/../inc/alerts.php';
 
 $db = aiserve_db();
 
@@ -48,6 +49,7 @@ $db = aiserve_db();
 $stmt = $db->prepare(
     "SELECT m.id, m.wa_message_id, m.message_type, m.media_mime_type,
             m.media_filename, m.company_id, m.channel_id,
+            COALESCE(m.media_sync_attempts, 0) AS media_sync_attempts,
             co.id AS company_pk, co.name AS company_name,
             co.skip_stickers, co.media_max_kb,
             COALESCE(NULLIF(c.evolution_base_url, ''), co.evolution_base_url) AS evolution_base_url,
@@ -110,7 +112,36 @@ foreach ($rows as $r) {
 
     if ($b64 === null || $b64 === '') {
         $missed++;
-        fwrite(STDOUT, "MISS  {$msgId}  {$waMsgId}  {$kind}\n");
+        // Bump the consecutive-miss counter (phase58) and, once it
+        // crosses a threshold, open a bell alert so agents can ask
+        // the customer to re-send instead of silently staring at
+        // the "downloading…" placeholder forever. The window is
+        // 15 minutes (see the query above), so 15 misses ≈ every
+        // sweep tick for the entire window exhausted with nothing
+        // to show — a very safe signal the Meta CDN URL expired
+        // on Baileys' side and no retry will help.
+        try {
+            $db->prepare(
+                'UPDATE messages SET media_sync_attempts = media_sync_attempts + 1
+                 WHERE id = ? AND media_local_path IS NULL'
+            )->execute([$msgId]);
+        } catch (Throwable $e) { /* new column may not exist yet */ }
+        $tries = (int)$r['media_sync_attempts'] + 1;
+        if ($tries === 15) {
+            alert_open(
+                (int)$r['company_id'],
+                'media_stuck',
+                'msg:' . $msgId,
+                'Voice/media message failed to download',
+                'A ' . $kind . ' message from a customer has been stuck for '
+                . '15 minutes — Evolution never delivered the bytes. Ask '
+                . 'the customer to re-send it. wa_message_id: ' . $waMsgId,
+                '/inbox/',
+                'warn',
+                (int)$r['channel_id']
+            );
+        }
+        fwrite(STDOUT, "MISS  {$msgId}  {$waMsgId}  {$kind}  (try {$tries}/15)\n");
         continue;
     }
 
@@ -148,10 +179,15 @@ foreach ($rows as $r) {
 
         $upd = $db->prepare(
             'UPDATE messages
-             SET media_local_path = ?
+             SET media_local_path = ?, media_sync_attempts = 0
              WHERE id = ? AND media_local_path IS NULL'
         );
         $upd->execute([$abs, $msgId]);
+
+        // Clear any stuck-media alert we might have opened for this
+        // exact message id (happens on 15-miss threshold below). No
+        // effect if nothing was open.
+        alert_close((int)$r['company_id'], 'media_stuck', 'msg:' . $msgId);
 
         $updated++;
         fwrite(STDOUT, "OK    {$msgId}  {$waMsgId}  {$kind}  ({$approx}B)\n");

@@ -128,7 +128,7 @@ foreach ($rows as $r) {
         } catch (Throwable $e) { /* new column may not exist yet */ }
         $tries = (int)$r['media_sync_attempts'] + 1;
         if ($tries === 15) {
-            alert_open(
+            $alertId = alert_open(
                 (int)$r['company_id'],
                 'media_stuck',
                 'msg:' . $msgId,
@@ -140,6 +140,8 @@ foreach ($rows as $r) {
                 'warn',
                 (int)$r['channel_id']
             );
+            alert_dispatch_email($alertId);
+            alert_dispatch_whatsapp($alertId);
         }
         fwrite(STDOUT, "MISS  {$msgId}  {$waMsgId}  {$kind}  (try {$tries}/15)\n");
         continue;

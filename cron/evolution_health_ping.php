@@ -130,11 +130,13 @@ foreach ($channels as $ch) {
             'error',
             $cid
         );
-        // Fire email once per incident (helper is idempotent via
-        // dispatched_via). The old alert_last_sent_at column is
-        // effectively superseded; kept in the UPDATE below so the
-        // channel health page's legacy "last alert" chip still shows.
+        // Fire email + WhatsApp DM once per incident. Both helpers are
+        // idempotent via dispatched_via — a second cron tick against
+        // the same open row won't re-send. WhatsApp DM tries a peer
+        // Evolution channel on the same workspace so a disconnected
+        // channel doesn't try to escalate through itself.
         alert_dispatch_email($alertId);
+        alert_dispatch_whatsapp($alertId);
         $db->prepare('UPDATE channels SET alert_last_sent_at = NOW() WHERE id = ? LIMIT 1')
            ->execute([$cid]);
     }

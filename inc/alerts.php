@@ -25,6 +25,7 @@
 
 require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/email.php';
+require_once __DIR__ . '/evolution_api.php';
 
 /**
  * Open (or refresh) an alert for a (company_id, kind, subject_ref).
@@ -184,4 +185,104 @@ function alert_dispatch_email(int $alertId): bool
     }
     if ($anyOk) alert_mark_dispatched($alertId, 'email');
     return $anyOk;
+}
+
+/**
+ * WhatsApp DM the workspace admin using one of the workspace's own
+ * connected Evolution channels. Idempotent via dispatched_via.
+ *
+ * Recipient: companies.admin_alert_phone (E.164 digits, plus sign
+ * optional — we strip non-digits). Skips silently if unset.
+ *
+ * Sender: the first channel on the SAME workspace where
+ *   - provider = 'evolution'
+ *   - probe_state = 'connected'
+ *   - id != the alert's channel_id (so we don't try to send via
+ *     the disconnected channel we're alerting about)
+ * If no other channel is connected but the alerted channel itself
+ * is still 'connected' (silent_inbound or media_stuck cases), we
+ * fall back to it.
+ *
+ * Never routes an escalation via a channel on a DIFFERENT workspace
+ * (privacy) or via a non-Evolution channel (no send helper wired).
+ */
+function alert_dispatch_whatsapp(int $alertId): bool
+{
+    if (alert_has_dispatched($alertId, 'whatsapp')) return false;
+    $db  = aiserve_db();
+    $row = $db->prepare(
+        'SELECT a.*, co.name AS company_name, co.admin_alert_phone
+         FROM alerts a
+         INNER JOIN companies co ON co.id = a.company_id
+         WHERE a.id = ? LIMIT 1'
+    );
+    $row->execute([$alertId]);
+    $a = $row->fetch();
+    if (!$a) return false;
+
+    // Normalize the destination to bare digits — evolution_send_text's
+    // number-normalizer accepts both formats but stripping here keeps
+    // logs and the addressable-number lookup consistent.
+    $rawPhone = trim((string)($a['admin_alert_phone'] ?? ''));
+    $waId     = preg_replace('/\D+/', '', $rawPhone);
+    if ($waId === '' || strlen($waId) < 6) return false;
+
+    // Pick a sender channel on the SAME workspace. Prefer a channel
+    // that isn't the one being alerted about (avoids trying to DM
+    // via the very session that just disconnected).
+    $companyId = (int)$a['company_id'];
+    $alertChId = (int)($a['channel_id'] ?? 0);
+
+    $chStmt = $db->prepare(
+        "SELECT id, evolution_base_url, evolution_api_key, evolution_instance,
+                probe_state
+         FROM channels
+         WHERE company_id = ? AND provider = 'evolution' AND status = 'active'
+         ORDER BY (id = ?) ASC,          -- alerted channel LAST
+                  (probe_state = 'connected') DESC, -- connected FIRST
+                  id ASC"
+    );
+    $chStmt->execute([$companyId, $alertChId]);
+    $candidates = $chStmt->fetchAll();
+
+    $sender = null;
+    foreach ($candidates as $c) {
+        if ((string)($c['probe_state'] ?? '') !== 'connected') continue;
+        // Skip empty config (channel row was created but never paired).
+        if (empty($c['evolution_base_url']) || empty($c['evolution_api_key'])
+            || empty($c['evolution_instance'])) continue;
+        $sender = $c;
+        break;
+    }
+    if (!$sender) {
+        error_log('[AiServe alerts] no connected Evolution channel to DM alert '
+                  . $alertId . ' (workspace ' . $companyId . ')');
+        return false;
+    }
+
+    $company = [
+        'id'                 => $companyId,
+        'evolution_base_url' => $sender['evolution_base_url'],
+        'evolution_api_key'  => $sender['evolution_api_key'],
+        'evolution_instance' => $sender['evolution_instance'],
+    ];
+
+    $text = '🚨 ' . (string)$a['title']
+          . (empty($a['body']) ? '' : "\n\n" . (string)$a['body'])
+          . (empty($a['href']) ? '' : "\n\nFix: " . (string)$a['href'])
+          . "\n\n— AiServe Alerts";
+
+    try {
+        $r = evolution_send_text($company, $waId, $text);
+        if (!empty($r['ok'])) {
+            alert_mark_dispatched($alertId, 'whatsapp');
+            return true;
+        }
+        error_log('[AiServe alerts] whatsapp DM failed for alert ' . $alertId
+                  . ': ' . (string)($r['error'] ?? 'unknown'));
+    } catch (Throwable $e) {
+        error_log('[AiServe alerts] whatsapp DM threw for alert ' . $alertId
+                  . ': ' . $e->getMessage());
+    }
+    return false;
 }

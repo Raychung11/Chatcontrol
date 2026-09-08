@@ -126,7 +126,7 @@ foreach ($channels as $c) {
                  . 'state and webhook config.';
         $href    = '/admin/channels_health.php';
 
-        alert_open(
+        $alertId = alert_open(
             (int)$c['company_id'],
             'silent_inbound',
             $subjectRef,
@@ -136,6 +136,9 @@ foreach ($channels as $c) {
             'warn',
             $chId
         );
+        // Dispatch the "background" legs once per incident.
+        alert_dispatch_email($alertId);
+        alert_dispatch_whatsapp($alertId);
         fwrite(STDOUT, "ALERT ch={$chId}  ws={$c['company_name']}  gap={$mins}m  thr=" . (int)floor($threshold / 60) . "m\n");
     } else {
         // Traffic returned — clear a previously-open silent alert.

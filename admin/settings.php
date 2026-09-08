@@ -34,6 +34,14 @@ if (is_post()) {
     $alertEnabled   = !empty($_POST['alert_failed_sends_enabled']) ? 1 : 0;
     $alertThreshold = max(1, (int)($_POST['alert_failed_sends_threshold'] ?? 5));
     $alertEmail     = trim((string)($_POST['alert_email'] ?? ''));
+    // WhatsApp DM escalation number — accept with or without a leading
+    // '+' or spaces. Stored as raw digits; the helper (inc/alerts.php)
+    // normalizes on send. Empty = disabled.
+    $adminAlertRaw   = trim((string)($_POST['admin_alert_phone'] ?? ''));
+    $adminAlertPhone = preg_replace('/\D+/', '', $adminAlertRaw);
+    if ($adminAlertPhone !== '' && strlen($adminAlertPhone) < 6) {
+        $adminAlertPhone = ''; // silently drop obvious garbage
+    }
 
     // Storage / retention. Skipping stickers is the biggest single win.
     $skipStickers   = !empty($_POST['skip_stickers']) ? 1 : 0;
@@ -52,6 +60,7 @@ if (is_post()) {
             'UPDATE companies SET
                 name = ?, brand_color = ?, timezone = ?, default_department_id = ?,
                 alert_failed_sends_enabled = ?, alert_failed_sends_threshold = ?, alert_email = ?,
+                admin_alert_phone = ?,
                 skip_stickers = ?, media_retention_days = ?, media_max_kb = ?
              WHERE id = ?'
         )->execute([
@@ -60,6 +69,7 @@ if (is_post()) {
             $timezone   ?: APP_TIMEZONE,
             $defaultDeptId,
             $alertEnabled, $alertThreshold, $alertEmail ?: null,
+            $adminAlertPhone ?: null,
             $skipStickers, $mediaRetention, $mediaMaxKb,
             $companyId,
         ]);
@@ -236,6 +246,17 @@ layout_start($current_user, 'Workspace settings', 'settings', $company['brand_co
       <input type="email" name="alert_email"
              value="<?= e((string)($company['alert_email'] ?? '')) ?>"
              placeholder="ops@yourcompany.com">
+    </label>
+    <label>WhatsApp DM escalation phone
+      <small class="muted">
+        Optional. When a channel goes stuck, we send a WhatsApp DM to this
+        number from one of your own working channels (never from a
+        different workspace's). Digits only, with or without a leading +.
+      </small>
+      <input type="tel" name="admin_alert_phone"
+             value="<?= e((string)($company['admin_alert_phone'] ?? '')) ?>"
+             placeholder="60123456789"
+             pattern="[+\d\s]*">
     </label>
     <div class="alert alert-info">
       Alerts run via cron every 5 minutes. Same workspace gets at most one

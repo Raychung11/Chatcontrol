@@ -43,7 +43,7 @@ $stmt = $db->prepare(
             co.id AS company_pk, co.name AS company_name,
             co.skip_stickers, co.media_max_kb,
             co.evolution_base_url, co.evolution_api_key,
-            co.evolution_instance_name
+            co.evolution_instance
      FROM messages m
      INNER JOIN companies co ON co.id = m.company_id
      INNER JOIN channels c   ON c.id  = m.channel_id
@@ -74,11 +74,13 @@ foreach ($rows as $r) {
     $msgId    = (int)$r['id'];
     $waMsgId  = (string)$r['wa_message_id'];
     $kind     = (string)$r['message_type'];
+    // evolution_api.php reads $company['evolution_instance'] — the DB
+    // column is 'evolution_instance', not 'evolution_instance_name'.
     $company  = [
-        'id'                      => (int)$r['company_pk'],
-        'evolution_base_url'      => $r['evolution_base_url'],
-        'evolution_api_key'       => $r['evolution_api_key'],
-        'evolution_instance_name' => $r['evolution_instance_name'],
+        'id'                 => (int)$r['company_pk'],
+        'evolution_base_url' => $r['evolution_base_url'],
+        'evolution_api_key'  => $r['evolution_api_key'],
+        'evolution_instance' => $r['evolution_instance'],
     ];
 
     if (!evolution_is_configured($company)) {

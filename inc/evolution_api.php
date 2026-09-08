@@ -340,19 +340,53 @@ function evolution_fetch_media_base64(array $company, string $waMessageId): ?str
 {
     if (!evolution_is_configured($company) || $waMessageId === '') return null;
     $path = '/chat/getBase64FromMediaMessage/' . rawurlencode(evolution_instance_name($company));
-    $r = evolution_request($company, 'POST', $path, [
+    $body = [
         'message'      => ['key' => ['id' => $waMessageId]],
         'convertToMp4' => false,
-    ]);
-    if (!$r['ok']) return null;
-    $b64 = $r['json']['base64'] ?? null;
-    if (!is_string($b64) || $b64 === '') return null;
-    // Some Evolution builds prepend a 'data:<mime>;base64,' scheme — strip it.
-    if (str_starts_with($b64, 'data:')) {
-        $comma = strpos($b64, ',');
-        if ($comma !== false) $b64 = substr($b64, $comma + 1);
+    ];
+
+    // Race: Evolution fires MESSAGES_UPSERT the instant WhatsApp
+    // signals a new message, but Baileys hasn't finished downloading
+    // the media bytes from Meta's CDN yet. getBase64 returns
+    // "Message not found" until the media is fully cached, typically
+    // 2-15 seconds later. Retry with backoff — three attempts total,
+    // waits of 0s / 1500ms / 3500ms. Median latency stays under a
+    // second (most fetches succeed on the first try); worst case
+    // ~5s for the second retry to still land within the webhook
+    // request. Anything slower than that would tie up PHP-FPM
+    // workers, so we cap here — the ingest never blocks longer
+    // than 5s per media message.
+    $sleeps = [0, 1_500_000, 3_500_000]; // microseconds
+    foreach ($sleeps as $i => $wait) {
+        if ($wait > 0) usleep($wait);
+        $r = evolution_request($company, 'POST', $path, $body);
+        if ($r['ok']) {
+            $b64 = $r['json']['base64'] ?? null;
+            if (is_string($b64) && $b64 !== '') {
+                // Some Evolution builds prepend a 'data:<mime>;base64,'
+                // scheme — strip it so callers get raw base64.
+                if (str_starts_with($b64, 'data:')) {
+                    $comma = strpos($b64, ',');
+                    if ($comma !== false) $b64 = substr($b64, $comma + 1);
+                }
+                if ($i > 0) {
+                    error_log('[AiServe evolution] getBase64 succeeded on attempt '
+                              . ($i + 1) . ' for ' . $waMessageId);
+                }
+                return $b64;
+            }
+        }
+        // Only retry when the failure looks temporary — 400 "Message
+        // not found" is the race we're chasing. Bail early on 401 /
+        // 403 (auth broken — retrying won't help) or 5xx (Evolution
+        // is down — same).
+        $code = (int)($r['http_code'] ?? 0);
+        if (in_array($code, [401, 403, 500, 502, 503, 504], true)) {
+            error_log('[AiServe evolution] getBase64 hard-fail HTTP ' . $code . ' for ' . $waMessageId);
+            return null;
+        }
     }
-    return $b64;
+    return null;
 }
 
 /**

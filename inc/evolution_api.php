@@ -336,7 +336,7 @@ function evolution_logout_instance(array $company): array
  * caller is responsible for size-guarding and writing to disk — this
  * helper is intentionally scope-limited to "get me the bytes."
  */
-function evolution_fetch_media_base64(array $company, string $waMessageId): ?string
+function evolution_fetch_media_base64(array $company, string $waMessageId, bool $singleShot = false): ?string
 {
     if (!evolution_is_configured($company) || $waMessageId === '') return null;
     $path = '/chat/getBase64FromMediaMessage/' . rawurlencode(evolution_instance_name($company));
@@ -348,15 +348,19 @@ function evolution_fetch_media_base64(array $company, string $waMessageId): ?str
     // Race: Evolution fires MESSAGES_UPSERT the instant WhatsApp
     // signals a new message, but Baileys hasn't finished downloading
     // the media bytes from Meta's CDN yet. getBase64 returns
-    // "Message not found" until the media is fully cached, typically
-    // 2-15 seconds later. Retry with backoff — three attempts total,
-    // waits of 0s / 1500ms / 3500ms. Median latency stays under a
-    // second (most fetches succeed on the first try); worst case
-    // ~5s for the second retry to still land within the webhook
-    // request. Anything slower than that would tie up PHP-FPM
-    // workers, so we cap here — the ingest never blocks longer
-    // than 5s per media message.
-    $sleeps = [0, 1_500_000, 3_500_000]; // microseconds
+    // "Message not found" until the media is fully cached — sometimes
+    // 2-15 seconds later, occasionally minutes (a big voice note on
+    // slow WhatsApp CDN, or an unreliable Baileys session).
+    //
+    // Webhook path: three attempts inline (0s / 1.5s / 3.5s ≈ 5s worst
+    // case) so quick media renders immediately without needing the
+    // cron sweeper.
+    //
+    // Cron path: cron/evolution_media_sync.php calls with
+    // $singleShot=true — one attempt per candidate — because it re-runs
+    // every minute for 15 minutes; blocking on retries here would let
+    // a batch of 100 pending audios starve the sweeper's runtime.
+    $sleeps = $singleShot ? [0] : [0, 1_500_000, 3_500_000]; // microseconds
     foreach ($sleeps as $i => $wait) {
         if ($wait > 0) usleep($wait);
         $r = evolution_request($company, 'POST', $path, $body);
@@ -387,6 +391,43 @@ function evolution_fetch_media_base64(array $company, string $waMessageId): ?str
         }
     }
     return null;
+}
+
+/**
+ * Map a media MIME type onto a filename extension for on-disk storage.
+ *
+ * Shared by the webhook (immediate save) and cron/evolution_media_sync.php
+ * (async sweep). Evolution sends WhatsApp voice notes with mime
+ * 'audio/ogg; codecs=opus' — a naive string compare against 'audio/ogg'
+ * misses because of the ';codecs=…' parameter suffix, and every voice
+ * note ended up saved as '.bin' which browsers refuse to render as
+ * audio. Strip the parameter and lowercase before matching so both
+ * 'audio/ogg' and 'audio/ogg; codecs=opus' resolve to '.ogg'.
+ */
+function evolution_extension_for_mime(string $mime): string
+{
+    $bare = strtolower(trim(explode(';', $mime)[0]));
+    static $map = [
+        'image/jpeg'   => '.jpg', 'image/pjpeg' => '.jpg',
+        'image/png'    => '.png',
+        'image/webp'   => '.webp',
+        'image/gif'    => '.gif',
+        'image/heic'   => '.heic', 'image/heif' => '.heif',
+        'audio/ogg'    => '.ogg',  'audio/opus' => '.opus',
+        'audio/mpeg'   => '.mp3',  'audio/mp3'  => '.mp3',
+        'audio/mp4'    => '.m4a',  'audio/aac'  => '.aac',
+        'audio/wav'    => '.wav',  'audio/webm' => '.webm',
+        'video/mp4'    => '.mp4',
+        'video/3gpp'   => '.3gp',
+        'video/quicktime' => '.mov',
+        'video/webm'   => '.webm',
+        'application/pdf' => '.pdf',
+        'application/msword' => '.doc',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => '.docx',
+        'application/vnd.ms-excel' => '.xls',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => '.xlsx',
+    ];
+    return $map[$bare] ?? '.bin';
 }
 
 /**

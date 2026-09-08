@@ -812,11 +812,32 @@ function handle_evolution_connection(array $company, array $payload): void
 
 function evolution_extension_for_mime(string $mime): string
 {
+    // Evolution sends WhatsApp voice notes with mime = 'audio/ogg;
+    // codecs=opus' — the ';codecs=…' parameter suffix broke the
+    // string match below, so every voice note got saved as '.bin'
+    // and browsers refused to render it as audio. Strip the
+    // parameter suffix and lowercase before matching so both
+    // 'audio/ogg' and 'audio/ogg; codecs=opus' resolve to '.ogg'.
+    $bare = strtolower(trim(explode(';', $mime)[0]));
     static $map = [
-        'image/jpeg'   => '.jpg', 'image/png' => '.png', 'image/webp' => '.webp', 'image/gif' => '.gif',
-        'audio/ogg'    => '.ogg', 'audio/mpeg' => '.mp3', 'audio/mp4' => '.m4a',
+        'image/jpeg'   => '.jpg', 'image/pjpeg' => '.jpg',
+        'image/png'    => '.png',
+        'image/webp'   => '.webp',
+        'image/gif'    => '.gif',
+        'image/heic'   => '.heic', 'image/heif' => '.heif',
+        'audio/ogg'    => '.ogg',  'audio/opus' => '.opus',
+        'audio/mpeg'   => '.mp3',  'audio/mp3'  => '.mp3',
+        'audio/mp4'    => '.m4a',  'audio/aac'  => '.aac',
+        'audio/wav'    => '.wav',  'audio/webm' => '.webm',
         'video/mp4'    => '.mp4',
+        'video/3gpp'   => '.3gp',
+        'video/quicktime' => '.mov',
+        'video/webm'   => '.webm',
         'application/pdf' => '.pdf',
+        'application/msword' => '.doc',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => '.docx',
+        'application/vnd.ms-excel' => '.xls',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => '.xlsx',
     ];
-    return $map[$mime] ?? '.bin';
+    return $map[$bare] ?? '.bin';
 }

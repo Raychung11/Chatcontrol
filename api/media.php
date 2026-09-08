@@ -67,12 +67,59 @@ if (!is_readable($abs)) {
     http_response_code(404); exit('Not readable.');
 }
 
+// HTTP Range support. Audio elements (especially iOS Safari) hit our
+// media URL with 'Range: bytes=0-1' first as a probe, and refuse to
+// begin playback if the server responds with the whole file (200)
+// instead of a 206 Partial Content. Same for browser <video> and
+// browser-native PDF viewers. Every media type benefits — audio just
+// SILENTLY FAILED without it.
+$fileSize = filesize($abs);
+$start = 0;
+$end   = $fileSize - 1;
+$isRange = false;
+
+if (isset($_SERVER['HTTP_RANGE'])
+    && preg_match('/^bytes=(\d+)-(\d*)$/', (string)$_SERVER['HTTP_RANGE'], $m)) {
+    $reqStart = (int)$m[1];
+    $reqEnd   = ($m[2] !== '') ? (int)$m[2] : ($fileSize - 1);
+    if ($reqStart > $reqEnd || $reqStart >= $fileSize) {
+        // Client asked for a range past the end of the file.
+        http_response_code(416);
+        header('Content-Range: bytes */' . $fileSize);
+        exit;
+    }
+    $start   = $reqStart;
+    $end     = min($reqEnd, $fileSize - 1);
+    $isRange = true;
+}
+
 header('Content-Type: ' . $mime);
-header('Content-Length: ' . filesize($abs));
+header('Content-Length: ' . ($end - $start + 1));
+header('Accept-Ranges: bytes');
 header('Content-Disposition: inline; filename="' . rawurlencode($filename) . '"');
 header('X-Content-Type-Options: nosniff');
 header('Cache-Control: private, max-age=300');
-readfile($abs);
+if ($isRange) {
+    http_response_code(206);
+    header('Content-Range: bytes ' . $start . '-' . $end . '/' . $fileSize);
+    $fp = fopen($abs, 'rb');
+    if ($fp === false) { http_response_code(500); exit; }
+    fseek($fp, $start);
+    $remaining = $end - $start + 1;
+    // Stream in 64 KB chunks so we don't allocate the whole slice in
+    // memory for a 20 MB voice note.
+    while ($remaining > 0 && !feof($fp)) {
+        $chunk = fread($fp, min(65536, $remaining));
+        if ($chunk === false) break;
+        echo $chunk;
+        $remaining -= strlen($chunk);
+        if (ob_get_level() > 0) @ob_flush();
+        @flush();
+    }
+    fclose($fp);
+} else {
+    readfile($abs);
+}
 exit;
 
 function mime_from_path(string $path): string

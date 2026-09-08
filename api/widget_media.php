@@ -54,16 +54,62 @@ $abs      = (string)$row['media_local_path'];
 $mime     = (string)($row['media_mime_type'] ?? '') ?: 'application/octet-stream';
 $filename = (string)($row['media_filename']  ?? '') ?: basename($abs);
 
-// Images render inline; anything else is offered as a download so the
-// widget doesn't accidentally show binary as text.
-$isImage    = str_starts_with($mime, 'image/');
-$disposition = $isImage ? 'inline' : 'attachment';
+// Images render inline; audio + video render inline so the browser's
+// native player can play them. Everything else is offered as a download
+// so the widget doesn't accidentally show binary as text.
+$isInline = str_starts_with($mime, 'image/')
+         || str_starts_with($mime, 'audio/')
+         || str_starts_with($mime, 'video/');
+$disposition = $isInline ? 'inline' : 'attachment';
+
+// HTTP Range support — iOS Safari and most browser audio players
+// probe with 'Range: bytes=0-1' and refuse to start playback if the
+// server responds with the whole file. Same reason we added it to
+// api/media.php. Streams in 64 KB chunks so a big voice note doesn't
+// buffer the whole payload in PHP memory.
+$fileSize = filesize($abs);
+$start = 0;
+$end   = $fileSize - 1;
+$isRange = false;
+
+if (isset($_SERVER['HTTP_RANGE'])
+    && preg_match('/^bytes=(\d+)-(\d*)$/', (string)$_SERVER['HTTP_RANGE'], $rm)) {
+    $reqStart = (int)$rm[1];
+    $reqEnd   = ($rm[2] !== '') ? (int)$rm[2] : ($fileSize - 1);
+    if ($reqStart > $reqEnd || $reqStart >= $fileSize) {
+        http_response_code(416);
+        header('Content-Range: bytes */' . $fileSize);
+        exit;
+    }
+    $start   = $reqStart;
+    $end     = min($reqEnd, $fileSize - 1);
+    $isRange = true;
+}
 
 header('Content-Type: ' . $mime);
-header('Content-Length: ' . filesize($abs));
+header('Content-Length: ' . ($end - $start + 1));
+header('Accept-Ranges: bytes');
 header('Content-Disposition: ' . $disposition . '; filename="' . rawurlencode($filename) . '"');
 // Short-cache: reuse within a browsing session, never share across
 // users. This URL carries the session token so it MUST stay private.
 header('Cache-Control: private, max-age=3600');
 header('X-Content-Type-Options: nosniff');
-readfile($abs);
+if ($isRange) {
+    http_response_code(206);
+    header('Content-Range: bytes ' . $start . '-' . $end . '/' . $fileSize);
+    $fp = fopen($abs, 'rb');
+    if ($fp === false) { http_response_code(500); exit; }
+    fseek($fp, $start);
+    $remaining = $end - $start + 1;
+    while ($remaining > 0 && !feof($fp)) {
+        $chunk = fread($fp, min(65536, $remaining));
+        if ($chunk === false) break;
+        echo $chunk;
+        $remaining -= strlen($chunk);
+        if (ob_get_level() > 0) @ob_flush();
+        @flush();
+    }
+    fclose($fp);
+} else {
+    readfile($abs);
+}

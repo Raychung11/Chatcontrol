@@ -37,13 +37,22 @@ $db = aiserve_db();
 // Only sweep messages young enough that Baileys might still hold the
 // media. After 15 min the odds are the Meta CDN URL has expired and
 // no amount of retrying will help — spare the cron the noise.
+// Source of truth for a workspace's Evolution config is the CHANNELS
+// row (migration_phase11). New instances paired via
+// /admin/evolution_connect.php write straight into channels.evolution_*
+// and never touch the legacy companies columns, so an old JOIN against
+// companies.evolution_* returned empty and the cron kept skipping every
+// candidate with "evolution not configured". Read from channels; fall
+// back to companies.* only for very old single-channel workspaces
+// where migration_phase11 hasn't been re-run.
 $stmt = $db->prepare(
     "SELECT m.id, m.wa_message_id, m.message_type, m.media_mime_type,
             m.media_filename, m.company_id, m.channel_id,
             co.id AS company_pk, co.name AS company_name,
             co.skip_stickers, co.media_max_kb,
-            co.evolution_base_url, co.evolution_api_key,
-            co.evolution_instance
+            COALESCE(NULLIF(c.evolution_base_url, ''), co.evolution_base_url) AS evolution_base_url,
+            COALESCE(NULLIF(c.evolution_api_key,  ''), co.evolution_api_key)  AS evolution_api_key,
+            COALESCE(NULLIF(c.evolution_instance, ''), co.evolution_instance) AS evolution_instance
      FROM messages m
      INNER JOIN companies co ON co.id = m.company_id
      INNER JOIN channels c   ON c.id  = m.channel_id

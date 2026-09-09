@@ -44,10 +44,15 @@ if (mb_strlen($text) > 4000) {
 
 $db = aiserve_db();
 $st = $db->prepare(
-    'SELECT s.*, c.company_id, ct.wa_id
+    'SELECT s.*, c.company_id, ct.wa_id,
+            nc.label        AS nfc_label,
+            nc.table_number AS nfc_table_number,
+            nc.branch_id    AS nfc_branch_id,
+            nc.campaign     AS nfc_campaign
      FROM web_chat_sessions s
      INNER JOIN channels  c  ON c.id  = s.channel_id
      INNER JOIN contacts  ct ON ct.id = s.contact_id
+     LEFT  JOIN nfc_cards nc ON nc.id = s.nfc_card_id
      WHERE s.session_token = ? AND s.expires_at > NOW() LIMIT 1'
 );
 $st->execute([$sessionToken]);
@@ -88,19 +93,57 @@ try {
         $conversationId = (int)$db->lastInsertId();
         $isNewConversation = true;
 
-        // Stash context (table number, etc.) as an internal system note
-        // on the new conversation so agents see it immediately. Best-
-        // effort — the note is a nicety, if the internal_notes schema
-        // doesn't allow NULL user_id, we swallow the error and move on
-        // rather than fail the entire message delivery.
+        // Stash any context (URL ?t=, or a decorated line for an NFC
+        // tap that carries structured metadata) as an internal system
+        // note on the new conversation so agents see it immediately.
+        // Best-effort — the note is a nicety, if the internal_notes
+        // schema doesn't allow NULL user_id, we swallow the error and
+        // move on rather than fail the entire message delivery.
+        $noteLines = [];
+        if (!empty($sess['nfc_card_id'])) {
+            $nfcLine = '📇 Tapped NFC card';
+            if (!empty($sess['nfc_label'])) {
+                $nfcLine .= ': ' . (string)$sess['nfc_label'];
+            }
+            $noteLines[] = $nfcLine;
+            if (!empty($sess['nfc_table_number'])) {
+                $noteLines[] = '🪑 Table ' . (int)$sess['nfc_table_number'];
+            }
+            if (!empty($sess['nfc_campaign'])) {
+                $noteLines[] = '🎯 Campaign: ' . (string)$sess['nfc_campaign'];
+            }
+        }
         if (!empty($sess['context'])) {
+            $noteLines[] = 'Context: ' . (string)$sess['context'];
+        }
+        if ($noteLines) {
             try {
                 $db->prepare(
                     'INSERT INTO internal_notes (company_id, conversation_id, user_id, note_text)
                      VALUES (?, ?, NULL, ?)'
-                )->execute([$companyId, $conversationId, '🪑 Customer context: ' . (string)$sess['context']]);
+                )->execute([$companyId, $conversationId, implode("\n", $noteLines)]);
             } catch (Throwable $noteErr) {
                 error_log('[AiServe widget_send internal_notes] ' . $noteErr->getMessage());
+            }
+        }
+
+        // NFC-card branch routing: stamp the customer's contact with
+        // the card's branch_id (only if the contact isn't already
+        // pinned to a different branch — respect prior manual assign)
+        // then defer to the shared branch_rotation_apply() helper so
+        // widget conversations follow the same rotation as WhatsApp
+        // inbounds. Best-effort — never let a routing hiccup drop
+        // the message.
+        if (!empty($sess['nfc_branch_id'])) {
+            try {
+                $db->prepare(
+                    'UPDATE contacts SET branch_id = ?
+                     WHERE id = ? AND (branch_id IS NULL OR branch_id = 0)'
+                )->execute([(int)$sess['nfc_branch_id'], $contactId]);
+                require_once __DIR__ . '/../inc/branch_rotation.php';
+                branch_rotation_apply($db, $conversationId);
+            } catch (Throwable $rrErr) {
+                error_log('[AiServe widget_send branch_rotation] ' . $rrErr->getMessage());
             }
         }
     } else {

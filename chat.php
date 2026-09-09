@@ -18,6 +18,12 @@ require_once __DIR__ . '/inc/channels.php';
 
 $channelToken = trim((string)($_GET['c'] ?? ''));
 $context      = trim((string)($_GET['t'] ?? ''));
+// NFC card token — set when the customer arrived via /tap.php. Passed
+// through to /api/widget_start.php so session.nfc_card_id gets stamped
+// and the card's label/table/branch/campaign land on the conversation
+// at the first outbound message.
+$nfcToken     = trim((string)($_GET['nfc'] ?? ''));
+if (!preg_match('/^[a-f0-9]{16}$/i', $nfcToken)) $nfcToken = '';
 
 if ($channelToken === '') {
     http_response_code(400);
@@ -214,6 +220,7 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
 (function () {
   const CHANNEL_TOKEN = <?= json_encode($channelToken) ?>;
   const CONTEXT       = <?= json_encode($context) ?>;
+  const NFC_TOKEN     = <?= json_encode($nfcToken) ?>;
   const GREETING      = <?= json_encode($greet) ?>;
   const STORAGE_KEY   = 'wc_session_' + CHANNEL_TOKEN;
   const POLL_MS       = 3000;
@@ -393,8 +400,9 @@ body { background: #f0f2f5; color: #111; display: flex; flex-direction: column; 
     try { existing = localStorage.getItem(STORAGE_KEY); } catch (e) {}
     const fd = new FormData();
     fd.append('channel_token', CHANNEL_TOKEN);
-    if (existing) fd.append('session_token', existing);
-    if (CONTEXT)  fd.append('context', CONTEXT);
+    if (existing)  fd.append('session_token', existing);
+    if (CONTEXT)   fd.append('context', CONTEXT);
+    if (NFC_TOKEN) fd.append('nfc_token', NFC_TOKEN);
     try {
       const res = await fetch('/api/widget_start.php', { method: 'POST', body: fd });
       let data;

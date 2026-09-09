@@ -30,6 +30,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
 $channelToken = trim((string)($_POST['channel_token'] ?? ''));
 $sessionToken = trim((string)($_POST['session_token'] ?? ''));
 $context      = mb_substr(trim((string)($_POST['context'] ?? '')), 0, 120);
+// NFC card token forwarded from chat.php. Optional. When present and
+// valid it links the session to the physical card so widget_send.php
+// can attribute the conversation (label, table, branch, campaign).
+$nfcToken     = trim((string)($_POST['nfc_token'] ?? ''));
+if (!preg_match('/^[a-f0-9]{16}$/i', $nfcToken)) $nfcToken = '';
 
 if ($channelToken === '') {
     http_response_code(400);
@@ -45,6 +50,19 @@ if (!$channel || $channel['provider'] !== 'web_chat' || $channel['status'] !== '
 $db = aiserve_db();
 $companyId = (int)$channel['company_id'];
 
+// Resolve the NFC card (if any) so both the resume and fresh-session
+// paths below can stamp the link. Scoped to this workspace so a
+// forged token from another company can't attach.
+$nfcCardId = null;
+if ($nfcToken !== '') {
+    $s = $db->prepare(
+        'SELECT id FROM nfc_cards
+         WHERE token = ? AND company_id = ? AND enabled = 1 LIMIT 1'
+    );
+    $s->execute([strtolower($nfcToken), $companyId]);
+    $nfcCardId = (int)$s->fetchColumn() ?: null;
+}
+
 // -------------------- Resume path --------------------
 if ($sessionToken !== '' && preg_match('/^[a-f0-9]{48}$/', $sessionToken)) {
     $st = $db->prepare(
@@ -56,8 +74,22 @@ if ($sessionToken !== '' && preg_match('/^[a-f0-9]{48}$/', $sessionToken)) {
     $sess = $st->fetch();
     if ($sess) {
         // Bump last_seen + expiry. History = last 50 messages on the conv.
-        $db->prepare('UPDATE web_chat_sessions SET last_seen_at = NOW(), expires_at = NOW() + INTERVAL 30 DAY WHERE session_token = ?')
-           ->execute([$sessionToken]);
+        // On a resume arriving with an nfc_token — the same customer scanned
+        // a second (or different) card in the same browser — refresh the
+        // link so the FRESH conversation, if one gets created, picks up the
+        // new card's metadata. We don't retroactively rewrite an existing
+        // conversation's attribution — the first card owns it.
+        if ($nfcCardId !== null) {
+            $db->prepare('UPDATE web_chat_sessions
+                          SET last_seen_at = NOW(),
+                              expires_at   = NOW() + INTERVAL 30 DAY,
+                              nfc_card_id  = COALESCE(nfc_card_id, ?)
+                          WHERE session_token = ?')
+               ->execute([$nfcCardId, $sessionToken]);
+        } else {
+            $db->prepare('UPDATE web_chat_sessions SET last_seen_at = NOW(), expires_at = NOW() + INTERVAL 30 DAY WHERE session_token = ?')
+               ->execute([$sessionToken]);
+        }
 
         $history = [];
         $lastId = 0;
@@ -123,17 +155,37 @@ try {
     $ins->execute([$companyId, $waId, $displayName]);
     $contactId = (int)$db->lastInsertId();
 
-    // Session row.
+    // Session row. nfc_card_id may be NULL for direct-widget visits
+    // (no card involved) or the FK to the physical card that spawned
+    // this session.
     $db->prepare(
         'INSERT INTO web_chat_sessions
-            (session_token, channel_id, contact_id, context, ip, user_agent, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, NOW() + INTERVAL 30 DAY)'
+            (session_token, channel_id, contact_id, context, nfc_card_id,
+             ip, user_agent, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW() + INTERVAL 30 DAY)'
     )->execute([
         $newToken, (int)$channel['id'], $contactId,
         $context ?: null,
+        $nfcCardId,
         mb_substr(client_ip(), 0, 45),
         mb_substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 255),
     ]);
+    // Back-fill the tap event with the session token so the admin
+    // analytics can join taps to sessions ("of the 40 taps on this
+    // card, 27 turned into a conversation"). Best-effort — nothing
+    // breaks if the tap row doesn't exist (deep-linked in a browser
+    // without going through tap.php).
+    if ($nfcCardId !== null) {
+        try {
+            $db->prepare(
+                'UPDATE nfc_tap_events
+                 SET session_token = ?
+                 WHERE card_id = ? AND session_token IS NULL
+                   AND tapped_at > NOW() - INTERVAL 10 MINUTE
+                 ORDER BY id DESC LIMIT 1'
+            )->execute([$newToken, $nfcCardId]);
+        } catch (Throwable $e) { /* noop */ }
+    }
     $db->commit();
 } catch (Throwable $e) {
     if ($db->inTransaction()) $db->rollBack();

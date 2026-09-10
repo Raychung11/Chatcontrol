@@ -55,6 +55,17 @@ if (is_post()) {
         if ($evoApiKey    === '') $evoApiKey    = (string)($row['evolution_api_key']   ?? '');
         if ($chatbotToken === '') $chatbotToken = (string)($row['chatbot_bearer_token'] ?? '');
     }
+    // Fall back to platform-level Evolution defaults for a brand-new
+    // channel row that ships with the workspace only supplying an
+    // instance name. Set in /admin/evolution_defaults.php by the
+    // platform super admin. Workspaces that need a different Evolution
+    // box can still override — the manual field takes precedence.
+    if ($provider === 'evolution') {
+        require_once __DIR__ . '/../inc/evolution_api.php';
+        $defaults = evolution_platform_defaults();
+        if ($evoBase   === '' && $defaults['base_url'] !== '') $evoBase   = $defaults['base_url'];
+        if ($evoApiKey === '' && $defaults['api_key']  !== '') $evoApiKey = $defaults['api_key'];
+    }
 
     if ($name === '') {
         $err = 'Channel name is required.';
@@ -255,18 +266,43 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
       <?php endif; ?>
     </label>
 
+    <?php
+      // Platform-level defaults (from platform_settings, editable at
+      // /admin/evolution_defaults.php). When set, the operator only
+      // needs to type an instance name and hit save — base URL + API
+      // key auto-fill from these defaults.
+      require_once __DIR__ . '/../inc/evolution_api.php';
+      $evoDefaults = evolution_platform_defaults();
+    ?>
     <h3>Evolution API fields</h3>
+    <?php if ($evoDefaults['base_url'] !== '' || $evoDefaults['api_key'] !== ''): ?>
+      <div class="alert alert-info" style="margin-bottom:12px;">
+        ✨ <strong>Platform default in use.</strong> Leave the base URL and API
+        key blank and this channel will use the shared Evolution server
+        automatically. Only fill them in if this workspace needs a
+        different Evolution box.
+      </div>
+    <?php endif; ?>
     <label>Evolution base URL
-      <input type="url" name="evolution_base_url" value="<?= e($row['evolution_base_url'] ?? '') ?>" placeholder="https://evo.your-server.com">
+      <input type="url" name="evolution_base_url"
+             value="<?= e($row['evolution_base_url'] ?? '') ?>"
+             placeholder="<?= e($evoDefaults['base_url'] ?: 'https://evo.your-server.com') ?>">
+      <?php if ($evoDefaults['base_url'] !== '' && empty($row['evolution_base_url'])): ?>
+        <small class="muted">Using platform default: <code><?= e($evoDefaults['base_url']) ?></code></small>
+      <?php endif; ?>
     </label>
     <label>Evolution API key <small class="muted">(leave blank to keep existing)</small>
       <input type="password" name="evolution_api_key" autocomplete="new-password">
       <?php if (!empty($row['evolution_api_key'])): ?>
         <small class="muted">Currently set: <code><?= e(substr($row['evolution_api_key'], 0, 6)) ?>…</code></small>
+      <?php elseif ($evoDefaults['api_key'] !== ''): ?>
+        <small class="muted">Using platform default (<?= strlen($evoDefaults['api_key']) ?>-char key).</small>
       <?php endif; ?>
     </label>
     <label>Instance name
-      <input type="text" name="evolution_instance" value="<?= e($row['evolution_instance'] ?? '') ?>">
+      <input type="text" name="evolution_instance" value="<?= e($row['evolution_instance'] ?? '') ?>"
+             placeholder="e.g. <?= e(preg_replace('/[^a-z0-9]+/', '-', strtolower((string)($row['name'] ?? 'workspace')))) ?>">
+      <small class="muted">Short lowercase-hyphen name. Must be unique across every workspace on the same Evolution server.</small>
     </label>
 
     <h3>AiServe Chatbot Gateway fields</h3>

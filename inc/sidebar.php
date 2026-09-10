@@ -83,7 +83,7 @@ $sb_groups = [
     'settings'  => ['settings', 'ai_settings', 'plan', 'my_invoices'],
     'fnb'       => ['fnb_orders', 'fnb_menu', 'fnb_analytics', 'fnb_flow_debug'],
     'platform'  => ['workspaces', 'channels_debug', 'ai_billing', 'invoices',
-                    'mail_settings', 'mail_test', 'business_info', 'broadcast_pricing',
+                    'mail_settings', 'mail_test', 'business_info', 'broadcast_pricing', 'evolution_defaults',
                     'broadcast_credits',
                     'pricing', 'legal', 'branding',
                     'evolution_connect', 'webhook_log', 'connection_debug'],
@@ -213,6 +213,7 @@ $fnbActive = fnb_module_active((int)($current_user['company_id'] ?? 0));
         <a href="/admin/pricing.php"           class="<?= $active === 'pricing'           ? 'active' : '' ?>">Seat pricing</a>
         <a href="/admin/legal.php"             class="<?= $active === 'legal'             ? 'active' : '' ?>">Legal text (T&amp;C)</a>
         <a href="/admin/branding.php"          class="<?= $active === 'branding'          ? 'active' : '' ?>">Branding &amp; icon</a>
+        <a href="/admin/evolution_defaults.php" class="<?= $active === 'evolution_defaults' ? 'active' : '' ?>">⚙️ Evolution defaults</a>
         <a href="/admin/evolution_connect.php" class="<?= $active === 'evolution_connect' ? 'active' : '' ?>">Connect WhatsApp</a>
         <a href="/admin/webhook_log.php"       class="<?= $active === 'webhook_log'       ? 'active' : '' ?>">Webhook log</a>
         <a href="/admin/connection_debug.php"  class="<?= $active === 'connection_debug'  ? 'active' : '' ?>">Connection debug</a>

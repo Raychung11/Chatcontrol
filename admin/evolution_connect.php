@@ -44,7 +44,33 @@ function evo_channel(PDO $db, int $channelId, int $companyId): ?array
          WHERE id = ? AND company_id = ? AND provider = 'evolution' LIMIT 1"
     );
     $s->execute([$channelId, $companyId]);
-    return $s->fetch() ?: null;
+    $row = $s->fetch();
+    if (!$row) return null;
+
+    // Merge in platform-level defaults for any blank Evolution fields
+    // so a workspace admin can pair a channel by only picking an
+    // instance name — no need to know the base URL or the shared API
+    // key. Persisted-on-first-use so the DB row reflects the values
+    // actually being used; if the platform default rotates later,
+    // the next channel_edit save will pick up the new value.
+    if (empty($row['evolution_base_url']) || empty($row['evolution_api_key'])) {
+        $d = evolution_platform_defaults();
+        $newBase = !empty($row['evolution_base_url']) ? $row['evolution_base_url'] : $d['base_url'];
+        $newKey  = !empty($row['evolution_api_key'])  ? $row['evolution_api_key']  : $d['api_key'];
+        if ($newBase !== '' && $newKey !== '') {
+            try {
+                $db->prepare(
+                    'UPDATE channels
+                     SET evolution_base_url = COALESCE(NULLIF(evolution_base_url,""), ?),
+                         evolution_api_key  = COALESCE(NULLIF(evolution_api_key, ""), ?)
+                     WHERE id = ?'
+                )->execute([$newBase, $newKey, $channelId]);
+            } catch (Throwable $e) { /* fall through */ }
+            $row['evolution_base_url'] = $newBase;
+            $row['evolution_api_key']  = $newKey;
+        }
+    }
+    return $row;
 }
 
 /** Compute the public webhook URL this portal advertises to Evolution. */
@@ -208,9 +234,17 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
 
 <div class="ec-shell">
   <h1>📱 Pair WhatsApp <span class="muted small">(Evolution / Baileys)</span></h1>
+  <?php $__evoDefaults = evolution_platform_defaults(); ?>
   <p class="ec-hint">
-    Pair a WhatsApp number to one of your Evolution channels. Requires the channel to already have its
-    Base URL, API key, and instance name filled in on <a href="/admin/channels.php">Channels</a>.
+    Pair a WhatsApp number to one of your Evolution channels.
+    <?php if ($__evoDefaults['base_url'] !== '' && $__evoDefaults['api_key'] !== ''): ?>
+      This platform runs a shared Evolution server, so you only need to give the channel an
+      <strong>instance name</strong> on <a href="/admin/channels.php">Channels</a> — the base URL and API
+      key auto-fill from the platform default.
+    <?php else: ?>
+      Requires the channel to already have its Base URL, API key, and instance name filled in
+      on <a href="/admin/channels.php">Channels</a>.
+    <?php endif; ?>
   </p>
 
   <?php if (!$channels): ?>

@@ -82,6 +82,34 @@ function evolution_base(array $company): string
     return rtrim((string)$company['evolution_base_url'], '/');
 }
 
+/**
+ * Platform-level defaults for the Evolution base URL + API key.
+ *
+ * Read from platform_settings (keys 'evolution_default_base_url' and
+ * 'evolution_default_api_key'), settable via /admin/evolution_defaults.php.
+ * When set, admin/channel_edit.php and admin/evolution_connect.php
+ * auto-fill blank per-channel fields from these — a workspace admin
+ * only needs to pick an instance name to pair.
+ *
+ * Falls back to PHP constants EVOLUTION_DEFAULT_BASE_URL /
+ * EVOLUTION_DEFAULT_API_KEY (settable in config/db_config.local.php)
+ * so a brand-new install can boot with sane defaults before anyone
+ * touches the admin UI. Ultimately empty strings if nothing is set.
+ *
+ * Returns ['base_url' => ..., 'api_key' => ...].
+ */
+function evolution_platform_defaults(): array
+{
+    $base = platform_setting('evolution_default_base_url', '');
+    $key  = platform_setting('evolution_default_api_key',  '');
+    if ($base === '' && defined('EVOLUTION_DEFAULT_BASE_URL')) $base = (string)EVOLUTION_DEFAULT_BASE_URL;
+    if ($key  === '' && defined('EVOLUTION_DEFAULT_API_KEY'))  $key  = (string)EVOLUTION_DEFAULT_API_KEY;
+    return [
+        'base_url' => rtrim($base, '/'),
+        'api_key'  => $key,
+    ];
+}
+
 function evolution_instance_name(array $company): string
 {
     return (string)$company['evolution_instance'];

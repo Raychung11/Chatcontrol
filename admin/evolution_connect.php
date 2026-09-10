@@ -340,11 +340,19 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
         $('ec-create').onclick = async () => {
           log('Creating Evolution instance + registering webhook…');
           const r = await call('create');
-          if (r.ok || r.error === null) {
+          // Two independent signals need to succeed here: the create call
+          // AND the webhook set. Previously `r.error === null` bailed us
+          // to a false-success log when the endpoint 401'd with no body,
+          // masking a stale API key. Report each leg on its own.
+          if (r.ok) {
             log('✓ Instance created (or already exists)', 'ok');
+          } else {
+            log('✗ Create failed: ' + (r.error || 'unknown error — check API key on this channel'), 'err');
+          }
+          if (r.webhook_ok) {
             log('✓ Webhook registered → ' + (r.webhook_url || '?'), 'ok');
           } else {
-            log('✗ Create failed: ' + r.error, 'err');
+            log('✗ Webhook registration failed — Evolution rejected the request', 'err');
           }
         };
 

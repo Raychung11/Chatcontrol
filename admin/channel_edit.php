@@ -44,6 +44,20 @@ if (is_post()) {
     $evoBase     = trim((string)($_POST['evolution_base_url'] ?? ''));
     $evoApiKey   = trim((string)($_POST['evolution_api_key']  ?? ''));
     $evoInstance = trim((string)($_POST['evolution_instance'] ?? ''));
+    // Slug-normalize the instance name so it survives being embedded
+    // in a URL path (Evolution v2's route matcher on
+    // /instance/connectionState/<name> 401s instead of 404s when the
+    // name contains %20-encoded spaces, which cost us a debug loop
+    // once). Rules: lowercase, spaces/underscores → hyphen, strip
+    // everything except [a-z0-9-], collapse repeats, trim edges.
+    if ($evoInstance !== '') {
+        $slug = strtolower($evoInstance);
+        $slug = preg_replace('/[\s_]+/', '-', $slug);
+        $slug = preg_replace('/[^a-z0-9-]+/', '', $slug);
+        $slug = preg_replace('/-+/', '-', $slug);
+        $slug = trim($slug, '-');
+        $evoInstance = $slug !== '' ? $slug : $evoInstance;
+    }
 
     // Chatbot
     $chatbotUrl   = rtrim(trim((string)($_POST['chatbot_base_url']     ?? '')), '/');

@@ -174,6 +174,59 @@ if (is_post() && !empty($_POST['action'])) {
                          'channel', $chId);
             echo json_encode($r);
             exit;
+
+        case 'reset':
+            // Hard reset for a stuck instance. Sequence matters:
+            //   1. Best-effort logout (drops any active session cleanly)
+            //   2. Delete the instance from Evolution (nukes stored keys
+            //      + Baileys session data + creds). Idempotent — 404
+            //      is fine.
+            //   3. Create it fresh (regenerates session storage under
+            //      the same instance name)
+            //   4. Re-register OUR webhook so incoming events reach us
+            //      once the customer re-pairs
+            // The JS follows this up with a state poll + a fresh QR
+            // fetch, so the operator sees a working QR seconds after
+            // clicking without walking through the wizard again.
+            //
+            // Clear probe cache so the state row shows 'unknown' until
+            // the next probe re-establishes it — visually signals the
+            // reset actually happened.
+            $steps = [];
+            try {
+                $steps['logout'] = evolution_logout_instance($ch)['ok']
+                    ? 'ok' : 'skipped (no session)';
+            } catch (Throwable $e) { $steps['logout'] = 'error: ' . $e->getMessage(); }
+
+            $del = evolution_delete_instance($ch);
+            $steps['delete'] = $del['ok']
+                ? 'ok'
+                : ('failed HTTP ' . ($del['http_code'] ?? '?'));
+
+            $cre = evolution_create_instance($ch);
+            $steps['create'] = $cre['ok'] ? 'ok' : ('failed: ' . ($cre['error'] ?? ''));
+
+            $wh = evolution_set_webhook($ch, evo_webhook_url($ch));
+            $steps['webhook'] = ($wh['ok'] ?? false) ? 'ok' : 'failed';
+
+            try {
+                $db->prepare(
+                    'UPDATE channels
+                     SET probe_state = "unknown", probe_state_since = NOW(),
+                         probe_last_at = NOW()
+                     WHERE id = ?'
+                )->execute([$chId]);
+            } catch (Throwable $e) { /* noop */ }
+
+            log_activity($companyId, (int)$current_user['id'], 'evolution_instance_reset',
+                         'channel', $chId, evolution_instance_name($ch));
+            echo json_encode([
+                'ok'          => $cre['ok'] && ($wh['ok'] ?? false),
+                'steps'       => $steps,
+                'webhook_url' => evo_webhook_url($ch),
+                'error'       => $cre['ok'] ? null : ($cre['error'] ?? 'create failed'),
+            ]);
+            exit;
     }
 
     echo json_encode(['ok' => false, 'error' => 'Unknown action.']);
@@ -282,8 +335,16 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
         <button type="button" id="ec-create" class="primary">2. Create instance + webhook</button>
         <button type="button" id="ec-qr" class="primary">3. Show QR to pair</button>
         <button type="button" id="ec-webhook">Re-register webhook</button>
+        <button type="button" id="ec-reset"  class="danger">🔄 Reset &amp; re-pair</button>
         <button type="button" id="ec-logout" class="danger">Log out (end session)</button>
       </div>
+      <p class="ec-hint" style="margin-top:-8px;">
+        Stuck on <strong>Connecting</strong> for more than a minute? Click
+        <strong>🔄 Reset &amp; re-pair</strong> — it nukes the stale instance
+        inside Evolution, rebuilds it, re-registers the webhook, and shows
+        you a fresh QR so you can pair from scratch without walking
+        through the wizard again.
+      </p>
 
       <div id="ec-qr-panel" class="ec-qr" style="display:none;">
         <img id="ec-qr-img" src="" alt="Pair WhatsApp QR">
@@ -391,6 +452,44 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
           const r = await call('logout');
           if (r.ok) { log('✓ Logged out', 'ok'); setState('disconnected'); }
           else      log('✗ ' + (r.error || 'failed'), 'err');
+        };
+
+        // 🔄 Reset & re-pair — hard reset for a stuck 'connecting' session.
+        // Runs logout → delete → create → webhook in one shot, then
+        // immediately fetches a fresh QR so the operator doesn't have to
+        // rewalk the wizard. Each step is logged so a partial failure
+        // (e.g. logout failed because there was nothing to log out of)
+        // is transparent instead of hidden.
+        $('ec-reset').onclick = async () => {
+          if (!confirm('Reset this WhatsApp number in Evolution?\n\n'
+                     + 'This nukes the stuck session, rebuilds the instance, '
+                     + 'and shows a fresh QR. Any in-progress pairing on the '
+                     + 'phone will need to be restarted.')) return;
+          log('Resetting…');
+          const r = await call('reset');
+          const steps = r.steps || {};
+          for (const k of ['logout','delete','create','webhook']) {
+            const s = steps[k];
+            if (!s) continue;
+            const label = k.charAt(0).toUpperCase() + k.slice(1);
+            (s === 'ok' ? log : log)(
+              (s === 'ok' ? '✓ ' : '· ') + label + ': ' + s,
+              s === 'ok' ? 'ok' : (s.startsWith('failed') ? 'err' : '')
+            );
+          }
+          if (!r.ok) {
+            log('✗ Reset did not complete: ' + (r.error || 'see steps above'), 'err');
+            return;
+          }
+          log('✓ Reset complete. Fetching fresh QR…', 'ok');
+          // Small delay so Baileys has a beat to open its socket before
+          // /instance/connect asks for the QR.
+          await new Promise((r) => setTimeout(r, 1000));
+          $('ec-qr').click();
+          // And bump the state row so the dot reflects the fresh
+          // instance immediately.
+          const st = await call('state');
+          if (st.ok) setState(st.state);
         };
 
         // Live poll — cheap, only runs while the tab is visible.

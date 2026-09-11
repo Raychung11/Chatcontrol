@@ -347,6 +347,24 @@ function evolution_logout_instance(array $company): array
 }
 
 /**
+ * Fully remove the instance from Evolution — session data, keys,
+ * everything. Different from logout: logout requires a paired session,
+ * this works on any state including 'connecting' and 'unknown'. Used
+ * by the wizard's Reset & re-pair path when Baileys gets stuck
+ * mid-handshake and refuses to accept a fresh QR without a clean slate.
+ *
+ * 404 is treated as success — no instance to delete means we're
+ * already at the target state.
+ */
+function evolution_delete_instance(array $company): array
+{
+    $path = '/instance/delete/' . rawurlencode(evolution_instance_name($company));
+    $r = evolution_request($company, 'DELETE', $path);
+    $ok = $r['ok'] || (int)$r['http_code'] === 404;
+    return ['ok' => $ok, 'http_code' => $r['http_code'], 'raw' => $r['json']];
+}
+
+/**
  * Fetch a message's media bytes as base64 from Evolution.
  *
  * Evolution v2.3.x rejects the per-webhook 'webhookBase64: true' setting

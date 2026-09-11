@@ -57,6 +57,22 @@ if ($scope === 'chat') {
     if ($conversationId <= 0) {
         json_response(['ok' => false, 'error' => 'conversation_id required.'], 400);
     }
+    // Viewer heartbeat: a foreground poll from this user marks them
+    // as currently viewing this conversation. notify_new_inbound()
+    // reads users.viewing_conversation_id + users.viewing_at within a
+    // 30s window and suppresses the push so an agent staring at the
+    // chat doesn't get a redundant lock-screen entry. See inc/notify.php.
+    //
+    // Guard on the client-supplied `visible` flag — the chat poller
+    // in app.js sends visible=1 only when document.visibilityState is
+    // 'visible'. A backgrounded chat tab still polls (to keep delivery
+    // ticks fresh) but should NOT count as "the agent is looking".
+    if (!empty($_GET['visible'])) {
+        try {
+            require_once __DIR__ . '/../inc/notify.php';
+            notify_mark_viewing((int)$user['id'], $conversationId);
+        } catch (Throwable $e) { /* schema drift — leave silent */ }
+    }
 
     $stmt = $db->prepare(
         'SELECT c.*, ct.wa_id, ct.display_name

@@ -817,8 +817,15 @@
     chatPolling = true;
     try {
       const afterId = stream.getAttribute('data-last-msg-id') || '0';
+      // Pass visibility so the server-side viewer-heartbeat only fires
+      // when the agent is actually looking (foreground tab). A polling
+      // background tab still gets delivery-tick updates but doesn't
+      // suppress notifications on new inbound messages. See
+      // api/poll.php + inc/notify.php.
+      const visibleFlag = document.visibilityState === 'visible' ? '&visible=1' : '';
       const res = await fetch('/api/poll.php?scope=chat&conversation_id='
-        + encodeURIComponent(convId) + '&after_id=' + encodeURIComponent(afterId),
+        + encodeURIComponent(convId) + '&after_id=' + encodeURIComponent(afterId)
+        + visibleFlag,
         { headers: { 'X-CSRF-Token': csrfToken } });
       const data = await res.json().catch(() => ({}));
       if (!data.ok) return;

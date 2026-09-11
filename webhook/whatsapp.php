@@ -361,6 +361,12 @@ function handle_incoming_message(array $company, array $channel, array $value, a
         return;
     }
 
+    // PWA push to the assigned agent (fire-and-forget — never blocks
+    // the ingest). Text/media/sticker all handled uniformly by the
+    // helper which builds an appropriate preview.
+    require_once __DIR__ . '/../inc/notify.php';
+    notify_new_inbound($conversationId, $msgRowId);
+
     // Best-effort inbound media download (synchronous; small files, short timeout).
     // Skip stickers by default so a busy customer's endless emoji spam does
     // not fill the disk. Governed by companies.skip_stickers (see phase 18).

@@ -187,6 +187,12 @@ try {
         error_log('[AiServe widget_send flow_engine] ' . $e->getMessage());
     }
 
+    // PWA push to the assigned agent — same shape as the Evolution /
+    // Meta paths so the phone lock screen looks identical regardless
+    // of which channel the customer used.
+    require_once __DIR__ . '/../inc/notify.php';
+    notify_new_inbound($conversationId, $messageId);
+
     echo json_encode(['ok' => true, 'message_id' => $messageId, 'conversation_id' => $conversationId]);
 } catch (Throwable $e) {
     // Surface the real message so /admin/webchat_debug.php and the

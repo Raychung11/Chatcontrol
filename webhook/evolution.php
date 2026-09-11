@@ -783,6 +783,7 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
         error_log('[AiServe evolution] insert message failed: ' . $e->getMessage());
         return false;
     }
+    $messageId = (int)$db->lastInsertId();
 
     $action = $fromMe ? 'ai_reply_received' : 'message_received';
     $desc   = ($fromMe ? 'Outbound AI/bot ' : 'Inbound ') . $kind . ' ' . ($fromMe ? 'to ' : 'from ') . $waId . ' via Evolution';
@@ -792,6 +793,10 @@ function handle_evolution_message(array $company, array $channel, array $msg, st
     // if the message is INCOMING (not our own AI bot echo).
     if (!$fromMe) {
         evolution_touched_conversation_ids($conversationId);
+        // PWA push to the assigned agent — never blocks the ingest, all
+        // failure modes swallow inside notify_new_inbound.
+        require_once __DIR__ . '/../inc/notify.php';
+        notify_new_inbound($conversationId, $messageId);
     }
     return true;
 }

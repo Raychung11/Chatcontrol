@@ -210,6 +210,10 @@ try {
         error_log('[AiServe widget_send_media flow_engine] ' . $e->getMessage());
     }
 
+    // PWA push to the assigned agent — photo preview.
+    require_once __DIR__ . '/../inc/notify.php';
+    notify_new_inbound($conversationId, $messageId);
+
     echo json_encode([
         'ok'              => true,
         'message_id'      => $messageId,

@@ -1625,8 +1625,33 @@
   function renderPanel() {
     if (!alertsPanel) return;
     if (!latestAlerts.length) {
+      // Empty state doubles as the discovery point for the push test.
+      // If the browser has permission we offer a "Send test push"
+      // link that fires api/push_test.php; a real notification
+      // arriving on the agent's phone proves the whole pipeline
+      // (VAPID + service worker + push service + phone) works.
+      const push = ('Notification' in window && Notification.permission === 'granted');
       alertsPanel.innerHTML =
-        '<div class="alerts-panel-empty">No open alerts. Channels look healthy.</div>';
+        '<div class="alerts-panel-empty">No open alerts. Channels look healthy.'
+        + (push
+            ? '<div style="margin-top:10px;"><a href="#" class="alerts-test-push" role="button">Send a test push to my devices</a></div>'
+            : '')
+        + '</div>';
+      const testLink = alertsPanel.querySelector('.alerts-test-push');
+      if (testLink) {
+        testLink.addEventListener('click', async (e) => {
+          e.preventDefault();
+          testLink.textContent = 'Sending…';
+          try {
+            const r = await fetch('/api/push_test.php',
+              { method: 'POST', headers: { 'X-CSRF-Token': csrfToken } });
+            const d = await r.json().catch(() => ({}));
+            testLink.textContent = d.hint || (d.ok ? 'Sent.' : 'Failed.');
+          } catch (_) {
+            testLink.textContent = 'Failed — try again in a moment.';
+          }
+        });
+      }
       return;
     }
     alertsPanel.innerHTML = latestAlerts.map((a) => {
@@ -1682,9 +1707,82 @@
     if (!('Notification' in window)) return;
     if (Notification.permission === 'default') {
       // Fire and forget — modern browsers require this from a user
-      // gesture; the bell click qualifies.
-      try { Notification.requestPermission(); } catch (_) {}
+      // gesture; the bell click qualifies. Chain into the PWA push
+      // subscribe as soon as we get 'granted' so an agent who wanted
+      // desktop notifications also gets phone/home-screen pushes for
+      // free — one permission covers both surfaces.
+      try {
+        Notification.requestPermission().then((perm) => {
+          if (perm === 'granted') registerPushSubscription();
+        }).catch(() => {});
+      } catch (_) {}
+    } else if (Notification.permission === 'granted') {
+      registerPushSubscription();
     }
+  }
+
+  // ---- Web Push subscription ----
+  // Called once we have a granted Notification permission. Subscribes
+  // the SW push manager and hands the endpoint + keys to the backend.
+  // Idempotent — a repeat call re-registers the SAME endpoint, which
+  // upserts the row on the backend rather than duplicating it.
+  let pushSubscribing = false;
+  async function registerPushSubscription() {
+    if (pushSubscribing) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    pushSubscribing = true;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        // Fetch the VAPID public key. Same endpoint GET returns it —
+        // safe to expose publicly, that's the whole point of VAPID.
+        const keyRes = await fetch('/api/push_subscribe.php',
+          { headers: { 'X-CSRF-Token': csrfToken } });
+        const keyData = await keyRes.json().catch(() => ({}));
+        if (!keyData.ok || !keyData.application_server_key) return;
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlB64ToUint8(keyData.application_server_key),
+        });
+      }
+      // Hand the subscription to the backend so inc/push.php can send.
+      await fetch('/api/push_subscribe.php', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify(sub.toJSON()),
+      });
+    } catch (e) {
+      // Common on iOS Safari before the user has "Added to Home Screen":
+      // pushManager.subscribe throws NotAllowedError. Silent — the
+      // agent will see the install banner and can retry after that.
+      console.warn('push subscribe skipped:', e && e.message ? e.message : e);
+    } finally {
+      pushSubscribing = false;
+    }
+  }
+
+  // VAPID applicationServerKey must be a Uint8Array, not the b64url
+  // string the server returned.
+  function urlB64ToUint8(b64u) {
+    const pad = '='.repeat((4 - b64u.length % 4) % 4);
+    const s   = (b64u + pad).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(s);
+    const out = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+
+  // Kick off subscription on load for any agent who already granted
+  // permission on an earlier session — otherwise they'd have to click
+  // the bell every visit to re-arm push. Runs after the SW registers.
+  if ('serviceWorker' in navigator && Notification.permission === 'granted') {
+    // Delay slightly so we don't race the SW registration in pwa.js.
+    setTimeout(registerPushSubscription, 1500);
   }
   function showBrowserNotif(alert) {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;

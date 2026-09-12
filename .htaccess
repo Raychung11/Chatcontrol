@@ -1,0 +1,32 @@
+# AiServe Shared WhatsApp Inbox - Apache config
+# Place project at the document root, or adjust RewriteBase below.
+
+Options -Indexes
+DirectoryIndex index.php
+
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set X-Frame-Options "SAMEORIGIN"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+# Block access to sensitive folders
+RedirectMatch 403 ^/config/.*
+RedirectMatch 403 ^/inc/.*
+RedirectMatch 403 ^/sql/.*
+
+<FilesMatch "\.(sql|md|log|env|ini)$">
+  Require all denied
+</FilesMatch>
+
+# Service worker must serve from / with the right MIME so browsers register it.
+<Files "sw.js">
+  Header set Content-Type "application/javascript"
+  Header set Service-Worker-Allowed "/"
+  Header set Cache-Control "no-cache"
+</Files>
+
+# Manifest MIME (some hosts default to text/plain)
+<Files "manifest.json">
+  Header set Content-Type "application/manifest+json"
+</Files>

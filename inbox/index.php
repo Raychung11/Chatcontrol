@@ -1,0 +1,144 @@
+<?php
+require_once __DIR__ . '/../inc/layout.php';
+require_once __DIR__ . '/../inc/inbox_query.php';
+require_once __DIR__ . '/../inc/channels.php';   // channels_stale_banner_html()
+
+$current_user = require_login();
+$companyId    = (int)$current_user['company_id'];
+
+$filter         = $_GET['filter']     ?? 'all';
+$search         = trim((string)($_GET['q'] ?? ''));
+$deptFilter     = (int)($_GET['department_id']    ?? 0);
+$tagFilter      = (int)($_GET['tag_id']           ?? 0);
+$assigneeFilter = (int)($_GET['assignee_id']      ?? 0);
+
+$db = aiserve_db();
+
+$data          = inbox_fetch($db, $current_user, $filter, $search, $deptFilter, $tagFilter, $assigneeFilter);
+$conversations = $data['conversations'];
+$tagsByConv    = $data['tags_by_conv'];
+$counts        = $data['counts'];
+
+$departments = $db->prepare('SELECT id, name FROM departments WHERE company_id = ? AND status = "active" ORDER BY name');
+$departments->execute([$companyId]);
+$departments = $departments->fetchAll();
+
+$tagsAll = $db->prepare('SELECT id, name, color FROM conversation_tags WHERE company_id = ? ORDER BY name');
+$tagsAll->execute([$companyId]);
+$tagsAll = $tagsAll->fetchAll();
+
+// Assignees dropdown — only for roles that can look across the workspace.
+// Agents already only see conversations relevant to them, so a per-agent
+// filter would just add noise for them.
+$assignees = [];
+if (in_array($current_user['role'] ?? 'agent', ['super_admin', 'manager'], true)) {
+    $aStmt = $db->prepare(
+        'SELECT id, name, role FROM users
+         WHERE company_id = ? AND status = "active" AND role IN ("super_admin","manager","agent")
+         ORDER BY FIELD(role, "super_admin","manager","agent"), name'
+    );
+    $aStmt->execute([$companyId]);
+    $assignees = $aStmt->fetchAll();
+}
+
+layout_start($current_user, 'Inbox', 'inbox');
+?>
+<?php
+// Ingestion-health banner: if any active real-provider channel has
+// stopped receiving inbound messages for >6h AND normally does, the
+// operator sees a red banner before they even start scanning the
+// conversation list. The moment "we haven't gotten a lead in half a
+// day" turns from a customer complaint into a self-diagnosable event.
+echo channels_stale_banner_html($companyId, 6);
+?>
+<div class="inbox-shell"
+     data-poll-scope="inbox"
+     data-filter="<?= e($filter) ?>"
+     data-q="<?= e($search) ?>"
+     data-department-id="<?= (int)$deptFilter ?>"
+     data-tag-id="<?= (int)$tagFilter ?>"
+     data-assignee-id="<?= (int)$assigneeFilter ?>">
+  <section class="inbox-filters">
+    <form method="get" class="inbox-search">
+      <input type="search" name="q" value="<?= e($search) ?>" placeholder="Search name / phone…">
+      <input type="hidden" name="filter" value="<?= e($filter) ?>">
+      <select name="department_id" onchange="this.form.submit()">
+        <option value="0">All departments</option>
+        <?php foreach ($departments as $d): ?>
+          <option value="<?= (int)$d['id'] ?>" <?= $deptFilter === (int)$d['id'] ? 'selected' : '' ?>>
+            <?= e($d['name']) ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
+      <select name="tag_id" onchange="this.form.submit()">
+        <option value="0">All tags</option>
+        <?php foreach ($tagsAll as $t): ?>
+          <option value="<?= (int)$t['id'] ?>" <?= $tagFilter === (int)$t['id'] ? 'selected' : '' ?>>
+            <?= e($t['name']) ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
+      <?php if ($assignees): ?>
+        <?php
+          // Group assignees by role for a cleaner dropdown UX.
+          $byRole = ['super_admin' => [], 'manager' => [], 'agent' => []];
+          foreach ($assignees as $a) {
+              $byRole[$a['role']][] = $a;
+          }
+          $roleLabels = ['super_admin' => 'Super admins', 'manager' => 'Managers', 'agent' => 'Agents'];
+        ?>
+        <select name="assignee_id" onchange="this.form.submit()">
+          <option value="0">All assignees</option>
+          <?php foreach ($byRole as $role => $people): ?>
+            <?php if (!$people) continue; ?>
+            <optgroup label="<?= e($roleLabels[$role]) ?>">
+              <?php foreach ($people as $p): ?>
+                <option value="<?= (int)$p['id'] ?>" <?= $assigneeFilter === (int)$p['id'] ? 'selected' : '' ?>>
+                  <?= e($p['name']) ?>
+                </option>
+              <?php endforeach; ?>
+            </optgroup>
+          <?php endforeach; ?>
+        </select>
+      <?php endif; ?>
+      <button class="btn btn-primary btn-sm" type="submit">Search</button>
+      <a class="btn btn-sm" href="/inbox/new_chat.php" style="margin-left:4px;">+ New chat</a>
+    </form>
+
+    <ul class="inbox-quickfilters">
+      <?php
+      $links = [
+          'all'        => ['All',        'open_total'],
+          'unread'     => ['Unread',     'awaiting'],
+          'replied'    => ['Replied',    'replied'],
+          'mine'       => ['Mine',       'mine'],
+          'unassigned' => ['Unassigned', 'unassigned'],
+          'open'       => ['Open',       's_open'],
+          'pending'    => ['Pending',    's_pending'],
+          'escalated'  => ['Escalated',  's_escalated'],
+          'closed'     => ['Closed',     's_closed'],
+      ];
+      foreach ($links as $key => [$label, $countKey]):
+        $href = '?filter=' . urlencode($key)
+              . ($search !== ''        ? '&q=' . urlencode($search)     : '')
+              . ($deptFilter > 0       ? '&department_id=' . $deptFilter : '')
+              . ($tagFilter  > 0       ? '&tag_id=' . $tagFilter         : '')
+              . ($assigneeFilter > 0   ? '&assignee_id=' . $assigneeFilter : '');
+      ?>
+        <li><a class="<?= $filter === $key ? 'active' : '' ?>" href="<?= e($href) ?>" data-filter-key="<?= e($key) ?>">
+          <?= e($label) ?> <span class="count" data-count="<?= e($countKey) ?>"><?= (int)($counts[$countKey] ?? 0) ?></span>
+        </a></li>
+      <?php endforeach; ?>
+    </ul>
+  </section>
+
+  <section class="inbox-list" id="inbox-list">
+    <?php if (!$conversations): ?>
+      <div class="empty-state">No conversations match this view.</div>
+    <?php endif; ?>
+    <?php foreach ($conversations as $c): ?>
+      <?= inbox_row_html($c, $tagsByConv[(int)$c['id']] ?? []) ?>
+    <?php endforeach; ?>
+  </section>
+</div>
+<?php layout_end(); ?>

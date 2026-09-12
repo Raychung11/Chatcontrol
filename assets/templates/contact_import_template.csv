@@ -1,0 +1,7 @@
+phone,name,tags,branch,email,external_id
+60123456789,Vicky Tan,vip|klang-valley,KL Sentral,vicky@example.com,CUST-001
+60129876543,Ali Rahman,new-lead,Penang,ali.rahman@gmail.com,CUST-002
+60176543210,Siti Aminah Binti Ibrahim,vip|repeat-buyer,Jelutong,siti@sitiboutique.my,CUST-003
+0123456789,Kenneth Soo,,,kenneth@kensmk.com.my,
+60167654321,Chan Wei Ming,marketing-optin|birthday-may,KL Sentral,,CUST-005
+6591234567,Jane Doe (Singapore),foreign-buyer,,jane.doe@example.sg,SG-001

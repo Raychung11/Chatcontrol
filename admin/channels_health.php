@@ -175,6 +175,25 @@ if ($staleNow):
                            background:<?= e($probeLabel[2]) ?>; color:<?= e($probeLabel[1]) ?>;">
                 <?= e($probeLabel[0]) ?>
               </span>
+              <?php
+                // Ghost detection: connecting/reconnecting/unknown for
+                // > 60 minutes means the linked-device entry on the
+                // phone survived a Baileys credential loss. Server
+                // resets alone won't clear it — the phone owner must
+                // remove the entry via WhatsApp → Linked devices.
+                require_once __DIR__ . '/../inc/evolution_api.php';
+                $ghost = evolution_ghost_detect($c, 60);
+                if ($ghost):
+                  $repairHref = '/admin/evolution_connect.php?channel_id=' . (int)$c['id'];
+              ?>
+                <span title="Stuck <?= (int)$ghost['stuck_minutes'] ?>m in <?= e((string)$ghost['stuck_state']) ?> — phone needs to remove the old linked-device entry. Click to see repair instructions."
+                      style="display:inline-block; margin-left:4px; padding:2px 8px; border-radius:999px;
+                             font-size:11px; font-weight:700; background:#ffedd5; color:#9a3412;
+                             border:1px solid #fdba74;">
+                  <a href="<?= e($repairHref) ?>"
+                     style="color:inherit; text-decoration:none;">👻 Ghost</a>
+                </span>
+              <?php endif; ?>
               <div class="muted small" style="margin-top:2px;">
                 <?php if ($probeSince): ?>since <?= e(relative_time($probeSince)) ?> ago<?php endif; ?>
                 <br>probed <?= e(relative_time($probeLast)) ?> ago

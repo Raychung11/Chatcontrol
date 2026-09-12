@@ -364,6 +364,110 @@ function evolution_delete_instance(array $company): array
     return ['ok' => $ok, 'http_code' => $r['http_code'], 'raw' => $r['json']];
 }
 
+// -----------------------------------------------------------------
+// Ghost detection
+// -----------------------------------------------------------------
+
+/**
+ * Is this channel a "ghost" — an Evolution instance whose Baileys
+ * process has been stuck in connecting / reconnecting / unknown for
+ * long enough that a fresh QR scan won't help until a phone-side
+ * linked-device entry is manually removed?
+ *
+ * The signal we key off: probe_state has been in a non-terminal state
+ * (anything but 'connected' or 'disconnected') for more than
+ * $stuckMinutes minutes without progressing. Real handshakes complete
+ * within 60 seconds; anything past 15 minutes is almost certainly a
+ * ghost, past 60 minutes is a ghost for sure.
+ *
+ * Returns null when not a ghost, or an array describing the ghost:
+ *   [
+ *     'stuck_state'     => 'connecting',
+ *     'stuck_minutes'   => 543,
+ *     'stuck_since'     => '2026-09-11 00:10:00',
+ *     'severity'        => 'certain' | 'likely',
+ *   ]
+ */
+function evolution_ghost_detect(array $channel, int $stuckMinutes = 60): ?array
+{
+    $state = strtolower(trim((string)($channel['probe_state'] ?? '')));
+    if (!in_array($state, ['connecting', 'reconnecting', 'unknown'], true)) {
+        return null;
+    }
+    $since = (string)($channel['probe_state_since'] ?? '');
+    if ($since === '') return null;
+
+    $ts = strtotime($since);
+    if ($ts === false) return null;
+
+    $mins = (int)floor((time() - $ts) / 60);
+    if ($mins < $stuckMinutes) return null;
+
+    return [
+        'stuck_state'   => $state,
+        'stuck_minutes' => $mins,
+        'stuck_since'   => $since,
+        'severity'      => $mins > 60 ? 'certain' : 'likely',
+    ];
+}
+
+/**
+ * Best-effort authenticated logout. Tries several credential paths
+ * because a stuck Evolution session sometimes requires the per-
+ * instance token instead of the master key:
+ *
+ *   1. Logout with the workspace's master key (works while paired)
+ *   2. Pull the instance's own hash/token from /instance/fetchInstances
+ *      and retry logout with it
+ *
+ * Returns:
+ *   [
+ *     'ok'          => true|false,
+ *     'via'         => 'master' | 'instance_token' | null,
+ *     'http_codes'  => [200, 401, ...],   // one per attempt
+ *   ]
+ */
+function evolution_hard_logout(array $company): array
+{
+    $codes = [];
+
+    // Attempt 1: with the master key (standard path).
+    $path = '/instance/logout/' . rawurlencode(evolution_instance_name($company));
+    $r = evolution_request($company, 'DELETE', $path);
+    $codes[] = (int)$r['http_code'];
+    if ($r['ok']) return ['ok' => true, 'via' => 'master', 'http_codes' => $codes];
+
+    // Attempt 2: try to fetch the instance's own token and use it.
+    // Some Evolution v2 builds gate instance-mutating endpoints on the
+    // per-instance token stored on creation. fetchInstances often 401s
+    // with the master key too — that's fine, we just skip this leg
+    // when we can't read it.
+    $fetch = evolution_request($company, 'GET', '/instance/fetchInstances');
+    if ($fetch['ok'] && is_array($fetch['json'])) {
+        $instName = strtolower(evolution_instance_name($company));
+        $token    = null;
+        foreach ((array)$fetch['json'] as $entry) {
+            $name = strtolower((string)($entry['instance']['instanceName'] ?? $entry['instanceName'] ?? ''));
+            if ($name === $instName) {
+                $token = (string)($entry['instance']['token']
+                    ?? $entry['instance']['apikey']
+                    ?? $entry['token']
+                    ?? $entry['apikey']
+                    ?? '');
+                break;
+            }
+        }
+        if ($token !== '' && $token !== null) {
+            $tokenCompany = array_merge($company, ['evolution_api_key' => $token]);
+            $r2 = evolution_request($tokenCompany, 'DELETE', $path);
+            $codes[] = (int)$r2['http_code'];
+            if ($r2['ok']) return ['ok' => true, 'via' => 'instance_token', 'http_codes' => $codes];
+        }
+    }
+
+    return ['ok' => false, 'via' => null, 'http_codes' => $codes];
+}
+
 /**
  * Fetch a message's media bytes as base64 from Evolution.
  *

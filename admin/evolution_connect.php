@@ -169,15 +169,26 @@ if (is_post() && !empty($_POST['action'])) {
             exit;
 
         case 'logout':
-            $r = evolution_logout_instance($ch);
+            // Try both credential paths — a channel whose session went
+            // sideways may still accept logout via the per-instance
+            // token when the master key 401s.
+            $r = evolution_hard_logout($ch);
             log_activity($companyId, (int)$current_user['id'], 'evolution_instance_logout',
-                         'channel', $chId);
-            echo json_encode($r);
+                         'channel', $chId, $r['ok'] ? ('via ' . (string)$r['via']) : 'failed');
+            echo json_encode([
+                'ok'  => $r['ok'],
+                'via' => $r['via'],
+                'error' => $r['ok'] ? null : ('HTTP codes: ' . implode(',', $r['http_codes'])),
+            ]);
             exit;
 
         case 'reset':
             // Hard reset for a stuck instance. Sequence matters:
-            //   1. Best-effort logout (drops any active session cleanly)
+            //   1. Hard-logout — tries the master key first, then the
+            //      per-instance token from fetchInstances as a fallback
+            //      (some Evolution builds only accept the instance
+            //      token on mutating endpoints). Best-effort — a stuck
+            //      session usually can't be logged out server-side.
             //   2. Delete the instance from Evolution (nukes stored keys
             //      + Baileys session data + creds). Idempotent — 404
             //      is fine.
@@ -194,8 +205,10 @@ if (is_post() && !empty($_POST['action'])) {
             // reset actually happened.
             $steps = [];
             try {
-                $steps['logout'] = evolution_logout_instance($ch)['ok']
-                    ? 'ok' : 'skipped (no session)';
+                $hl = evolution_hard_logout($ch);
+                $steps['logout'] = $hl['ok']
+                    ? 'ok (via ' . (string)$hl['via'] . ')'
+                    : 'skipped (no live session — codes: ' . implode(',', $hl['http_codes']) . ')';
             } catch (Throwable $e) { $steps['logout'] = 'error: ' . $e->getMessage(); }
 
             $del = evolution_delete_instance($ch);
@@ -329,6 +342,49 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
         <span class="muted small">·</span>
         <span class="muted small">Base: <code><?= e((string)$selected['evolution_base_url']) ?></code></span>
       </div>
+
+      <?php
+        // Ghost detection: an Evolution instance whose Baileys process
+        // has been stuck in a non-terminal state for long enough that
+        // a fresh QR scan won't help until a phone-side linked-device
+        // entry is manually removed. The banner explains this directly
+        // so an operator doesn't burn hours re-running the wizard.
+        $ghost = evolution_ghost_detect($selected, 60);
+        if ($ghost): ?>
+        <div id="ec-ghost-banner"
+             style="background:#fff7ed; border:1px solid #fdba74; border-left:4px solid #ea580c;
+                    border-radius:10px; padding:14px 16px; margin-bottom:14px;">
+          <div style="font-weight:600; color:#9a3412; margin-bottom:6px;">
+            👻 Looks like a ghost session — new QR scans won't succeed until it's cleared
+          </div>
+          <div style="color:#7c2d12; font-size:13.5px; line-height:1.55;">
+            This instance has been stuck in
+            <strong><?= e((string)$ghost['stuck_state']) ?></strong> for
+            <strong><?= (int)$ghost['stuck_minutes'] ?> minutes</strong>
+            (since <?= e((string)$ghost['stuck_since']) ?>).
+            Baileys almost certainly lost its credentials, but WhatsApp still
+            has an old <em>linked-device</em> entry on the phone — and a fresh
+            QR pair can't complete while that ghost entry survives.
+            <br><br>
+            <strong>What to do on the phone that owns this WhatsApp number:</strong>
+            <ol style="margin: 8px 0 0 22px; padding: 0;">
+              <li>Open <strong>WhatsApp → ⋮ menu → Linked devices</strong></li>
+              <li>Look for an unfamiliar entry (often named
+                  <em>Firefox / Chrome / a person's name</em>)
+                  added around <?= e(date('M j', strtotime((string)$ghost['stuck_since']))) ?>.</li>
+              <li>Tap it → <strong>Log out</strong> → confirm.</li>
+              <li>Come back here and click <strong>🔄 Reset &amp; re-pair</strong>.</li>
+              <li>Scan the new QR within 15 seconds.</li>
+            </ol>
+            <br>
+            We can't remove the ghost entry server-side — WhatsApp requires
+            the primary phone to consent to unlinking a device. Server-side
+            resets alone will keep the state pinned to
+            <em><?= e((string)$ghost['stuck_state']) ?></em> until the phone
+            side is cleaned up.
+          </div>
+        </div>
+      <?php endif; ?>
 
       <div class="ec-actions">
         <button type="button" id="ec-test">1. Test connection</button>

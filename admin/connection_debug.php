@@ -21,6 +21,15 @@ require_once __DIR__ . '/../inc/channels.php';
 require_once __DIR__ . '/../inc/dns_helper.php';
 
 $current_user = require_role(['super_admin']);
+// This page is support-tier tooling: it exposes internal outbound
+// IPs, DNS resolver output, and partial token prefixes — none of
+// which a workspace admin should ever see or need. Gate to platform
+// admin only (the doc block already said this was the intent, but
+// the code hadn't enforced it).
+if (!is_platform_admin()) {
+    http_response_code(403);
+    exit('Forbidden — platform administrator only.');
+}
 $companyId    = (int)$current_user['company_id'];
 $db           = aiserve_db();
 

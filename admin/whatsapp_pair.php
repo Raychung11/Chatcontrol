@@ -55,23 +55,37 @@ if (is_post() && !empty($_POST['action'])) {
 
 $configured = evolution_is_configured($company);
 
-layout_start($current_user, 'Pair WhatsApp (Evolution)', 'whatsapp_pair');
+layout_start($current_user, 'Pair WhatsApp', 'whatsapp_pair');
 ?>
 <div class="card">
-  <h2>Pair WhatsApp via Evolution</h2>
-  <?php if (($company['provider'] ?? 'cloud_api') !== 'evolution'): ?>
+  <h2>Pair WhatsApp via <?= e(bridge_brand()) ?></h2>
+  <?php
+    // Map internal slugs to friendly names so a workspace admin never
+    // sees 'aiserve_chatbot' or 'cloud_api' as raw text.
+    $__provFriendly = [
+        'evolution'          => bridge_brand(),
+        'aiserve_chatbot'    => 'AiServe Chatbot Gateway',
+        'cloud_api'          => 'WhatsApp Cloud API (Meta)',
+        'web_chat'           => 'Web chat widget',
+        'facebook_page'      => 'Facebook Page',
+        'instagram_business' => 'Instagram Business',
+    ];
+    $__provSlug  = (string)($company['provider'] ?? 'cloud_api');
+    $__provLabel = $__provFriendly[$__provSlug] ?? $__provSlug;
+  ?>
+  <?php if ($__provSlug !== 'evolution'): ?>
     <div class="alert alert-info">
-      Provider is currently set to <strong><?= e($company['provider'] ?? 'cloud_api') ?></strong>.
-      Switch to <strong>Evolution</strong> in <a href="/admin/settings.php">Settings</a> first.
+      Provider is currently set to <strong><?= e($__provLabel) ?></strong>.
+      Switch to <strong><?= e(bridge_brand()) ?></strong> in <a href="/admin/settings.php">Settings</a> first.
     </div>
   <?php elseif (!$configured): ?>
     <div class="alert alert-error">
-      Evolution server URL, API key, and instance name must be set before pairing.
+      Base URL, API key, and instance name must be set before pairing.
       Configure them in <a href="/admin/settings.php">Settings</a>.
     </div>
   <?php else: ?>
     <p class="muted">
-      1. Click <strong>Start pairing</strong>. We'll create the instance on your Evolution server (if it doesn't already exist) and fetch a QR code.<br>
+      1. Click <strong>Start pairing</strong>. We'll create the instance on the bridge (if it doesn't already exist) and fetch a QR code.<br>
       2. Open WhatsApp on the phone with +<?= e($company['whatsapp_number'] ?? 'your business number') ?> →
       <strong>Settings → Linked devices → Link a device</strong> → scan the QR.<br>
       3. Once "Connected" shows below, customer messages will flow into the inbox.
@@ -168,7 +182,7 @@ layout_start($current_user, 'Pair WhatsApp (Evolution)', 'whatsapp_pair');
   btnRefresh.addEventListener('click', fetchQr);
 
   btnLogout.addEventListener('click', async () => {
-    if (!confirm('Disconnect this WhatsApp number from the Evolution server?')) return;
+    if (!confirm('Disconnect this WhatsApp number from the bridge?')) return;
     await call('logout');
     refreshState();
   });

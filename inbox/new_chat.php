@@ -93,7 +93,7 @@ layout_start($current_user, 'New chat', 'inbox');
       <small class="muted">Shown in your inbox. You can also rename them later from the chat.</small>
     </label>
 
-    <!-- Free-text mode (Evolution, AiServe Chatbot) -->
+    <!-- Free-text mode (bridge + partner gateway providers) -->
     <div id="nc-free-text-mode">
       <label>Message
         <textarea name="message_text" rows="5" maxlength="4000"

@@ -231,7 +231,7 @@ layout_start($current_user, 'Workspace settings', 'settings', $company['brand_co
     <h2>Operational alerts</h2>
     <p class="muted small">
       Get an email when outbound sends start failing in bulk — usually means
-      a wrong Bearer token, an expired gateway, or partner-side downtime.
+      a channel that's disconnected on the bridge, an expired token, or upstream downtime.
     </p>
     <label class="check-row">
       <input type="checkbox" name="alert_failed_sends_enabled" value="1"

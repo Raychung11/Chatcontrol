@@ -1,0 +1,39 @@
+# Neutralize direct-access serving of anything under /uploads/.
+#
+# Attackers (or a customer that inbound-uploaded media, or a workspace
+# manager who uploaded an auto-reply catalog) could craft a file whose
+# magic bytes look like a PDF but whose original filename ends in .html
+# or .svg. mime_content_type() in PHP passes the whitelist, and the
+# file is saved keeping the .html extension. Apache would then serve it
+# with text/html and the browser executes the embedded <script> in the
+# portal's origin - stored XSS with the session cookie in reach.
+#
+# Two independent defenses below:
+#   1. Never execute server-side scripts under /uploads/, period.
+#   2. Force EVERY file to download rather than render inline, and
+#      strip inference-based Content-Type sniffing.
+#
+# Files legitimately displayed inline (agent-uploaded chat images shown
+# in the composer preview) go through /api/media.php which sets its
+# own headers - direct hits to /uploads/... always download.
+
+# 1. No server-side execution under /uploads/.
+<FilesMatch "\.(?:php|phtml|phar|phps|py|pl|rb|cgi|jsp|asp|aspx|sh)$">
+    Require all denied
+</FilesMatch>
+
+# 2. Force browsers to treat everything under /uploads/ as a download.
+<IfModule mod_headers.c>
+    Header set Content-Disposition "attachment"
+    Header set X-Content-Type-Options "nosniff"
+    Header set Content-Security-Policy "default-src 'none'; sandbox"
+</IfModule>
+
+# Belt-and-braces: strip active markup rendering regardless of the
+# request's Accept header.
+<FilesMatch "\.(?:html?|xhtml|svg|xml|xsl|xslt)$">
+    ForceType application/octet-stream
+</FilesMatch>
+
+# Directory listing off.
+Options -Indexes

@@ -1,0 +1,44 @@
+# AiServe Inbox — robots.txt
+#
+# Tells search engines what to crawl. Public marketing pages
+# (landing, pricing, legal) are open — everything else (customer
+# admin surfaces, per-workspace inbox, per-conversation widgets,
+# API endpoints, webhooks) is blocked so we don't leak private
+# workspace URLs into search results.
+#
+# Sitemap generated dynamically at /sitemap.xml.php from the
+# public route list.
+
+User-agent: *
+
+# --- Blocked: private / authenticated / API / infrastructure ---
+Disallow: /admin/
+Disallow: /api/
+Disallow: /webhook/
+Disallow: /inbox/
+Disallow: /dashboard.php
+Disallow: /contacts.php
+Disallow: /contact_import.php
+Disallow: /invoice.php
+Disallow: /pin.php
+Disallow: /login.php
+Disallow: /logout.php
+Disallow: /register.php
+Disallow: /forgot_password.php
+Disallow: /reset_password.php
+Disallow: /chat.php
+Disallow: /widget_manifest.php
+Disallow: /manifest.php
+Disallow: /diag.php
+Disallow: /media_test.php
+
+# --- Explicit allow for the marketing surfaces ---
+Allow: /$
+Allow: /pricing.php
+Allow: /terms.php
+Allow: /privacy.php
+Allow: /disclaimer.php
+Allow: /refund.php
+
+# --- Sitemap ---
+Sitemap: https://inbox.aiserve.my/sitemap.xml.php

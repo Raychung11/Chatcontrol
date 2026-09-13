@@ -1,0 +1,11 @@
+category,name,description,price,variants,addons,status
+Rice,Chicken Rice,"Hainanese steamed chicken with fragrant rice + garlic-ginger sauce",9.90,"Portion:Regular=0*|Large=+3.00","Extra chicken=+4.00|Extra rice=+2.00|Egg=+1.50",active
+Rice,Nasi Lemak Ayam,"Coconut rice, fried chicken, sambal, egg, peanuts, anchovies",12.90,"Spice:Mild=0|Medium=0*|Spicy=0","Extra sambal=+1.00|Extra egg=+1.50|Extra ayam=+5.00",active
+Rice,Nasi Goreng Kampung,"Village-style fried rice, anchovies, kangkung, fried egg",11.90,"Spice:Mild=0|Medium=0*|Spicy=0;Portion:Regular=0*|Large=+3.00","Chicken=+4.00|Prawns=+6.00|Extra egg=+1.50",active
+Noodles,Char Kuey Teow,"Wok-fried flat noodles, prawns, cockles, egg, chives",10.90,"Spice:Mild=0|Medium=0*|Spicy=0","Extra prawns=+5.00|Extra egg=+1.50|No cockles=0",active
+Noodles,Wan Tan Mee,"Egg noodles, char siew, wontons, greens",9.90,"Style:Dry=0*|Soup=0","Extra char siew=+4.00|Extra wontons (3)=+3.00",active
+Drinks,Teh Tarik,"Pulled milk tea, Malaysian classic",3.50,"Serving:Hot=0*|Iced=+0.50;Sugar:Regular=0*|Less sugar=0|No sugar=0",,active
+Drinks,Kopi O,"Black coffee, no milk",3.00,"Serving:Hot=0*|Iced=+0.50",,active
+Drinks,Ice Lemon Tea,"Fresh brew, cold, sweetened",5.00,,,active
+Desserts,Cendol,"Coconut milk, palm sugar, pandan jelly, red beans",6.90,,,active
+Desserts,Ais Kacang (ABC),"Shaved ice, red beans, corn, jelly, syrup, evaporated milk",7.90,,"Extra red beans=+1.00|Extra corn=+1.00",active

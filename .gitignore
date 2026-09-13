@@ -1,0 +1,24 @@
+# local secrets / overrides
+config/db_config.local.php
+.env
+.env.*
+!.env.evolution.example
+
+# uploads (keep folder + security htaccess, ignore contents)
+uploads/*
+!uploads/.gitkeep
+!uploads/.htaccess
+
+# PWA icon cache (regenerated on demand)
+assets/img/cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# logs
+*.log

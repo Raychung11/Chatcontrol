@@ -97,9 +97,9 @@ if ($staleNow):
   <div class="alert alert-error" style="margin-bottom:14px;">
     ⚠ <strong><?= count($staleNow) ?> channel(s) appear silent</strong> —
     check the affected rows below. The most common causes: Meta Cloud API
-    webhook URL changed or verify_token mismatched, Evolution session
-    disconnected (needs QR re-scan), or aiserve_chatbot bearer token
-    revoked.
+    webhook URL changed or verify_token mismatched, <?= e(bridge_brand()) ?>
+    session disconnected (needs QR re-scan), or aiserve_chatbot bearer
+    token revoked.
   </div>
 <?php endif; ?>
 

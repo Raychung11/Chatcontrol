@@ -731,6 +731,22 @@ function platform_setting(string $key, string $default = ''): string
 }
 
 /**
+ * Customer-facing brand name for the self-hosted WhatsApp gateway.
+ *
+ * Internally the codebase still uses 'evolution' as the provider slug
+ * (DB values, PHP function names, log strings) because renaming those
+ * is high-risk. But everywhere a workspace admin might read a UI
+ * string — page titles, field labels, hints, error copy, log lines
+ * in the wizard's black panel — this helper is the one source of
+ * truth. Change the value in /admin/evolution_defaults.php and the
+ * whole UI updates without touching code.
+ */
+function bridge_brand(): string
+{
+    return platform_setting('bridge_brand_name', 'AiServe WhatsApp Bridge');
+}
+
+/**
  * Format an amount + currency for display. "12" -> "RM 12", "59.5" -> "RM 59.50".
  */
 function fmt_price(float $amount, ?string $currency = null): string

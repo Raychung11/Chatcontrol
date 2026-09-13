@@ -330,7 +330,7 @@ $selectedId = (int)($_GET['channel_id'] ?? ($channels[0]['id'] ?? 0));
 $selected   = null;
 foreach ($channels as $c) if ((int)$c['id'] === $selectedId) $selected = $c;
 
-layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect');
+layout_start($current_user, '📱 Pair WhatsApp', 'evolution_connect');
 ?>
 <style>
 .ec-shell { max-width: 900px; }
@@ -366,12 +366,12 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
 </style>
 
 <div class="ec-shell">
-  <h1>📱 Pair WhatsApp <span class="muted small">(Evolution / Baileys)</span></h1>
+  <h1>📱 Pair WhatsApp <span class="muted small">(<?= e(bridge_brand()) ?>)</span></h1>
   <?php $__evoDefaults = evolution_platform_defaults(); ?>
   <p class="ec-hint">
-    Pair a WhatsApp number to one of your Evolution channels.
+    Pair a WhatsApp number to one of your <?= e(bridge_brand()) ?> channels.
     <?php if ($__evoDefaults['base_url'] !== '' && $__evoDefaults['api_key'] !== ''): ?>
-      This platform runs a shared Evolution server, so you only need to give the channel an
+      This platform runs a shared <?= e(bridge_brand()) ?> server, so you only need to give the channel an
       <strong>instance name</strong> on <a href="/admin/channels.php">Channels</a> — the base URL and API
       key auto-fill from the platform default.
     <?php else: ?>
@@ -382,8 +382,8 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
 
   <?php if (!$channels): ?>
     <div class="alert alert-info">
-      No Evolution channels yet. Go to <a href="/admin/channels.php">Channels → + New channel</a>,
-      pick <strong>evolution</strong> as the provider, then come back here.
+      No <?= e(bridge_brand()) ?> channels yet. Go to <a href="/admin/channels.php">Channels → + New channel</a>,
+      pick <strong><?= e(bridge_brand()) ?></strong> as the provider, then come back here.
     </div>
   <?php else: ?>
     <form method="get" class="ec-picker">
@@ -429,7 +429,7 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
             <strong><?= e((string)$ghost['stuck_state']) ?></strong> for
             <strong><?= (int)$ghost['stuck_minutes'] ?> minutes</strong>
             (since <?= e((string)$ghost['stuck_since']) ?>).
-            Baileys almost certainly lost its credentials, but WhatsApp still
+            The bridge almost certainly lost its credentials, but WhatsApp still
             has an old <em>linked-device</em> entry on the phone — and a fresh
             QR pair can't complete while that ghost entry survives.
             <br><br>
@@ -473,12 +473,12 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
         <div class="ec-actions" style="margin-top:10px;">
           <button type="button" id="ec-refresh-state">📡 Refresh state now</button>
           <button type="button" id="ec-restart">🔁 Restart instance</button>
-          <button type="button" id="ec-delete" class="danger">🗑 Delete from Evolution</button>
+          <button type="button" id="ec-delete" class="danger">🗑 Delete from the bridge</button>
         </div>
         <p class="ec-hint" style="margin-top:6px;">
-          <strong>Refresh state</strong> re-probes Evolution and updates the dot without
+          <strong>Refresh state</strong> re-probes the bridge and updates the dot without
           waiting for the 5-min health-ping cron. <strong>Restart instance</strong> reboots
-          only THIS Baileys process (other paired channels stay up) — often the
+          only THIS channel's bridge process (other paired channels stay up) — often the
           fastest fix when a session is stuck in Connecting but Delete keeps
           returning 400. <strong>Delete</strong> is a one-way nuke; you'll need to
           Create + Show QR again after.
@@ -487,7 +487,7 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
       <p class="ec-hint" style="margin-top:-8px;">
         Stuck on <strong>Connecting</strong> for more than a minute? Click
         <strong>🔄 Reset &amp; re-pair</strong> — it nukes the stale instance
-        inside Evolution, rebuilds it, re-registers the webhook, and shows
+        on the bridge, rebuilds it, re-registers the webhook, and shows
         you a fresh QR so you can pair from scratch without walking
         through the wizard again.
       </p>
@@ -545,7 +545,7 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
         };
 
         $('ec-create').onclick = async () => {
-          log('Creating Evolution instance + registering webhook…');
+          log('Creating instance + registering webhook…');
           const r = await call('create');
           // Two independent signals need to succeed here: the create call
           // AND the webhook set. Previously `r.error === null` bailed us
@@ -559,7 +559,7 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
           if (r.webhook_ok) {
             log('✓ Webhook registered → ' + (r.webhook_url || '?'), 'ok');
           } else {
-            log('✗ Webhook registration failed — Evolution rejected the request', 'err');
+            log('✗ Webhook registration failed — the bridge rejected the request', 'err');
           }
         };
 
@@ -593,7 +593,7 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
         };
 
         $('ec-logout').onclick = async () => {
-          if (!confirm('Log this WhatsApp number out of Evolution? You\'ll need to re-scan a QR to pair again.')) return;
+          if (!confirm('Log this WhatsApp number out of the bridge? You\'ll need to re-scan a QR to pair again.')) return;
           log('Logging out…');
           const r = await call('logout');
           if (r.ok) { log('✓ Logged out', 'ok'); setState('disconnected'); }
@@ -603,7 +603,7 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
         // 📡 Refresh state — force a fresh probe against Evolution and
         // update the local dot without waiting for the health-ping cron.
         $('ec-refresh-state').onclick = async () => {
-          log('Refreshing state from Evolution…');
+          log('Refreshing state from the bridge…');
           const r = await call('refresh_state');
           if (r.ok) {
             setState(r.state);
@@ -618,14 +618,14 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
         // Often the fastest fix for a stuck Connecting when Delete
         // returns 400.
         $('ec-restart').onclick = async () => {
-          if (!confirm('Restart this Evolution instance?\n\n'
-                     + 'This reboots only this channel\'s Baileys process. '
+          if (!confirm('Restart this instance?\n\n'
+                     + 'This reboots only this channel\'s bridge process. '
                      + 'Other paired channels are unaffected. Any in-progress '
                      + 'pairing on the phone will need to restart.')) return;
           log('Restarting instance…');
           const r = await call('restart');
           if (r.ok) {
-            log('✓ Restart requested. Give Baileys ~5 seconds to re-open.', 'ok');
+            log('✓ Restart requested. Give the bridge ~5 seconds to re-open.', 'ok');
             setTimeout(async () => {
               const st = await call('state');
               if (st.ok) setState(st.state);
@@ -637,13 +637,13 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
 
         // 🗑 Delete from Evolution — one-way nuke.
         $('ec-delete').onclick = async () => {
-          if (!confirm('Delete this instance from Evolution?\n\n'
+          if (!confirm('Delete this instance from the bridge?\n\n'
                      + 'This removes ALL session data. You\'ll need to Create '
                      + '+ Show QR again to pair. This is one-way.')) return;
           log('Deleting instance…');
           const r = await call('delete');
           if (r.ok) {
-            log('✓ Instance deleted from Evolution.', 'ok');
+            log('✓ Instance deleted from the bridge.', 'ok');
             setState('unknown');
           } else {
             log('✗ Delete failed: ' + (r.error || 'unknown'), 'err');
@@ -657,7 +657,7 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
         // (e.g. logout failed because there was nothing to log out of)
         // is transparent instead of hidden.
         $('ec-reset').onclick = async () => {
-          if (!confirm('Reset this WhatsApp number in Evolution?\n\n'
+          if (!confirm('Reset this WhatsApp number on the bridge?\n\n'
                      + 'This nukes the stuck session, rebuilds the instance, '
                      + 'and shows a fresh QR. Any in-progress pairing on the '
                      + 'phone will need to be restarted.')) return;

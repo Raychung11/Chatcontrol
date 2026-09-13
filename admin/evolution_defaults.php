@@ -29,17 +29,24 @@ $msg = '';
 $err = '';
 
 $fields = [
-    'evolution_default_base_url' => [
-        'label'    => 'Evolution base URL',
+    'bridge_brand_name' => [
+        'label'    => 'Display name',
         'type'     => 'text',
-        'hint'     => 'The public URL of your Evolution API server (no trailing slash). Example: https://evo.aiserve.my',
+        'hint'     => 'The customer-facing name for this WhatsApp gateway. Shown to workspace admins on pairing pages, channel forms, and error copy. Internal code still uses the technical name. Default: AiServe WhatsApp Bridge.',
+        'max'      => 80,
+        'optional' => true,
+    ],
+    'evolution_default_base_url' => [
+        'label'    => 'Base URL',
+        'type'     => 'text',
+        'hint'     => 'The public URL of your bridge server (no trailing slash). Example: https://evo.aiserve.my',
         'max'      => 255,
         'optional' => true,
     ],
     'evolution_default_api_key' => [
-        'label'    => 'Evolution API key',
+        'label'    => 'API key',
         'type'     => 'password',
-        'hint'     => 'The master API key you set as EVOLUTION_API_KEY in the Evolution container\'s .env. Leave blank to keep the saved value; enter a new one only when you\'ve rotated the key.',
+        'hint'     => 'The master API key configured on the bridge server. Leave blank to keep the saved value; enter a new one only when you\'ve rotated the key.',
         'max'      => 255,
         'optional' => true,
     ],
@@ -72,24 +79,24 @@ try {
     )->fetchColumn();
 } catch (Throwable $e) { /* schema drift — leave zero */ }
 
-layout_start($current_user, 'Evolution defaults', 'evolution_defaults');
+layout_start($current_user, bridge_brand() . ' defaults', 'evolution_defaults');
 ?>
 <div class="card">
   <?php if ($msg): ?><div class="alert alert-success"><?= e($msg) ?></div><?php endif; ?>
   <?php if ($err): ?><div class="alert alert-error"><?= e($err) ?></div><?php endif; ?>
 
-  <h2 style="margin-top:0;">Evolution shared server defaults</h2>
+  <h2 style="margin-top:0;"><?= e(bridge_brand()) ?> — platform defaults</h2>
   <p class="muted small">
-    Fill these in once as the platform admin. Every workspace's channel_edit and
-    pairing wizard then auto-fills the base URL and API key — a workspace admin
-    only needs to pick an instance name to onboard a new WhatsApp number.
-    Individual channels can still override these values if a workspace runs
-    its own dedicated Evolution box.
+    Fill these in once as the platform admin. Every workspace's channel edit
+    form and pairing wizard then auto-fills the base URL and API key — a
+    workspace admin only needs to pick an instance name to onboard a new
+    WhatsApp number. Individual channels can still override these values
+    if a workspace runs its own dedicated bridge box.
   </p>
 
   <?php if ($missingCount > 0): ?>
     <div class="alert alert-info">
-      <?= (int)$missingCount ?> existing Evolution channel<?= $missingCount === 1 ? '' : 's' ?>
+      <?= (int)$missingCount ?> existing <?= e(bridge_brand()) ?> channel<?= $missingCount === 1 ? '' : 's' ?>
       still <?= $missingCount === 1 ? 'has' : 'have' ?> blank base URL / API key.
       Once these defaults are saved, the pairing wizard will back-fill them on
       first visit so those channels start working without a manual edit.
@@ -101,7 +108,7 @@ layout_start($current_user, 'Evolution defaults', 'evolution_defaults');
     <?php foreach ($fields as $key => $meta) {
         render_platform_setting_field($key, $meta, $current[$key] ?? '');
     } ?>
-    <button class="btn btn-primary" type="submit">Save Evolution defaults</button>
+    <button class="btn btn-primary" type="submit">Save defaults</button>
   </form>
 
   <?php

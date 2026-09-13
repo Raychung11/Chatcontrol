@@ -246,7 +246,7 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
     <div class="provider-picker" role="radiogroup" aria-label="Messaging provider">
       <?php foreach ([
         'aiserve_chatbot'    => ['AiServe Chatbot',              'Bearer-token gateway. Raw text anytime. Simplest setup.',                       '🇲🇾 Recommended for Malaysian SMEs', 'recommended', true],
-        'evolution'          => ['Evolution API',                'Self-hosted Baileys. Raw text anytime. Requires QR pairing.',                   '',                                    '',            false],
+        'evolution'          => [bridge_brand(),                 'Our self-hosted WhatsApp bridge. Raw text anytime. Requires QR pairing on the phone.', '',                                    '',            false],
         'cloud_api'          => ['WhatsApp Cloud API (Meta)',    'Official Meta API. Template gate for outside-24h broadcasts. Requires Meta App setup.', 'Official',                     'neutral',     false],
         'web_chat'           => ['Web chat widget',              'Embeddable on any website. In-browser only, no WhatsApp.',                      'Zero-setup',                          'neutral',     false],
         'facebook_page'      => ['Facebook Page',                'Meta Messenger via Graph API.',                                                 'Meta',                                'neutral',     false],
@@ -288,16 +288,16 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
       require_once __DIR__ . '/../inc/evolution_api.php';
       $evoDefaults = evolution_platform_defaults();
     ?>
-    <h3>Evolution API fields</h3>
+    <h3><?= e(bridge_brand()) ?> fields</h3>
     <?php if ($evoDefaults['base_url'] !== '' || $evoDefaults['api_key'] !== ''): ?>
       <div class="alert alert-info" style="margin-bottom:12px;">
         ✨ <strong>Platform default in use.</strong> Leave the base URL and API
-        key blank and this channel will use the shared Evolution server
+        key blank and this channel will use the shared <?= e(bridge_brand()) ?>
         automatically. Only fill them in if this workspace needs a
-        different Evolution box.
+        different one.
       </div>
     <?php endif; ?>
-    <label>Evolution base URL
+    <label>Base URL
       <input type="url" name="evolution_base_url"
              value="<?= e($row['evolution_base_url'] ?? '') ?>"
              placeholder="<?= e($evoDefaults['base_url'] ?: 'https://evo.your-server.com') ?>">
@@ -305,7 +305,7 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
         <small class="muted">Using platform default: <code><?= e($evoDefaults['base_url']) ?></code></small>
       <?php endif; ?>
     </label>
-    <label>Evolution API key <small class="muted">(leave blank to keep existing)</small>
+    <label>API key <small class="muted">(leave blank to keep existing)</small>
       <input type="password" name="evolution_api_key" autocomplete="new-password">
       <?php if (!empty($row['evolution_api_key'])): ?>
         <small class="muted">Currently set: <code><?= e(substr($row['evolution_api_key'], 0, 6)) ?>…</code></small>

@@ -14,6 +14,7 @@
 
 require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/knowledge_base.php';
+require_once __DIR__ . '/product_catalog.php';
 require_once __DIR__ . '/ai_billing.php';
 
 const AI_DEFAULT_MODEL  = 'claude-haiku-4-5';
@@ -180,6 +181,44 @@ function ai_suggest_reply(array $company, array $conversation, array $messages):
             'type' => 'text', 'text' => $kbBlock,
             'cache_control' => ['type' => 'ephemeral'],
         ];
+    }
+
+    // Structured product catalog. On top of the freeform KB, pull the
+    // top-N products relevant to the CUSTOMER'S LAST MESSAGE and inject
+    // them as JSON. Freeform KB describes policies / how-tos; the
+    // catalog gives the AI real price / stock / URL to cite. We do the
+    // search per-turn (not cached) because different customer questions
+    // hit different products.
+    try {
+        $lastUserMsg = '';
+        for ($i = count($apiMessages) - 1; $i >= 0; $i--) {
+            if ($apiMessages[$i]['role'] === 'user') {
+                $lastUserMsg = (string)$apiMessages[$i]['content'];
+                break;
+            }
+        }
+        if ($lastUserMsg !== '') {
+            $products = products_relevant_for_message((int)$company['id'], $lastUserMsg, 6);
+            if ($products) {
+                $productsJson = products_render_for_ai_prompt($products);
+                $systemBlocks[] = [
+                    'type' => 'text',
+                    'text' => "Here are structured product catalog rows that MAY be relevant to "
+                            . "the customer's most recent question. When answering about "
+                            . "products, cite fields from this block verbatim (price, currency, "
+                            . "in_stock, product_url) rather than paraphrasing — the customer "
+                            . "deserves accurate data. If none of these products actually match "
+                            . "what they asked for, ignore the block and use the knowledge base "
+                            . "or say you'll check with the team.\n\n"
+                            . "===== PRODUCT CATALOG (relevant matches) =====\n"
+                            . $productsJson
+                            . "\n===== END PRODUCT CATALOG =====",
+                    // NOT cached — per-turn context.
+                ];
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('[AiServe ai product injection] ' . $e->getMessage());
     }
 
     $payload = [

@@ -77,7 +77,7 @@ if (in_array($role, ['super_admin', 'manager'], true) && !empty($current_user['c
  * a collapsible group should appear in exactly one bucket here.
  */
 $sb_groups = [
-    'messaging' => ['templates', 'auto_replies', 'broadcasts', 'flows', 'knowledge', 'kb_coverage', 'tags'],
+    'messaging' => ['templates', 'auto_replies', 'broadcasts', 'flows', 'knowledge', 'products', 'kb_coverage', 'tags'],
     'reports'   => ['reports', 'topics', 'ai_usage'],
     'workspace' => ['channels', 'channels_health', 'webchat', 'nfc_cards', 'users', 'departments', 'branches', 'routing'],
     'settings'  => ['settings', 'ai_settings', 'plan', 'my_invoices'],
@@ -144,6 +144,7 @@ $fnbActive = fnb_module_active((int)($current_user['company_id'] ?? 0));
         <a href="/admin/broadcasts.php"   class="<?= $active === 'broadcasts'   ? 'active' : '' ?>">Broadcasts</a>
         <a href="/admin/auto_replies.php" class="<?= $active === 'auto_replies' ? 'active' : '' ?>">Auto replies</a>
         <a href="/admin/knowledge.php"    class="<?= $active === 'knowledge'    ? 'active' : '' ?>">Knowledge base</a>
+        <a href="/admin/products.php"     class="<?= $active === 'products'     ? 'active' : '' ?>">📦 Product catalog</a>
         <a href="/admin/kb_coverage.php"  class="<?= $active === 'kb_coverage'  ? 'active' : '' ?>">🎯 KB coverage gaps</a>
         <a href="/admin/tags.php"         class="<?= $active === 'tags'         ? 'active' : '' ?>">Tags</a>
       <?php endif; ?>

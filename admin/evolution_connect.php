@@ -251,7 +251,7 @@ if (is_post() && !empty($_POST['action'])) {
 // ==============================================================
 $channels = $db->prepare(
     "SELECT id, name, evolution_base_url, evolution_api_key, evolution_instance,
-            probe_state, probe_last_at, display_phone
+            probe_state, probe_state_since, probe_last_at, display_phone
      FROM channels
      WHERE company_id = ? AND provider = 'evolution'
      ORDER BY id ASC"

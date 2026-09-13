@@ -360,7 +360,7 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
         <code>?type=outgoing</code> — our webhook auto-detects the payload
         shape. Each channel has its own URL with a unique token; if you
         have more than one WhatsApp number, each one needs its own URL
-        pasted into the partner dashboard for that number.
+        registered on the bridge for that number.
       </small>
     </div>
     <style>
@@ -411,11 +411,11 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
 <div class="card">
   <h2>Test outbound — this channel</h2>
   <p class="muted small">
-    Sends one real WhatsApp message via this channel's provider to verify
-    base URL + Bearer token + connectivity. Enter your OWN number for the
-    first try. This does NOT test inbound (webhook) — for that, ask the
-    partner to send a message to this channel's WhatsApp number and check
-    the "Recent inbound activity" panel below.
+    Sends one real WhatsApp message via this channel to verify
+    connectivity end-to-end. Enter your OWN number for the first try.
+    This does NOT test inbound — for that, send a WhatsApp message TO
+    this channel's number from another phone and check the "Recent
+    inbound activity" panel below.
   </p>
   <div class="inline-form" style="display:flex; gap:8px; flex-wrap:wrap;">
     <input type="text" id="ch-test-to"
@@ -462,13 +462,12 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
   <?php if (!$chanMsgs): ?>
     <p class="muted small">
       This channel has <strong>0 messages</strong> in the database yet.
-      Ask the partner to send a WhatsApp message to
+      Send a WhatsApp message from another phone to
       <?= $row['display_phone'] ? '<strong>' . e($row['display_phone']) . '</strong>' : 'this channel\'s number' ?>
       then reload this page. If nothing appears after that, check:
       <ol style="margin:6px 0 0 20px;">
-        <li>Did you paste the correct webhook URL into your partner's dashboard? It's shown above under "Webhook URLs for this channel".</li>
-        <li>Is the partner actually sending events (check with them)?</li>
-        <li>Look at the "Recent webhook events" table below — is anything landing on the server?</li>
+        <li>Is the channel actually paired? Open <a href="/admin/evolution_connect.php?channel_id=<?= (int)$row['id'] ?>">Pair WhatsApp</a> — the state row should show 🟢 Connected.</li>
+        <li>Is the webhook URL still registered on the bridge? Click <strong>Re-register webhook</strong> in the pairing wizard.</li>
       </ol>
     </p>
   <?php else: ?>
@@ -488,8 +487,16 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
     </table>
   <?php endif; ?>
 
-  <h3 style="font-size:14px; margin-top:20px;">Last 15 webhook events for this workspace</h3>
-  <p class="muted small">Every POST from your provider lands here, regardless of channel. If this is empty and the partner claims they are sending, the URL in their dashboard is wrong.</p>
+  <?php
+    // Diagnostic-only: webhook events + originating IPs are useful for
+    // infrastructure debugging but leak internal detail (Docker network
+    // IPs, HTTP status internals). Workspace admins don't need this;
+    // they should ask platform support if something looks wrong. Gate
+    // the panel entirely behind is_platform_admin().
+    if (is_platform_admin()):
+  ?>
+  <h3 style="font-size:14px; margin-top:20px;">Last 15 webhook events for this workspace <span class="badge" style="background:#ede9fe; color:#5b21b6;">Platform</span></h3>
+  <p class="muted small">Every POST from the bridge lands here, regardless of channel. If this is empty and inbound is missing, the webhook URL registered on the bridge is wrong.</p>
   <?php if (!$inboundEvents): ?>
     <p class="muted small"><em>No webhook events recorded yet.</em></p>
   <?php else: ?>
@@ -511,6 +518,7 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
       </tbody>
     </table>
   <?php endif; ?>
+  <?php endif; /* is_platform_admin */ ?>
 </div>
 
 <!-- ============================================================
@@ -541,24 +549,25 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
       return [substr($desc, 0, 20), 'badge-pending'];
   }
 ?>
+<?php if (is_platform_admin()): ?>
 <div class="card">
-  <h2>Media fetches — outbound photo/PDF delivery</h2>
+  <h2>Media fetches — outbound photo/PDF delivery <span class="badge" style="background:#ede9fe; color:#5b21b6;">Platform</span></h2>
   <p class="muted small">
-    Every time you send a photo, PDF, or other media, the partner gateway
-    fetches the file from us via a signed URL. If the customer got only
-    the caption text but not the photo, the row here tells you exactly
-    what went wrong.
+    Every time an agent sends a photo, PDF, or other media, the bridge
+    fetches the file via a signed URL. If a customer got only the
+    caption text but not the photo, the row here tells you what went
+    wrong.
   </p>
   <ul class="muted small" style="margin: 6px 0 12px 20px;">
-    <li><strong>200 OK row present</strong> at the send timestamp — gateway got the bytes. Miss is downstream (WhatsApp side).</li>
-    <li><strong>No 200 OK row</strong> for a send you know happened — the gateway either couldn't fetch our URL (check server error log for the specific reason — 404 permission, 403 signature, etc.) or never tried at all (contact partner).</li>
+    <li><strong>200 OK row present</strong> at the send timestamp — the bridge got the bytes. Miss is downstream (WhatsApp side).</li>
+    <li><strong>No 200 OK row</strong> for a send you know happened — the bridge either couldn't fetch the URL (see error log for the specific reason — 404 permission, 403 signature, etc.) or never tried at all.</li>
   </ul>
   <p class="muted small" style="margin: 0 0 12px 0;">
-    Only successful fetches are shown below. Failed hits go to the server error log (Hostinger → hPanel → Error Log) — deliberate, so a bot spamming bad signatures can't bloat this table.
+    Only successful fetches are shown below. Failed hits go to the server error log — deliberate, so a bot spamming bad signatures can't bloat this table.
   </p>
 
   <?php if (!$mediaFetches): ?>
-    <p class="muted small"><em>No successful media fetches recorded yet. If you've been sending photos and this is empty, either the partner gateway isn't fetching our URLs OR every attempt is failing — check Hostinger's Error Log for <code>[AiServe media_public]</code> lines.</em></p>
+    <p class="muted small"><em>No successful media fetches recorded yet. If media hasn't been sending and this is empty, either the bridge isn't fetching URLs OR every attempt is failing — check the server error log for <code>[AiServe media_public]</code> lines.</em></p>
   <?php else: ?>
     <table class="data-table">
       <thead><tr><th>When</th><th>Result</th><th>Details</th></tr></thead>
@@ -577,6 +586,7 @@ layout_start($current_user, $row ? ('Channel · ' . $row['name']) : 'New channel
     </table>
   <?php endif; ?>
 </div>
+<?php endif; /* is_platform_admin — media fetch diagnostics */ ?>
 
 <script>
 (function () {

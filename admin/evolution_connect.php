@@ -240,6 +240,73 @@ if (is_post() && !empty($_POST['action'])) {
                 'error'       => $cre['ok'] ? null : ($cre['error'] ?? 'create failed'),
             ]);
             exit;
+
+        case 'restart':
+            // Per-instance restart. Reboots ONLY this Baileys process
+            // inside Evolution — other paired instances stay up. Useful
+            // when a session is stuck in 'connecting' but Delete is
+            // returning 400 (Evolution guards Delete on a mid-handshake
+            // instance). A restart doesn't drop the paired session, it
+            // just re-initializes the Baileys socket.
+            $path = '/instance/restart/' . rawurlencode(evolution_instance_name($ch));
+            $r = evolution_request($ch, 'POST', $path);
+            log_activity($companyId, (int)$current_user['id'], 'evolution_instance_restart',
+                         'channel', $chId, evolution_instance_name($ch));
+            echo json_encode([
+                'ok'        => $r['ok'],
+                'http_code' => $r['http_code'],
+                'error'     => $r['ok'] ? null : ('HTTP ' . $r['http_code']),
+            ]);
+            exit;
+
+        case 'delete':
+            // Fully remove the instance from Evolution. Idempotent —
+            // 404 counts as success (nothing to delete). Also clears
+            // the local probe cache so the state row visibly reflects
+            // that the instance is gone until the next Create.
+            $r = evolution_delete_instance($ch);
+            try {
+                $db->prepare(
+                    'UPDATE channels
+                     SET probe_state = "unknown", probe_state_since = NOW(), probe_last_at = NOW()
+                     WHERE id = ?'
+                )->execute([$chId]);
+            } catch (Throwable $e) { /* noop */ }
+            log_activity($companyId, (int)$current_user['id'], 'evolution_instance_deleted',
+                         'channel', $chId, evolution_instance_name($ch));
+            echo json_encode([
+                'ok'        => $r['ok'],
+                'http_code' => $r['http_code'],
+                'error'     => $r['ok'] ? null : ('HTTP ' . $r['http_code']),
+            ]);
+            exit;
+
+        case 'refresh_state':
+            // Same as 'state' but forces a fresh probe + writes the
+            // result back to channels.probe_state so the health page
+            // reflects reality without waiting for the 5-minute cron.
+            $r = evolution_connection_state($ch);
+            $probe = $r['ok'] ? ($r['state'] ?? 'unknown') : 'disconnected';
+            $prev  = (string)($ch['probe_state'] ?? 'unknown');
+            try {
+                if ($prev !== $probe) {
+                    $db->prepare(
+                        'UPDATE channels
+                         SET probe_state = ?, probe_state_since = NOW(), probe_last_at = NOW()
+                         WHERE id = ?'
+                    )->execute([$probe, $chId]);
+                } else {
+                    $db->prepare('UPDATE channels SET probe_last_at = NOW() WHERE id = ?')
+                       ->execute([$chId]);
+                }
+            } catch (Throwable $e) { /* noop */ }
+            echo json_encode([
+                'ok'    => $r['ok'],
+                'state' => $probe,
+                'prev'  => $prev,
+                'error' => $r['ok'] ? null : ($r['error'] ?? 'probe failed'),
+            ]);
+            exit;
     }
 
     echo json_encode(['ok' => false, 'error' => 'Unknown action.']);
@@ -394,6 +461,29 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
         <button type="button" id="ec-reset"  class="danger">🔄 Reset &amp; re-pair</button>
         <button type="button" id="ec-logout" class="danger">Log out (end session)</button>
       </div>
+
+      <!-- Advanced ops — collapsed by default so a normal pair doesn't
+           overwhelm the operator with 10 buttons. Expand for stuck
+           sessions, delete-from-Evolution, per-instance restart, and
+           forced state refresh. -->
+      <details style="margin-top:-8px; margin-bottom:14px;">
+        <summary style="cursor:pointer; font-size:13px; color:#475569; user-select:none;">
+          Advanced ops
+        </summary>
+        <div class="ec-actions" style="margin-top:10px;">
+          <button type="button" id="ec-refresh-state">📡 Refresh state now</button>
+          <button type="button" id="ec-restart">🔁 Restart instance</button>
+          <button type="button" id="ec-delete" class="danger">🗑 Delete from Evolution</button>
+        </div>
+        <p class="ec-hint" style="margin-top:6px;">
+          <strong>Refresh state</strong> re-probes Evolution and updates the dot without
+          waiting for the 5-min health-ping cron. <strong>Restart instance</strong> reboots
+          only THIS Baileys process (other paired channels stay up) — often the
+          fastest fix when a session is stuck in Connecting but Delete keeps
+          returning 400. <strong>Delete</strong> is a one-way nuke; you'll need to
+          Create + Show QR again after.
+        </p>
+      </details>
       <p class="ec-hint" style="margin-top:-8px;">
         Stuck on <strong>Connecting</strong> for more than a minute? Click
         <strong>🔄 Reset &amp; re-pair</strong> — it nukes the stale instance
@@ -508,6 +598,56 @@ layout_start($current_user, '📱 Pair WhatsApp (Evolution)', 'evolution_connect
           const r = await call('logout');
           if (r.ok) { log('✓ Logged out', 'ok'); setState('disconnected'); }
           else      log('✗ ' + (r.error || 'failed'), 'err');
+        };
+
+        // 📡 Refresh state — force a fresh probe against Evolution and
+        // update the local dot without waiting for the health-ping cron.
+        $('ec-refresh-state').onclick = async () => {
+          log('Refreshing state from Evolution…');
+          const r = await call('refresh_state');
+          if (r.ok) {
+            setState(r.state);
+            const changed = r.prev !== r.state;
+            log('✓ State: ' + r.state + (changed ? ' (was ' + r.prev + ')' : ''), 'ok');
+          } else {
+            log('✗ ' + (r.error || 'probe failed'), 'err');
+          }
+        };
+
+        // 🔁 Restart instance — reboot only this Baileys process.
+        // Often the fastest fix for a stuck Connecting when Delete
+        // returns 400.
+        $('ec-restart').onclick = async () => {
+          if (!confirm('Restart this Evolution instance?\n\n'
+                     + 'This reboots only this channel\'s Baileys process. '
+                     + 'Other paired channels are unaffected. Any in-progress '
+                     + 'pairing on the phone will need to restart.')) return;
+          log('Restarting instance…');
+          const r = await call('restart');
+          if (r.ok) {
+            log('✓ Restart requested. Give Baileys ~5 seconds to re-open.', 'ok');
+            setTimeout(async () => {
+              const st = await call('state');
+              if (st.ok) setState(st.state);
+            }, 5000);
+          } else {
+            log('✗ Restart failed: ' + (r.error || 'unknown'), 'err');
+          }
+        };
+
+        // 🗑 Delete from Evolution — one-way nuke.
+        $('ec-delete').onclick = async () => {
+          if (!confirm('Delete this instance from Evolution?\n\n'
+                     + 'This removes ALL session data. You\'ll need to Create '
+                     + '+ Show QR again to pair. This is one-way.')) return;
+          log('Deleting instance…');
+          const r = await call('delete');
+          if (r.ok) {
+            log('✓ Instance deleted from Evolution.', 'ok');
+            setState('unknown');
+          } else {
+            log('✗ Delete failed: ' + (r.error || 'unknown'), 'err');
+          }
         };
 
         // 🔄 Reset & re-pair — hard reset for a stuck 'connecting' session.
